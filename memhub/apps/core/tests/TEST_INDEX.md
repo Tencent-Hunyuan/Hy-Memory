@@ -303,6 +303,10 @@
 | `test_sql_compat.py` | `contract` | The shared compatibility layer, especially 'rowcount'. |
 | `test_sqlite_semantics_gate.py` | `contract` | D56: prevent SQLite implementation details spreading outside the data layer. |
 | `test_sqlite_write_contention.py` | `contract` | Measure whether SQLite's single writer actually blocks us. |
+| `test_storage_backend_neo4j_live.py` | `contract` | A real Neo4j/Memgraph server, when one is named: probe, then an ultra SDK client. |
+| `test_storage_backend_packaging.py` | `contract` | The frozen Core ships every driver a selectable storage backend needs. |
+| `test_storage_backend_qdrant.py` | `contract` | MemHub on a Qdrant vector store, end to end, against the pinned SDK wheel. |
+| `test_storage_backends.py` | `contract` | The `storage_backends` setting: what it accepts, where its secrets go, what it builds. |
 | `test_storage_ingest_journal.py` | `contract` | 覆盖 legacy put and reopen never initialize journal、initialized put records final origins create revision and noop、attribution propagation journals old rows as maintenance only 等 11 个场景。 |
 | `test_store_binding.py` | `contract` | A2: which store is in force, and honest reporting of it. |
 | `test_store_binding_ratchet.py` | `contract` | D56: ratchet the retired dual-engine 'store_for' seam out of the Core. |
@@ -325,4 +329,4 @@
 | `test_workspace_recall.py` | `contract` | Workspace memories were unreachable from every host; these pin the way in. |
 | `test_write_queue_lease_renewal.py` | `contract` | Rule 8: a lease must outlive the work it covers, and be renewed while it runs. |
 
-共 320 个测试文件。
+共 324 个测试文件。

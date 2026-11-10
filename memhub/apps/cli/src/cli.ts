@@ -332,6 +332,14 @@ import {
   statusExitCode,
 } from "./status-report.js";
 import {
+  type BackendsDocument,
+  backendsExitCode,
+  parseBackendsCommand,
+  readBackendSecrets,
+  renderBackendsText,
+  runBackendsCommand,
+} from "./storage-backends-flow.js";
+import {
   openBrowser,
   parseUiSessionExchange,
   type UiResult,
@@ -2363,6 +2371,68 @@ async function runCommand(
               : `操作失败：${outcome.code}\n`,
     );
     return state === "committed" ? EXIT_OK : EXIT_FAILED;
+  }
+  if (
+    named === "settings" &&
+    arguments_.slice(1).find((value) => value !== "--json") === "backends"
+  ) {
+    const parsed = parseBackendsCommand(
+      arguments_
+        .slice(1)
+        .filter((value, index, all) => index !== all.indexOf("backends")),
+    );
+    if (!parsed) return usage();
+    const emitBackends = (document: BackendsDocument) =>
+      emit(
+        asJson ? `${JSON.stringify(document)}\n` : renderBackendsText(document),
+      );
+    // Secrets come from files (or stdin), never from the command line; the
+    // file must be the caller's own and not readable by others, as for
+    // `models add --api-key-file`.
+    const secrets = await readBackendSecrets(parsed, async (file) => {
+      if (file === "-") {
+        if ((controls.stdinIsTTY ?? process.stdin.isTTY) === true) {
+          return undefined;
+        }
+        return parseApiKey(await (controls.readStdin ?? readBoundedStdin)());
+      }
+      return parseApiKey(
+        await readBoundedFile(file, 16 * 1024 + 2, { ownerOnly: true }),
+      );
+    });
+    if (secrets === null) {
+      emitBackends({
+        schema_version: 1,
+        product: PRODUCT,
+        command: "settings backends",
+        verb: parsed.kind,
+        state: "rejected",
+        code: "storage_backend_secret_file_invalid",
+        next_step:
+          "密码 / API key 文件必须是自己拥有、只有自己可读（chmod 600）的普通文件，内容一行；用 - 时从管道读入。",
+      });
+      return EXIT_FAILED;
+    }
+    const connected = await connectRuntime(environment);
+    if (!connected.ok) {
+      emitBackends({
+        schema_version: 1,
+        product: PRODUCT,
+        command: "settings backends",
+        verb: parsed.kind,
+        state: "unavailable",
+        code: connected.code,
+      });
+      return connected.exitCode;
+    }
+    const document = await runBackendsCommand(
+      parsed,
+      connected.reader,
+      connected.operations,
+      secrets,
+    );
+    emitBackends(document);
+    return backendsExitCode(document);
   }
   if (
     named === "settings" &&

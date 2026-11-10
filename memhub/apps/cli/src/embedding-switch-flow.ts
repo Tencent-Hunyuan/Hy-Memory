@@ -235,6 +235,8 @@ const BLOCKER_TEXT: Record<string, string> = {
   embedding_probe_required: "新配置还没有通过探测；先运行 memhub models test。",
   sdk_reembed_unavailable:
     "当前运行时的 SDK 不支持重新生成向量，请先升级 MemHub。",
+  embedding_switch_backend_unsupported:
+    "当前的存储后端不支持更换向量模型（SDK 只能为 Chroma 向量库和 Kuzu 图数据库重新生成向量；Neo4j/Memgraph 只在 ultra 下受限）。查看 memhub settings backends。",
   embedding_switch_requires_migration:
     "还有旧版本的向量数据没有迁移完，请先完成升级迁移。",
   embedding_dimensions_unknown:

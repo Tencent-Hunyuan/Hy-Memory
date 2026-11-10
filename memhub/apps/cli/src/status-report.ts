@@ -97,6 +97,58 @@ export interface PipelineSummary {
   ui_language: string | null;
   /** The SDK prompt language: `auto` (zh/en detection) or the code passed. */
   sdk_language: string;
+  /** The graph and vector stores (`pipeline.storage_backends`); null from an
+   * older Core without the setting. */
+  storage_backends: StorageBackendsSummary | null;
+}
+
+export interface StorageBackendsSummary {
+  graph: string;
+  vector: string;
+  is_default: boolean;
+  label: string;
+  health: "ok" | "local" | "failed" | "unknown";
+  health_code: string | null;
+}
+
+const STORAGE_HEALTH = new Set(["ok", "local", "failed", "unknown"]);
+
+function describeStorageBackends(
+  value: unknown,
+): StorageBackendsSummary | null {
+  if (!value || typeof value !== "object") return null;
+  const item = value as Record<string, unknown>;
+  if (
+    typeof item.graph !== "string" ||
+    typeof item.vector !== "string" ||
+    typeof item.is_default !== "boolean" ||
+    typeof item.label !== "string" ||
+    !STORAGE_HEALTH.has(String(item.health))
+  ) {
+    return null;
+  }
+  return {
+    graph: item.graph,
+    vector: item.vector,
+    is_default: item.is_default,
+    label: item.label,
+    health: item.health as StorageBackendsSummary["health"],
+    health_code: typeof item.health_code === "string" ? item.health_code : null,
+  };
+}
+
+/** `存储后端：Neo4j + Qdrant（通过 CLI 配置）`, with the servers' health. */
+export function storageBackendsLine(storage: StorageBackendsSummary): string {
+  const origin = storage.is_default ? "默认" : "通过 CLI 配置";
+  const health =
+    storage.health === "failed"
+      ? `，连接失败：${storage.health_code ?? "storage_backend_probe_failed"}`
+      : storage.health === "ok"
+        ? "，连接正常"
+        : storage.health === "unknown"
+          ? "，尚未检查连接"
+          : "";
+  return `${storage.label}（${origin}${health}）`;
 }
 
 const MODES = new Set(["lite", "pro", "ultra"]);
@@ -183,6 +235,7 @@ export function describePipeline(value: unknown): PipelineSummary | null {
     // An older Runtime has no setting: it always left the SDK on auto.
     sdk_language:
       typeof item.sdk_language === "string" ? item.sdk_language : "auto",
+    storage_backends: describeStorageBackends(item.storage_backends),
   };
 }
 
@@ -264,6 +317,11 @@ export async function composeStatusReport(options: {
   if (bridge.state === "degraded" || bridge.state === "untrusted") {
     degraded.push("bridge");
   }
+  // A configured server that did not answer the last probe: memories cannot
+  // be written or read there, whatever the rest says.
+  if (pipeline?.storage_backends?.health === "failed") {
+    degraded.push("storage_backends");
+  }
   const notChecked: string[] = SECTION_NAMES.filter(
     (name) => sections[name]?.state === "not_checked",
   );
@@ -330,6 +388,11 @@ export function renderStatusText(
     );
   }
   if (report.pipeline) lines.push(`记忆模式：${pipelineLine(report.pipeline)}`);
+  if (report.pipeline?.storage_backends) {
+    lines.push(
+      `存储后端：${storageBackendsLine(report.pipeline.storage_backends)}`,
+    );
+  }
   const embeddingSwitch = describeEmbeddingSwitchSummary(
     report.sections.processing?.embedding_switch,
   );

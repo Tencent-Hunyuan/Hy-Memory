@@ -30,6 +30,7 @@ from one_memory.input_sanitization import sanitize_model_input
 from one_memory.memory_features import FeatureOverrides
 from one_memory.model_profiles import ModelProfileSnapshot, ModelProfileStore, ProviderKind
 from one_memory.secrets import SecretStore, SecretStoreUnavailableError
+from one_memory.storage_backends import ResolvedStorage, storage_kwargs
 
 PRODUCT_AGENT_ID = "all-apps"
 
@@ -249,6 +250,7 @@ class SdkWriteCoordinator:
         spaces: EmbeddingSpaceStore | None = None,
         writes_open: Callable[[], bool] = lambda: True,
         sdk_language: Callable[[], str | None] = lambda: None,
+        storage_backends: Callable[[], ResolvedStorage | None] = lambda: None,
     ) -> None:
         self.profiles = profiles
         self.secrets = secrets
@@ -258,10 +260,14 @@ class SdkWriteCoordinator:
         self.memory_mode = memory_mode
         self.memory_features = memory_features
         self.sdk_language = sdk_language
+        #: The `storage_backends` setting with its secrets; None = Kuzu + Chroma.
+        #: May read the secret store (cached), so it is called off the loop.
+        self.storage_backends = storage_backends
         #: Keyed by (profile id, revision, space id, memory mode, features,
-        #: SDK language).
+        #: SDK language, storage backends).
         self._handles: dict[
-            tuple[str, int, str, str, FeatureOverrides, str | None], SdkClientHandle
+            tuple[str, int, str, str, FeatureOverrides, str | None, ResolvedStorage | None],
+            SdkClientHandle,
         ] = {}
         #: Users evolve (or the graph backfill) is running for, the writes in
         #: flight per user, and one exclusive run per user at a time. Writes
@@ -312,13 +318,18 @@ class SdkWriteCoordinator:
                 self._writes_idle.notify_all()
 
     async def retire_stale_handles(self) -> None:
-        """After a mode, feature or language change: retire handles built otherwise.
+        """After a mode, feature, language or storage change: retire handles built otherwise.
 
         The idle ones close now. A handle still writing is closed when its
         last use ends (#218), so a write that started in the old mode, or
         with the old features, finishes in it.
         """
-        build = (self.memory_mode(), self.memory_features(), self.sdk_language())
+        build = (
+            self.memory_mode(),
+            self.memory_features(),
+            self.sdk_language(),
+            await asyncio.to_thread(self.storage_backends),
+        )
         async with self._lock:
             stale = {key: handle for key, handle in self._handles.items() if key[3:] != build}
             for key in stale:
@@ -401,6 +412,7 @@ class SdkWriteCoordinator:
         mode = self.memory_mode()
         features = self.memory_features()
         language = self.sdk_language()
+        storage = await asyncio.to_thread(self.storage_backends)
         profile_identity, profile, secret, space = await asyncio.to_thread(
             self._read_active_credentials, mode
         )
@@ -410,6 +422,7 @@ class SdkWriteCoordinator:
             mode,
             features,
             language,
+            storage,
         )
         async with self._lock:
             handle = self._handles.get(key)
@@ -423,6 +436,7 @@ class SdkWriteCoordinator:
                     features=features,
                     space=space,
                     **language_kwargs(language),
+                    **storage_kwargs(storage),
                 )
                 self._handles[key] = handle
             self._retired.update(value for name, value in self._handles.items() if name != key)

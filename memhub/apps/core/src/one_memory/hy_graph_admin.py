@@ -81,7 +81,15 @@ def effective_memory_mode(configured: str = "pro") -> str:
 
 
 def inspect_graph_width_mismatch(config: Any) -> GraphWidthMismatch | None:
-    """Return a mismatch without renaming or deleting anything."""
+    """Return a mismatch without renaming or deleting anything.
+
+    Only a Kuzu graph is a file MemHub can inspect. A Neo4j/Memgraph graph
+    (`storage_backends`) is a server: there is nothing to check, archive or
+    export here, so it never reports a mismatch.
+    """
+    provider = str(getattr(config.graph_store, "provider", "kuzu") or "kuzu").lower()
+    if provider != "kuzu":
+        return None
     db_path = Path(config.graph_store.db_path)
     expected = getattr(getattr(config, "embedder", None), "embedding_dims", None)
     return _inspect_graph_width(db_path, expected)

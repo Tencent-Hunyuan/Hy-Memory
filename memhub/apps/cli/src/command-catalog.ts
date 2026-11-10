@@ -461,7 +461,7 @@ export const COMMANDS: readonly CommandDescriptor[] = [
   {
     name: "settings",
     summary:
-      "查看或切换记忆模式（lite / pro / ultra）。lite 不调用模型，只在原始对话里检索；pro 由模型提取记忆（System 1）；ultra 在 pro 之上每晚自动进化（System 2，使用知识图谱）。任何模式都保留全部原始对话。切换不迁移数据：已处理的不会重做，排队中的和新的按新模式处理；需 --yes，不加时只显示计划。环境变量 ONE_MEMORY_GRAPH_STORE 会强制 ultra。settings features 查看或开关 SDK 的可选检索与提取功能（全局设置，默认全部保持 SDK 默认值）：graph_rerank 图谱重排（仅 ultra）、same_series_timeline 同系列时间线（需 graph_rerank）、episode_recall 片段召回（pro / ultra，需先开 session_episodes 写入片段）、session_episodes 片段写入、episode_summary 片段摘要（每个片段一次模型调用）、intention 意图提取（默认开）、intention_dedup 意图判重（默认开；关闭则检索与写入都不判重、不删除意图）、few_shot 提取示例，以及数值 intention_dedup_threshold 意图判重阈值（默认 0.95，可设 0.8–1.0）；set 需 --yes，不加时只显示计划；reset 恢复默认值。settings language 查看或设置界面语言（App 切换语言时会自动设置）：简体中文（zh-Hans）和 system 不指定 SDK 语言，SDK 照旧自动识别中文或英文；其余语言（en、zh-Hant、ja、es、de、pt、fr、ko、ru、id）会让提取等 SDK 提示使用该语言，立即生效。",
+      "查看或切换记忆模式（lite / pro / ultra）。lite 不调用模型，只在原始对话里检索；pro 由模型提取记忆（System 1）；ultra 在 pro 之上每晚自动进化（System 2，使用知识图谱）。任何模式都保留全部原始对话。切换不迁移数据：已处理的不会重做，排队中的和新的按新模式处理；需 --yes，不加时只显示计划。环境变量 ONE_MEMORY_GRAPH_STORE 会强制 ultra。settings features 查看或开关 SDK 的可选检索与提取功能（全局设置，默认全部保持 SDK 默认值）：graph_rerank 图谱重排（仅 ultra）、same_series_timeline 同系列时间线（需 graph_rerank）、episode_recall 片段召回（pro / ultra，需先开 session_episodes 写入片段）、session_episodes 片段写入、episode_summary 片段摘要（每个片段一次模型调用）、intention 意图提取（默认开）、intention_dedup 意图判重（默认开；关闭则检索与写入都不判重、不删除意图）、few_shot 提取示例，以及数值 intention_dedup_threshold 意图判重阈值（默认 0.95，可设 0.8–1.0）；set 需 --yes，不加时只显示计划；reset 恢复默认值。settings language 查看或设置界面语言（App 切换语言时会自动设置）：简体中文（zh-Hans）和 system 不指定 SDK 语言，SDK 照旧自动识别中文或英文；其余语言（en、zh-Hant、ja、es、de、pt、fr、ko、ru、id）会让提取等 SDK 提示使用该语言，立即生效。settings backends 查看或更换记忆存储后端（默认 Kuzu 图数据库 + Chroma 向量库，都是本机文件）：图数据库可选 kuzu、neo4j、memgraph，向量库可选 chroma、qdrant（需服务器）；FAISS 不支持。更换前先做连接测试，set / reset 需 --yes，不加时只显示计划；已有记忆留在原后端，不会迁移到新后端，也不会被删除，改回原后端即可再次看到。密码和 API key 只从文件读取（- 表示从管道读），保存在系统钥匙串里。",
     usage:
       "memhub settings mode [lite|pro|ultra] [--yes] [--json]\n" +
       "            memhub settings features [--json]\n" +
@@ -469,7 +469,11 @@ export const COMMANDS: readonly CommandDescriptor[] = [
       "            memhub settings features set intention_dedup_threshold=<0.8-1.0> [--yes] [--json]\n" +
       "            memhub settings features set agent_max_tokens=<512-32000> [--yes] [--json]\n" +
       "            memhub settings features reset [<name> ...] [--json]\n" +
-      "            memhub settings language [<code>|system] [--json]",
+      "            memhub settings language [<code>|system] [--json]\n" +
+      "            memhub settings backends [show] [--json]\n" +
+      "            memhub settings backends set [--graph <kuzu|neo4j|memgraph>] [--graph-url <bolt-url>] [--graph-user <name>] [--graph-database <name>] [--graph-password-file <path|->] [--vector <chroma|qdrant>] [--vector-host <host>] [--vector-port <port>] [--vector-prefix <prefix>] [--vector-api-key-file <path|->] [--adopt-existing-graph] [--yes] [--json]\n" +
+      "            memhub settings backends test [同 set 的后端参数] [--json]\n" +
+      "            memhub settings backends reset [--yes] [--json]",
     options: [
       {
         flag: "mode [lite|pro|ultra]",
@@ -488,6 +492,31 @@ export const COMMANDS: readonly CommandDescriptor[] = [
         flag: "language [<code>|system]",
         summary:
           "不带参数显示界面语言和 SDK 提示语言；带语言代码（en、zh-Hans、zh-Hant、ja、es、de、pt、fr、ko、ru、id）或 system 时设置。",
+      },
+      {
+        flag: "backends [show|set|test|reset]",
+        summary:
+          "show 显示当前存储后端、连接状态和在这些后端上哪些功能可用；test 只做连接测试、不保存；set 先测试连接再显示计划，加 --yes 后保存；reset 恢复 Kuzu + Chroma（加 --yes）。只写一侧时另一侧保持不变。",
+      },
+      {
+        flag: "--graph <kuzu|neo4j|memgraph>",
+        summary:
+          "图数据库（只在 ultra 模式使用）。neo4j / memgraph 需要 --graph-url bolt://<host>:7687，可选 --graph-user、--graph-database 和 --graph-password-file。",
+      },
+      {
+        flag: "--vector <chroma|qdrant>",
+        summary:
+          "向量库。qdrant 需要 --vector-host（可选 --vector-port，默认 6333；--vector-prefix 默认使用本资料空间的命名，避免多个 MemHub 共用一台服务器时互相读写；--vector-api-key-file）。",
+      },
+      {
+        flag: "--graph-password-file / --vector-api-key-file <path|->",
+        summary:
+          "从文件读取密码或 API key（必须是自己拥有、权限 600 的普通文件；- 表示从管道读入）；不写则保留已保存的值。",
+      },
+      {
+        flag: "--adopt-existing-graph",
+        summary:
+          "图数据库里已经有记忆图谱时（图谱没有按资料空间隔离，可能属于另一个 MemHub），确认接管它。",
       },
       CONFIRM_OPTION,
       JSON_OPTION,

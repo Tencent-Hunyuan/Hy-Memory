@@ -1,6 +1,5 @@
 import asyncio
 import hashlib
-import importlib.util
 import json
 import logging
 import os
@@ -128,6 +127,7 @@ from one_memory.hy_sdk_types import (
     HySdkRawPage,
     HySdkRawRecord,
     HySdkReadError,
+    HySdkRuntimeError,
     HySdkUserProfile,
     LibraryHit,
     library_keyword_hits,
@@ -326,6 +326,19 @@ from one_memory.service_levels import (
 from one_memory.source_import_receipts import SourceImportReceipt, build_source_import_receipt
 from one_memory.source_read_access import SourceReadAccess
 from one_memory.source_totals import SourceTotals
+from one_memory.storage_backend_probe import StorageBackendHealth, driver_available
+from one_memory.storage_backend_routes import (
+    StorageBackendHooks,
+    StorageBackendsSummary,
+)
+from one_memory.storage_backend_routes import summary as storage_summary
+from one_memory.storage_backends import (
+    GRAPH_EXPORT_UNSUPPORTED,
+    ResolvedStorage,
+    StorageBackends,
+    StorageBackendStore,
+    embedding_switch_refusal,
+)
 from one_memory.strict_query import forbid_unknown_query_params
 from one_memory.target_schema import bootstrap_fresh_management_schema
 from one_memory.ui_language import (
@@ -904,6 +917,9 @@ class PipelineStatus(BaseModel):
     ui_language: UiLanguage | None = None
     #: The SDK prompt language: `auto` (the SDK detects zh/en) or a code.
     sdk_language: str = SDK_LANGUAGE_AUTO
+    #: The graph and vector stores (`storage_backends`) and whether they
+    #: answer; None from a Core without the setting wired (legacy tests).
+    storage_backends: StorageBackendsSummary | None = None
 
 
 class UiLanguageState(BaseModel):
@@ -1374,6 +1390,14 @@ def create_app(
                 home=runtime_settings.source_home,
             )
             app.state.config_store = ConfigStore(runtime_settings.data_dir)
+            # The graph and vector stores every SDK client is built with
+            # (`storage_backends`), and their cached health for status.
+            app.state.storage_backends = StorageBackendStore(
+                app.state.config_store, app.state.secret_store
+            )
+            app.state.storage_backend_health = StorageBackendHealth(
+                resolved=lambda: _storage_resolved(app)
+            )
             app.state.source_candidate_store = SourceCandidateStore(
                 database_path, home=runtime_settings.source_home
             )
@@ -1507,6 +1531,7 @@ def create_app(
                 spaces=app.state.embedding_spaces,
                 writes_open=lambda: _embedding_writes_open(app),
                 sdk_language=lambda: _sdk_language(app),
+                storage_backends=lambda: _storage_resolved(app),
             )
             app.state.sdk_memory_runtime = SdkMemoryRuntime(
                 coordinator=app.state.sdk_write_coordinator,
@@ -1675,6 +1700,23 @@ def create_app(
                 graph_enabled=lambda: _memory_mode(app) == "ultra",
                 worker_enabled=runtime_settings.embedding_switch_worker,
                 drain_timeout_s=runtime_settings.embedding_switch_drain_timeout_seconds,
+                # The SDK re-embeds Chroma and Kuzu only; on another store the
+                # switch is refused and the old Chroma files are never opened.
+                storage_refusal=lambda: embedding_switch_refusal(
+                    _storage_settings(app), mode=_memory_mode(app)
+                ),
+                chroma_is_live=lambda: _storage_settings(app).vector.provider == "chroma",
+                kuzu_is_live=lambda: _storage_settings(app).graph.provider == "kuzu",
+            )
+            app.state.storage_backend_hooks = StorageBackendHooks(
+                store=app.state.storage_backends,
+                health=app.state.storage_backend_health,
+                memory_mode=lambda: _memory_mode(app),
+                lifecycle_lock=app.state.memory_mode_lock,
+                busy=lambda: _storage_change_blocker(app),
+                after_change=lambda previous, current: _after_storage_change(
+                    app, previous, current
+                ),
             )
             if app.state.memory_authority is not MemoryAuthority.SDK:
                 # Only an SDK-authority home has SDK spaces to scan and merge.
@@ -1899,6 +1941,11 @@ def create_app(
                         return
                     # The hold is this step's from here; shutdown leaves it.
                     app.state.sdk_stores_held = False
+                    if _storage_settings(app).vector.provider != "chroma":
+                        # Another vector store is configured: the Chroma files
+                        # belong to the store that was left and stay as they are.
+                        release_stores(runtime_settings.data_dir)
+                        return
                     work = asyncio.ensure_future(
                         asyncio.to_thread(
                             repair_sdk_metadata_from_bundle,
@@ -2273,6 +2320,9 @@ def create_app(
     from one_memory.embedding_switch_routes import embedding_switch_router
 
     app.include_router(embedding_switch_router(protected))
+    from one_memory.storage_backend_routes import storage_backend_router
+
+    app.include_router(storage_backend_router(strict))
     from one_memory.live_capture import live_capture_router
 
     def file_polled(request: Request, source_id: str) -> bool:
@@ -5587,6 +5637,9 @@ def create_app(
     )
     async def get_graph_width() -> GraphWidthStatus:
         """Report the mismatch. Never writes: this is polled by the app."""
+        if _storage_settings(app).graph.provider != "kuzu":
+            # Only a Kuzu file has a width to read; a server graph has none here.
+            return GraphWidthStatus()
         try:
             mismatch = await _sdk_memory_runtime(app).graph_width_mismatch()
         except HySdkError as error:
@@ -5614,6 +5667,10 @@ def create_app(
         """
         supervisor = _sdk_memory_runtime(app)
         _refuse_write_during_embedding_switch(app)
+        if _storage_settings(app).graph.provider != "kuzu":
+            # Export and rebuild copy or rename the Kuzu file. With a server
+            # graph that file is the store that was left: never touched.
+            raise HTTPException(status_code=409, detail=GRAPH_EXPORT_UNSUPPORTED)
         try:
             outcome = await supervisor.decide_graph_width(request.decision)
         except HySdkError as error:
@@ -6902,6 +6959,7 @@ def _sdk_client_handle(app: FastAPI) -> SdkClientHandle:
             features=lambda: _memory_features(app),
             spaces=getattr(app.state, "embedding_spaces", None),
             language=lambda: _sdk_language(app),
+            storage=lambda: _storage_resolved(app),
         )
         app.state.sdk_client_handle = handle
     return handle
@@ -6945,7 +7003,13 @@ def _graph_store_status(app: FastAPI) -> GraphStoreStatus:
 async def _open_graph_store_at_startup(app: FastAPI) -> GraphOpenOutcome:
     """Run the guarded first open of the live ultra graph; see `graph_open_guard`."""
     guard = cast(GraphOpenGuard, app.state.graph_open_guard)
-    if app.state.memory_authority is not MemoryAuthority.SDK or _memory_mode(app) != "ultra":
+    if (
+        app.state.memory_authority is not MemoryAuthority.SDK
+        or _memory_mode(app) != "ultra"
+        # A Neo4j/Memgraph server is no file a child could open and
+        # quarantine; the SDK client reports its own connection.
+        or _storage_settings(app).graph.provider != "kuzu"
+    ):
         guard.mark_not_used()
         return "skipped"
     live = app.state.embedding_spaces.live()
@@ -6980,7 +7044,7 @@ def _memory_mode_plan(app: FastAPI, target: MemoryMode) -> MemoryModePlan:
     if (
         effective_target != current
         and effective_target == "ultra"
-        and importlib.util.find_spec("kuzu") is None
+        and not driver_available(_storage_settings(app).graph.provider)
     ):
         blockers.append("graph_store_unavailable")
 
@@ -7123,7 +7187,71 @@ def _pipeline_status(app: FastAPI) -> PipelineStatus | None:
             non_default_features(_memory_features(app), sdk_feature_defaults()),
         ),
         **_ui_language_state(app).model_dump(exclude={"languages"}),
+        storage_backends=_storage_summary(app),
     )
+
+
+def _storage_summary(app: FastAPI) -> StorageBackendsSummary | None:
+    store = getattr(app.state, "storage_backends", None)
+    health = getattr(app.state, "storage_backend_health", None)
+    if store is None or health is None:
+        return None
+    return storage_summary(store.settings(), health.snapshot())
+
+
+def _storage_settings(app: FastAPI) -> StorageBackends:
+    """The configured pair; Kuzu + Chroma for a Core without the setting wired."""
+    store = getattr(app.state, "storage_backends", None)
+    return store.settings() if store is not None else StorageBackends()
+
+
+def _storage_resolved(app: FastAPI) -> ResolvedStorage | None:
+    """The pair every SDK client is built with, secrets included (cached).
+
+    None for Kuzu + Chroma, without reading the secret store. A keychain that
+    cannot be read fails the client construction, never falls back to Kuzu
+    + Chroma: that would write this home's memories into the wrong store.
+    """
+    store = cast(StorageBackendStore | None, getattr(app.state, "storage_backends", None))
+    if store is None:
+        return None
+    try:
+        return store.resolved()
+    except SecretStoreUnavailableError:
+        raise HySdkRuntimeError("secure_storage_unavailable") from None
+
+
+def _storage_change_blocker(app: FastAPI) -> str | None:
+    """Why the storage backends cannot change right now, as a mode change asks."""
+    if not _embedding_writes_open(app):
+        return "embedding_maintenance_in_progress"
+    if _evolve_service(app).running() or app.state.memory_graph_backfill.running:
+        return "memory_lifecycle_busy"
+    return None
+
+
+async def _after_storage_change(
+    app: FastAPI, previous: StorageBackends, current: StorageBackends
+) -> None:
+    """A backend changed: rebuild every SDK client on the new stores.
+
+    A write in flight finishes on the store it started on; the next job and
+    the next read open the new one (handles are keyed by the storage). No
+    memory is copied: an ultra home whose graph moved rebuilds the graph on
+    the new server from the memories it can read (`MemoryGraphBackfill`), the
+    same derived rebuild a quarantined Kuzu graph gets.
+    """
+    from one_memory.hy_graph_admin import forget_graph_widths
+
+    await app.state.sdk_write_coordinator.retire_stale_handles()
+    handle = getattr(app.state, "sdk_client_handle", None)
+    if handle is not None:
+        await handle.close_idle()
+    forget_graph_widths()
+    graph_moved = (previous.graph != current.graph) and _memory_mode(app) == "ultra"
+    if graph_moved and not app.state.memory_graph_backfill.running:
+        users = await asyncio.to_thread(_known_user_ids, app)
+        app.state.memory_graph_backfill.start(users)
 
 
 def _read_handle(app: FastAPI) -> ActiveProfileReadHandle:
