@@ -192,7 +192,9 @@ def test_a_truncated_marker_is_repaired_instead_of_disabling_the_sink(tmp_path) 
 
     logs = database.parent / "logs"
     logs.mkdir(parents=True, exist_ok=True)
-    (logs / "capture-rejection-workbuddy-sync_disabled.json").write_text('{"count": 4', encoding="utf8")
+    (logs / "capture-rejection-workbuddy-sync_disabled.json").write_text(
+        '{"count": 4', encoding="utf8"
+    )
 
     record_capture_rejection(database, "workbuddy", CaptureRejection.SYNC_DISABLED)
 
@@ -203,32 +205,32 @@ def test_a_truncated_marker_is_repaired_instead_of_disabling_the_sink(tmp_path) 
     assert record["source_id"] == "workbuddy"
 
 
-def test_the_marker_tracks_when_the_last_rejection_happened(tmp_path) -> None:
+def test_the_marker_tracks_when_the_last_rejection_happened(tmp_path, monkeypatch) -> None:
     """``last_at`` must move with every rejection, not stay at the window start."""
+    import one_memory.live_capture as live_capture
+
     store, database, home = build_store(tmp_path)
     _grant(store, home, "workbuddy")
+    marker = database.parent / "logs" / "capture-rejection-workbuddy-sync_disabled.json"
+    clock = iter([1_000.0, 1_060.0])
+    real_time = live_capture.time.time
+    monkeypatch.setattr(live_capture.time, "time", lambda: next(clock, real_time()))
 
     record_capture_rejection(database, "workbuddy", CaptureRejection.SYNC_DISABLED)
-    first = json.loads(
-        (database.parent / "logs" / "capture-rejection-workbuddy-sync_disabled.json").read_text(
-            encoding="utf8"
-        )
+    first = json.loads(marker.read_text(encoding="utf8"))
+    record_capture_rejection(
+        database, "workbuddy", CaptureRejection.SYNC_DISABLED, window_seconds=1e12
     )
-    record_capture_rejection(database, "workbuddy", CaptureRejection.SYNC_DISABLED)
-    second = json.loads(
-        (database.parent / "logs" / "capture-rejection-workbuddy-sync_disabled.json").read_text(
-            encoding="utf8"
-        )
-    )
+    second = json.loads(marker.read_text(encoding="utf8"))
 
+    assert first["last_at"] == first["window_started_at"]
     assert second["count"] == 2
     assert second["window_started_at"] == first["window_started_at"]
-    assert second["last_at"] != second["window_started_at"]
+    assert second["last_at"] > second["window_started_at"]
 
 
 def test_a_failed_publish_leaves_the_previous_marker_intact(tmp_path, monkeypatch) -> None:
-    from pathlib import Path as _Path
-
+    """A write that fails mid-way keeps the old record and leaves no stray file."""
     store, database, home = build_store(tmp_path)
     _grant(store, home, "workbuddy")
 
@@ -239,8 +241,8 @@ def test_a_failed_publish_leaves_the_previous_marker_intact(tmp_path, monkeypatc
     def boom(_self, _target):
         raise OSError(28, "No space left on device")
 
-    monkeypatch.setattr(_Path, "replace", boom)
+    monkeypatch.setattr(Path, "replace", boom)
     record_capture_rejection(database, "workbuddy", CaptureRejection.SYNC_DISABLED)
 
     assert marker.read_text(encoding="utf8") == before
-    assert sorted(p.name for p in marker.parent.iterdir()) == ["capture-rejection-workbuddy-sync_disabled.json"]
+    assert [p.name for p in marker.parent.iterdir()] == [marker.name]
