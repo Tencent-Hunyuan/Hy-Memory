@@ -114,6 +114,80 @@ def test_restore_sdk_bundle_uses_full_data_plane_restore(tmp_path, monkeypatch) 
     assert '"restored_files":4' in document
 
 
+def test_restore_of_a_backup_directory_restores_the_memories(tmp_path, monkeypatch) -> None:
+    """A v2 backup (a directory) goes through the memory restore, offline."""
+    from one_memory import memory_backup
+
+    monkeypatch.setattr(cli, "load_settings", lambda: Settings(_env_file=None, data_dir=tmp_path))
+    monkeypatch.setattr(
+        cli,
+        "inspect_runtime",
+        lambda _data_dir: RuntimeStatus("stopped", "runtime_receipt_missing"),
+    )
+    backup = tmp_path / "backups" / "full.memhub-backup"
+    backup.mkdir(parents=True)
+    (backup / "manifest.json").write_text(
+        '{"format": "memhub-backup", "schema_version": 2, "files": []}'
+    )
+    seen: dict[str, object] = {}
+
+    async def run_restore(data_dir, source, *, current, schedule_graph_rebuild, **_kwargs):
+        seen.update(source=source.path, current=current.kind, offline=not _kwargs)
+        return memory_backup.RestoreResult(
+            path=source.path,
+            previous=tmp_path / "backups" / "pre-restore-1.memhub-previous",
+            bytes=10,
+            files=3,
+            duration_ms=1,
+            verification=memory_backup.Verification(
+                vector_store="verified", layers_reason="runtime_stopped"
+            ),
+            graph_rebuild_users=(),
+            source_schema_version=63,
+            backend=memory_backup.BackendIdentity(),
+        )
+
+    monkeypatch.setattr(memory_backup, "run_restore", run_restore)
+    output = io.StringIO()
+    code = cli.run(
+        ["restore", "--source", "backups/full.memhub-backup", "--yes", "--json"],
+        output=output,
+    )
+    assert code == 0, output.getvalue()
+    document = json.loads(output.getvalue())
+    assert seen == {"source": backup.resolve(), "current": "local", "offline": True}
+    assert document["state"] == "restored"
+    assert document["memories_included"] is True
+    assert document["backup_schema_version"] == 2
+    assert document["verification"]["layers_reason"] == "runtime_stopped"
+
+
+def test_restore_of_an_old_backup_says_it_holds_no_memories(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr(cli, "load_settings", lambda: Settings(_env_file=None, data_dir=tmp_path))
+    monkeypatch.setattr(
+        cli,
+        "inspect_runtime",
+        lambda _data_dir: RuntimeStatus("stopped", "runtime_receipt_missing"),
+    )
+
+    class Result:
+        restored_bytes = 123
+        previous_backup_path = tmp_path / "backups" / "pre.sqlite3"
+        source_schema_version = 36
+
+    monkeypatch.setattr(
+        "one_memory.managed_restore.restore_managed_backup",
+        lambda **_kwargs: Result(),
+    )
+    output = io.StringIO()
+    assert (
+        cli.run(["restore", "--source", "backups/x.sqlite3", "--yes", "--json"], output=output) == 0
+    )
+    document = json.loads(output.getvalue())
+    assert document["memories_included"] is False
+    assert document["note"] == "management_database_only_no_memories"
+
+
 def _stopped(monkeypatch, tmp_path) -> None:
     monkeypatch.setattr(cli, "load_settings", lambda: Settings(_env_file=None, data_dir=tmp_path))
     monkeypatch.setattr(
