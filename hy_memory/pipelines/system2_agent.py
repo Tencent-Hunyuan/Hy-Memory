@@ -31,6 +31,7 @@ from ..config import MemoryConfig
 from ..core.embed_service import EmbedService
 from ..data.vector_store_base import VectorStoreBase
 from ..data.graph_store_base import GraphStoreBase
+from ..utils.lang_detect import detect_language as _detect_language_shared
 
 from .system2_tools import System2ToolExecutor
 from .specific_supplement import (
@@ -2310,11 +2311,12 @@ def _parse_operations_json(text: str) -> Optional[List[Dict[str, Any]]]:
 def _detect_language(materials: Dict[str, Any]) -> str:
     """
     从 materials 的 fact content 检测语言。
-    
-    扫描所有聚类中的 fact content，计算中文字符占比。
-    中文比例 >= 70% → "zh"，否则 → "en"。
+
+    复用 ``utils.lang_detect.detect_language`` 的分层策略（leading 指令窗口
+    + 0.3 CJK 阈值 + langdetect 兜底），而不是旧的全文 ``zh_ratio >= 0.7``
+    扫描。旧算法对技术/开发类中文记忆结构性误判：路径、时间戳、命令、英文
+    术语等 ASCII 内容会稀释分母，把真实的中文事实判成英文（见 #243）。
     """
-    import re
     all_text = ""
     for cluster in materials.get("clusters", []):
         for f in cluster.get("facts", []):
@@ -2325,18 +2327,17 @@ def _detect_language(materials: Dict[str, Any]) -> str:
     if not all_text.strip():
         return "en"
 
-    # 统计中文字符（CJK Unified Ideographs）
-    zh_chars = len(re.findall(r'[\u4e00-\u9fff]', all_text))
-    # 统计所有非空白字符
-    total_chars = len(re.findall(r'\S', all_text))
-
-    if total_chars == 0:
+    detected = _detect_language_shared(all_text)
+    if not detected:
         return "en"
+    # 归一化到调用方期望的 zh/en 两值语义；其余语言码原样透传给
+    # _s2_language_code 处理。
+    if detected == "zh":
+        return "zh"
+    if detected.startswith("zh"):
+        return "zh"
+    return "en"
 
-    zh_ratio = zh_chars / total_chars
-    lang = "zh" if zh_ratio >= 0.7 else "en"
-    logger.debug(f"[S2-agent] language detection: zh_chars={zh_chars} total={total_chars} ratio={zh_ratio:.2f} → {lang}")
-    return lang
 
 
 def _build_materials_message(materials: Dict[str, Any], lang: str = "zh") -> str:
