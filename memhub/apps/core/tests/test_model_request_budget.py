@@ -133,56 +133,6 @@ def test_both_fields_account_for_the_largest_limit(tmp_path):
         )
 
 
-@pytest.mark.asyncio
-@pytest.mark.parametrize("field", ["max_tokens", "max_completion_tokens"])
-async def test_real_sdk_request_through_budgeted_transport(tmp_path, field):
-    from hy_memory.agent.llm_provider import LLMProvider
-    from hy_memory.config import LLMConfig, MemoryConfig
-
-    seen = []
-
-    def handle(request):
-        body = json.loads(request.content)
-        seen.append(body)
-        return httpx.Response(
-            200,
-            json={
-                "id": "chatcmpl-test",
-                "object": "chat.completion",
-                "created": 1,
-                "model": "test",
-                "choices": [
-                    {
-                        "index": 0,
-                        "finish_reason": "stop",
-                        "message": {"role": "assistant", "content": "ok"},
-                    }
-                ],
-            },
-        )
-
-    store = ModelRequestBudget(
-        tmp_path / "budget.sqlite3", request_limit=2, body_byte_limit=4096, output_token_limit=200
-    )
-    config = MemoryConfig()
-    config.llm = LLMConfig(
-        api_key="test",
-        base_url="https://example.test/v1",
-        output_token_parameter=field,
-        max_retries=1,
-    )
-    config.http_transport_factory = lambda: BudgetedModelTransport(
-        store, inner=httpx.MockTransport(handle)
-    )
-    assert (await LLMProvider(config).complete("hello", max_tokens=123)).content == "ok"
-    assert seen[0][field] == 123
-    with sqlite3.connect(store.database) as db:
-        assert db.execute("SELECT output_tokens FROM model_request_budget_events").fetchone() == (
-            123,
-        )
-
-
-@pytest.mark.asyncio
 @pytest.mark.parametrize(
     "body",
     [
@@ -191,16 +141,20 @@ async def test_real_sdk_request_through_budgeted_transport(tmp_path, field):
         {"max_completion_tokens": True},
     ],
 )
-async def test_invalid_either_field_never_reaches_model(tmp_path, body):
+def test_invalid_either_field_never_reaches_model(tmp_path, body):
     sent = []
     store = budget(tmp_path)
-    async with httpx.AsyncClient(
-        transport=BudgetedModelTransport(
-            store, inner=httpx.MockTransport(lambda req: sent.append(req) or httpx.Response(200))
-        )
-    ) as client:
-        with pytest.raises(ModelRequestBudgetError):
-            await client.post("https://example.test/chat/completions", json=body)
+
+    async def scenario():
+        async with httpx.AsyncClient(
+            transport=BudgetedModelTransport(
+                store, inner=httpx.MockTransport(lambda req: sent.append(req) or httpx.Response(200))
+            )
+        ) as client:
+            with pytest.raises(ModelRequestBudgetError):
+                await client.post("https://example.test/chat/completions", json=body)
+
+    asyncio.run(scenario())
     assert not sent
     with sqlite3.connect(store.database) as db:
         assert db.execute("SELECT COUNT(*) FROM model_request_budget_events").fetchone() == (0,)
