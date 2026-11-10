@@ -21,7 +21,11 @@ Contract:
   built at a staging path that is wiped on every start and moved into place
   only after the copy verifies.
 
-Only the Chroma vector backend and the Kuzu graph backend are supported.
+Vector backends: Chroma and Qdrant (``VectorSpace.provider``). A space never
+spans two providers: source and target of one call are on the same one. The
+graph half supports Kuzu only. A Neo4j/Memgraph graph keeps one vector index of
+one fixed width per database (``memory_content_idx``), so two embedding spaces
+cannot live side by side in it and there is nothing to copy into.
 """
 
 from __future__ import annotations
@@ -68,6 +72,13 @@ VECTOR_ROLES: Tuple[str, ...] = (
     "coding_keys", "coding_keys_cv",
     "working_facts", "working_facts_cv",
 )
+#: Collections only the Qdrant store keeps beside the memory collection: the
+#: per-user tag embeddings (``<memory>_tag_index``) and the hidden retrieval
+#: clauses of long L2 memories (``<memory>__retrieval_clauses``). Both hold
+#: vectors of the space's model, so a Qdrant space re-embeds them too.
+QDRANT_EXTRA_ROLES: Tuple[str, ...] = ("tag_index", "retrieval_clauses")
+QDRANT_VECTOR_ROLES: Tuple[str, ...] = VECTOR_ROLES + QDRANT_EXTRA_ROLES
+VECTOR_PROVIDERS: Tuple[str, ...] = ("chroma", "qdrant")
 
 # Collection metadata keys written on target collections this module creates.
 # Records themselves are copied verbatim, so the model can only live here.
@@ -124,12 +135,17 @@ def space_identity(model: str, dims: int) -> EmbeddingSpaceIdentity:
 
 @dataclass(frozen=True)
 class VectorSpace:
-    """One embedding space in a Chroma store, named explicitly.
+    """One embedding space in a Chroma or Qdrant store, named explicitly.
 
     ``base_name`` is the collection base without the width suffix, exactly what
     ``vector_store.collection_name`` is for a client. ``collections`` overrides
     the physical name per role when the caller manages names itself; roles left
     out of an explicit mapping are not part of the space.
+
+    ``provider`` is ``"chroma"`` (default) or ``"qdrant"``. A Qdrant space is
+    a server (``host``/``port``/``api_key``) or a local directory
+    (``persist_directory``); its roles add `QDRANT_EXTRA_ROLES`. ``api_key``
+    never appears in ``repr`` and does not take part in equality.
     """
 
     base_name: str
@@ -139,6 +155,14 @@ class VectorSpace:
     port: Optional[int] = None
     model: Optional[str] = None
     collections: Optional[Mapping[str, str]] = None
+    provider: str = "chroma"
+    api_key: Optional[str] = field(default=None, repr=False, compare=False)
+
+    def __post_init__(self) -> None:
+        if self.provider not in VECTOR_PROVIDERS:
+            raise NotImplementedError(
+                f"re-embed supports the chroma and qdrant vector stores, got {self.provider!r}"
+            )
 
     @classmethod
     def from_config(
@@ -146,9 +170,20 @@ class VectorSpace:
     ) -> "VectorSpace":
         vs = config.vector_store
         provider = str(vs.provider or "chroma").lower()
-        if provider != "chroma":
+        if provider not in VECTOR_PROVIDERS:
             raise NotImplementedError(
-                f"re-embed supports the chroma vector store only, got {provider!r}"
+                f"re-embed supports the chroma and qdrant vector stores, got {provider!r}"
+            )
+        if provider == "qdrant":
+            return cls(
+                base_name=base_name or vs.collection_name or "agent_memories",
+                dims=vs.embedding_dims,
+                persist_directory=None if vs.host else vs.persist_directory,
+                host=vs.host,
+                port=vs.port,
+                model=getattr(config.embedder, "model", None),
+                provider="qdrant",
+                api_key=vs.api_key,
             )
         return cls(
             base_name=base_name or vs.collection_name or "agent_memories",
@@ -159,15 +194,28 @@ class VectorSpace:
             model=getattr(config.embedder, "model", None),
         )
 
+    @property
+    def roles(self) -> Tuple[str, ...]:
+        """Every role a space of this provider can hold."""
+        return QDRANT_VECTOR_ROLES if self.provider == "qdrant" else VECTOR_ROLES
+
     def names(self) -> Dict[str, str]:
+        roles = self.roles
         if self.collections is not None:
-            unknown = set(self.collections) - set(VECTOR_ROLES)
+            unknown = set(self.collections) - set(roles)
             if unknown:
                 raise ValueError(f"unknown vector roles: {sorted(unknown)}")
-            return {role: self.collections[role] for role in VECTOR_ROLES if role in self.collections}
-        return _derived_names(self.base_name, self.dims)
+            return {role: self.collections[role] for role in roles if role in self.collections}
+        names = _derived_names(self.base_name, self.dims)
+        if self.provider == "qdrant":
+            names.update(_qdrant_extra_names(names["memory"]))
+        return names
 
     def location(self) -> Tuple[str, str]:
+        if self.provider == "qdrant":
+            if self.host:
+                return ("qdrant", f"{self.host}:{self.port or 6333}")
+            return ("qdrant-local", os.path.realpath(str(self.persist_directory or "")))
         if self.host:
             return ("http", f"{self.host}:{self.port or 8000}")
         return ("local", os.path.realpath(str(self.persist_directory or "")))
@@ -190,6 +238,18 @@ def _derived_names(base_name: str, dims: Optional[int]) -> Dict[str, str]:
         "working_facts": physical_collection_name(_derive_fact_collection_name(base_name, ""), dims),
         "working_facts_cv": physical_collection_name(_derive_fact_collection_name(base_name, "_cv"), dims),
     }
+
+
+def _qdrant_extra_names(memory: str) -> Dict[str, str]:
+    from .pipelines._retrieval.config import tag_index_collection_name
+
+    return {
+        "tag_index": tag_index_collection_name(memory),
+        "retrieval_clauses": f"{memory}{_CLAUSE_SUFFIX}",
+    }
+
+
+_CLAUSE_SUFFIX = "__retrieval_clauses"
 
 
 def _space(value: SpaceLike) -> VectorSpace:
@@ -284,12 +344,40 @@ async def _vdb(func, *args, **kwargs):
 
 
 def _client_for(space: VectorSpace):
+    if space.provider == "qdrant":
+        return _qdrant_client(space)
     import chromadb
 
     if space.host:
         return chromadb.HttpClient(host=space.host, port=space.port or 8000)
     # Same settings as ChromaVectorStore.initialize, so both share one system.
     return chromadb.PersistentClient(path=space.persist_directory)
+
+
+def _qdrant_client(space: VectorSpace):
+    from ._reembed_qdrant import qdrant_client
+
+    return qdrant_client(space)
+
+
+def close_vector_clients() -> None:
+    """Close the Qdrant clients re-embed opened (a local directory is unlocked).
+
+    Chroma clients are shared with the SDK's own stores and are left open.
+    """
+    from ._reembed_qdrant import close_qdrant_clients
+
+    close_qdrant_clients()
+
+
+def _open_target(tgt_client, name: str, src_coll, target: VectorSpace):
+    if target.provider == "qdrant":
+        collection = tgt_client.create_like(name, src_coll, int(target.dims))
+        collection.bind_source(src_coll)
+        return collection
+    return tgt_client.get_or_create_collection(
+        name=name, metadata=_target_metadata(src_coll, target),
+    )
 
 
 def _get_collection(client, name: str):
@@ -327,6 +415,16 @@ def _first_width(collection) -> Optional[int]:
     return len(embeddings[0])
 
 
+def _check_same_provider(source: VectorSpace, target: VectorSpace) -> None:
+    if source.provider != target.provider:
+        # Records are copied verbatim, and the two stores keep different
+        # record shapes and ids: a cross-store copy would be a different job.
+        raise ValueError(
+            f"source ({source.provider}) and target ({target.provider}) "
+            "must be on the same vector store"
+        )
+
+
 def _check_not_same(source: VectorSpace, target: VectorSpace, src_name: str, tgt_name: str) -> None:
     if source.location() == target.location() and src_name == tgt_name:
         raise ValueError(
@@ -338,9 +436,9 @@ def _check_not_same(source: VectorSpace, target: VectorSpace, src_name: str, tgt
 def _roles(space: VectorSpace, roles: Optional[Iterable[str]]) -> List[str]:
     names = space.names()
     if roles is None:
-        return [role for role in VECTOR_ROLES if role in names]
+        return [role for role in space.roles if role in names]
     wanted = list(roles)
-    unknown = [role for role in wanted if role not in VECTOR_ROLES]
+    unknown = [role for role in wanted if role not in space.roles]
     if unknown:
         raise ValueError(f"unknown vector roles: {unknown}")
     return [role for role in wanted if role in names]
@@ -416,7 +514,7 @@ def _plan_sync(source: VectorSpace, target: VectorSpace) -> Tuple[List[ReembedCo
     src_names, tgt_names = source.names(), target.names()
     out: List[ReembedCollectionPlan] = []
     source_dims: Optional[int] = None
-    for role in VECTOR_ROLES:
+    for role in source.roles:
         if role not in src_names or role not in tgt_names:
             continue
         src = _get_collection(src_client, src_names[role])
@@ -447,6 +545,7 @@ async def plan_reembed(
     Pass ``source_graph_path`` to include the Kuzu graph. Read-only.
     """
     src, tgt = _space(source), _space(target)
+    _check_same_provider(src, tgt)
     collections, source_dims = await _vdb(_plan_sync, src, tgt)
     graph = None
     if source_graph_path is not None and Path(source_graph_path).exists():
@@ -577,6 +676,7 @@ async def reembed_vector_space(
     - The source is never written.
     """
     src, tgt = _space(source), _space(target)
+    _check_same_provider(src, tgt)
     if not tgt.dims:
         raise ValueError("the target space needs an explicit width (dims)")
     dims = int(tgt.dims)
@@ -606,11 +706,7 @@ async def reembed_vector_space(
             if on_progress:
                 on_progress(progress)
             continue
-        tgt_coll = await _vdb(
-            tgt_client.get_or_create_collection,
-            name=tgt_name,
-            metadata=_target_metadata(src_coll, tgt),
-        )
+        tgt_coll = await _vdb(_open_target, tgt_client, tgt_name, src_coll, tgt)
         offset = 0
         while offset < total:
             if cancelled():
@@ -747,7 +843,10 @@ class ScannedSpace:
     base_name: str
     dims: Optional[int]
     roles: Dict[str, ScannedCollection]
-    persist_directory: str
+    persist_directory: Optional[str]
+    provider: str = "chroma"
+    host: Optional[str] = None
+    port: Optional[int] = None
 
     @property
     def total(self) -> int:
@@ -771,8 +870,20 @@ class ScannedSpace:
     def models(self) -> Tuple[str, ...]:
         return tuple(sorted({m for item in self.roles.values() for m in item.models}))
 
-    def space(self, *, model: Optional[str] = None) -> VectorSpace:
+    def space(self, *, model: Optional[str] = None, api_key: Optional[str] = None) -> VectorSpace:
         """A `VectorSpace` naming exactly the collections found."""
+        if self.provider == "qdrant":
+            return VectorSpace(
+                base_name=self.base_name,
+                dims=self.dims if self.dims is not None else self.width,
+                persist_directory=self.persist_directory,
+                host=self.host,
+                port=self.port,
+                model=model,
+                collections={role: item.name for role, item in self.roles.items()},
+                provider="qdrant",
+                api_key=api_key,
+            )
         return VectorSpace(
             base_name=self.base_name,
             dims=self.dims if self.dims is not None else self.width,
@@ -825,18 +936,98 @@ def _scan_sync(persist_directory: str, per_user: bool) -> List[ScannedSpace]:
     ]
 
 
+def _scan_qdrant_sync(location: VectorSpace, prefix: Optional[str], per_user: bool) -> List[ScannedSpace]:
+    from ._reembed_qdrant import parse_qdrant_collection_name
+
+    if location.host is None and not os.path.isdir(str(location.persist_directory or "")):
+        return []
+    client = _client_for(location)
+    grouped: Dict[Tuple[str, Optional[int]], Dict[str, ScannedCollection]] = {}
+    for name in client.list_collections():
+        if prefix is not None and not name.startswith(prefix):
+            continue
+        parsed = parse_qdrant_collection_name(name)
+        if parsed is None:
+            continue
+        base, dims, role = parsed
+        collection = client.get_collection(name)
+        count = collection.count()
+        users: Dict[str, int] = {}
+        if per_user and count:
+            for got in _iter_pages(collection, ["metadatas"], page=2000):
+                for meta in got.get("metadatas") or []:
+                    user = str((meta or {}).get("user_id") or "")
+                    users[user] = users.get(user, 0) + 1
+        grouped.setdefault((base, dims), {})[role] = ScannedCollection(
+            role=role,
+            name=name,
+            count=count,
+            width=_first_width(collection) if count else None,
+            per_user=users,
+            models=(),
+        )
+    return [
+        ScannedSpace(
+            base_name=base,
+            dims=dims,
+            roles=roles,
+            persist_directory=location.persist_directory,
+            provider="qdrant",
+            host=location.host,
+            port=location.port,
+        )
+        for (base, dims), roles in sorted(grouped.items(), key=lambda kv: (kv[0][0], kv[0][1] or 0))
+    ]
+
+
 async def scan_vector_spaces(
-    persist_directory: Union[str, Path], *, per_user: bool = True,
+    persist_directory: Optional[Union[str, Path]] = None,
+    *,
+    per_user: bool = True,
+    provider: str = "chroma",
+    host: Optional[str] = None,
+    port: Optional[int] = None,
+    api_key: Optional[str] = None,
+    prefix: Optional[str] = None,
 ) -> List[ScannedSpace]:
-    """Every embedding space with collections under ``persist_directory``.
+    """Every embedding space with collections in one vector store.
+
+    Chroma (default): the store under ``persist_directory``, exactly as before.
+    Qdrant: ``provider="qdrant"`` with a server (``host``/``port``/``api_key``)
+    or a local ``persist_directory``. ``prefix`` restricts the scan to the
+    collections whose name starts with it (a home's namespace on a shared
+    server); nothing outside it is listed. Base names are reported whole,
+    prefix included, so `ScannedSpace.space` names the physical collections.
 
     Read-only. Collections are grouped by (base, width) from their names; for
     each role found the scan reports the record count, the stored width (read
     from one embedding), the per-``user_id`` counts and the models recorded in
     collection or record metadata (often none: records do not carry the model,
-    only collections created by `reembed_vector_space` do).
+    only Chroma collections created by `reembed_vector_space` do; Qdrant keeps
+    no collection metadata).
     """
-    return await _vdb(_scan_sync, str(persist_directory), per_user)
+    if provider == "qdrant":
+        location = VectorSpace(
+            base_name="",
+            dims=None,
+            persist_directory=str(persist_directory) if persist_directory is not None else None,
+            host=host,
+            port=port,
+            provider="qdrant",
+            api_key=api_key,
+        )
+        return await _vdb(_scan_qdrant_sync, location, prefix, per_user)
+    if provider != "chroma":
+        raise NotImplementedError(f"re-embed scans chroma and qdrant, got {provider!r}")
+    if persist_directory is None:
+        raise ValueError("a chroma scan needs persist_directory")
+    spaces = await _vdb(_scan_sync, str(persist_directory), per_user)
+    if prefix is not None:
+        spaces = [
+            space for space in spaces
+            if all(item.name.startswith(prefix) for item in space.roles.values())
+        ]
+    return spaces
 
 
 @dataclass(frozen=True)
@@ -882,7 +1073,9 @@ async def diff_spaces(
     Every record counts whatever its ``status`` (deleted and superseded records
     included). An empty diff means the source holds nothing unmerged.
     """
-    return await _vdb(_diff_sync, _space(source), _space(target), roles)
+    src, tgt = _space(source), _space(target)
+    _check_same_provider(src, tgt)
+    return await _vdb(_diff_sync, src, tgt, roles)
 
 
 # ======================================================================
@@ -1024,6 +1217,7 @@ async def verify_reembed(
     - With both graph paths: `verify_graph_reembed`.
     """
     src, tgt = _space(source), _space(target)
+    _check_same_provider(src, tgt)
     per_role, per_user, common, problems = await _vdb(_verify_sync, src, tgt, roles)
     warnings: List[str] = []
     hits = sampled = 0
@@ -1065,16 +1259,23 @@ async def verify_reembed(
     )
 
 
-def _drop_sync(space: VectorSpace, roles: Optional[Iterable[str]]) -> List[str]:
+def _drop_sync(
+    space: VectorSpace, roles: Optional[Iterable[str]], require_prefix: Optional[str] = None,
+) -> List[str]:
     from .data.vector_store_chroma import open_collection_names
 
     names = space.names()
     selected = [names[role] for role in _roles(space, roles)]
-    busy = sorted(set(selected) & open_collection_names(space.location()))
-    if busy:
-        raise RuntimeError(
-            f"refusing to drop collections held open by a live client: {busy}"
-        )
+    if require_prefix is not None:
+        outside = sorted(name for name in selected if not name.startswith(require_prefix))
+        if outside:
+            raise ValueError(f"refusing to drop collections outside {require_prefix!r}: {outside}")
+    if space.provider == "chroma":
+        busy = sorted(set(selected) & open_collection_names(space.location()))
+        if busy:
+            raise RuntimeError(
+                f"refusing to drop collections held open by a live client: {busy}"
+            )
     client = _client_for(space)
     dropped = []
     for name in selected:
@@ -1086,13 +1287,19 @@ def _drop_sync(space: VectorSpace, roles: Optional[Iterable[str]]) -> List[str]:
 
 
 async def drop_vector_space(
-    space: SpaceLike, *, roles: Optional[Iterable[str]] = None,
+    space: SpaceLike,
+    *,
+    roles: Optional[Iterable[str]] = None,
+    require_prefix: Optional[str] = None,
 ) -> List[str]:
     """Delete the space's collections and return the names deleted.
 
-    Refuses when a live store in this process holds any of them open.
+    Chroma: refuses when a live store in this process holds any of them open.
+    Qdrant keeps no such registry: the caller closes its clients first. With
+    ``require_prefix`` nothing is dropped unless every name starts with it,
+    the guard for a server several homes share.
     """
-    return await _vdb(_drop_sync, _space(space), roles)
+    return await _vdb(_drop_sync, _space(space), roles, require_prefix)
 
 
 # ======================================================================
