@@ -104,6 +104,7 @@
 | `test_file_import_operations_review.py` | `contract` | Upload refusal/legacy compatibility review with bounded synthetic files only. |
 | `test_frozen_core_layout.py` | `contract` | 覆盖 single file layout remains available without private preset、folder layout keeps same core and all native dependencies、unknown layout does not silently build another package 等 5 个场景。 |
 | `test_golden_corpus.py` | `contract` | A7-01: the golden corpus comparison. |
+| `test_graph_open_guard.py` | `integration` | The ultra graph's guarded first open: marker, quarantine and rebuild. |
 | `test_graph_width_endpoint.py` | `integration` | The width mismatch has to reach the interface, not just the log. |
 | `test_graph_width_export.py` | `unit` | EXPORT_FIRST has to actually export. |
 | `test_graph_width_guard.py` | `unit` | Graph width mismatch must ask, never silently archive. |

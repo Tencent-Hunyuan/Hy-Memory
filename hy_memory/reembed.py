@@ -1225,9 +1225,16 @@ def _target_ddl(dims: int) -> List[Tuple[str, str]]:
     return out
 
 
+def _db_kwargs() -> Dict[str, Any]:
+    """Same memory bounds as the live graph store (MEMORY_GRAPH_BUFFER_POOL_MB etc.)."""
+    from .data.graph_store_kuzu import kuzu_database_kwargs
+
+    return kuzu_database_kwargs()
+
+
 def _open_readonly(path: Path):
     kuzu = _kuzu()
-    db = kuzu.Database(str(path), read_only=True)
+    db = kuzu.Database(str(path), read_only=True, **_db_kwargs())
     return db, kuzu.Connection(db)
 
 
@@ -1355,7 +1362,7 @@ class _GraphCopy:
         kuzu = _kuzu()
         self.src_db, self.src = _open_readonly(self.source)
         self.staging.parent.mkdir(parents=True, exist_ok=True)
-        self.dst_db = kuzu.Database(str(self.staging))
+        self.dst_db = kuzu.Database(str(self.staging), **_db_kwargs())
         self.dst = kuzu.Connection(self.dst_db)
         for _, ddl in _target_ddl(self.dims):
             self.dst.execute(ddl + ";")
@@ -1491,6 +1498,12 @@ class _GraphCopy:
 
     def close(self) -> None:
         _close(self.src, self.src_db)
+        if self.dst is not None:
+            # The staging copy is one bulk write; fold its WAL in before publish.
+            try:
+                self.dst.execute("CHECKPOINT;")
+            except Exception:
+                pass
         _close(self.dst, self.dst_db)
         self.src = self.src_db = self.dst = self.dst_db = None
 

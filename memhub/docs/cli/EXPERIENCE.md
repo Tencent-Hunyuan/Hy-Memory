@@ -187,7 +187,7 @@ node apps/cli/dist/one-memory.cjs settings features reset                       
 ```
 
 - 全局设置，不分用户；没设置的功能保持 SDK 默认值，什么都不设时与以前完全一样（App 不变）。
-- 可设：`graph_rerank`（图谱重排，仅 ultra）、`same_series_timeline`（需 graph_rerank）、`episode_recall`（片段召回，pro 即可）、`session_episodes`（片段写入）、`episode_summary`（片段摘要，每个片段一次模型调用）、`intention`（默认开）、`intention_dedup`（意图判重，默认开；关闭后检索和写入都不判重、不删除意图）、`few_shot`；以及数值 `intention_dedup_threshold`（意图判重的余弦阈值，默认 0.95，可设 0.8–1.0，例如 `settings features set intention_dedup_threshold=0.9 --yes`）。
+- 可设：`graph_rerank`（图谱重排，仅 ultra）、`same_series_timeline`（需 graph_rerank）、`episode_recall`（片段召回，pro 即可）、`session_episodes`（片段写入）、`episode_summary`（片段摘要，每个片段一次模型调用）、`intention`（默认开）、`intention_dedup`（意图判重，默认开；关闭后检索和写入都不判重、不删除意图）、`few_shot`；以及数值 `intention_dedup_threshold`（意图判重的余弦阈值，默认 0.95，可设 0.8–1.0，例如 `settings features set intention_dedup_threshold=0.9 --yes`），以及整数 `agent_max_tokens`（evolve、System 2 等 Agent 调用的输出上限，默认 2000 或已设置的 `MEMORY_AGENT_MAX_TOKENS`，可设 512–32000；本地模型输出被截断、报 `invalid_operations_json` 时调大，例如 `settings features set agent_max_tokens=6000 --yes`，`settings features reset agent_max_tokens` 恢复默认；保存在 config.json，重启不丢）。
 - 片段召回只对带片段的记忆有用：同时开 `session_episodes`，之后提取的记忆才按会话归入片段。
 - 在当前模式下不生效的功能照样保存，并注明原因（如 `graph_rerank` 在 pro 下「需要 ultra」）。
 - 修改会重建 SDK 客户端：正在写的一批按旧设置写完，之后的写入和检索用新设置；不迁移数据，不改集合名。

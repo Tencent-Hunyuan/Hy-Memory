@@ -280,6 +280,7 @@ describe("Core crash recovery (macOS launchd Runtime)", () => {
         throw new Error("not ready");
       },
       restartAttempts: 3,
+      shutdownTimeoutMs: 10,
       restartBaseDelayMs: 1,
       restartMaxDelayMs: 2,
     });
@@ -343,6 +344,7 @@ describe("Core crash recovery (macOS launchd Runtime)", () => {
         },
       },
       restartAttempts: 3,
+      shutdownTimeoutMs: 10,
       restartBaseDelayMs: 10,
       restartMaxDelayMs: 500,
     });
@@ -412,6 +414,7 @@ describe("Core crash recovery (macOS launchd Runtime)", () => {
         instance_id: "owned",
       }),
       restartAttempts: 3,
+      shutdownTimeoutMs: 10,
       restartBaseDelayMs: 10,
       restartMaxDelayMs: 500,
     });
