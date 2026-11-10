@@ -246,6 +246,26 @@ def test_raw_excerpt_never_exceeds_its_character_budget(prefix_length):
     assert needle in receipt.hits[0].content
 
 
+def test_a_raw_search_that_runs_out_of_time_is_logged_without_the_query(caplog):
+    """A timed-out raw lane says so in the log, so "no hits" and "not finished"
+    can be told apart, and the log carries the query length, never its text.
+    """
+    _calls, fakes = _fakes(ready=False, memories=[], has_memories=True, raw=[])
+
+    async def slow_search(query, limit, allowed):
+        await asyncio.Event().wait()
+
+    fakes["search_raw"] = slow_search
+
+    with caplog.at_level("WARNING", logger="one_memory.recall_fallback"):
+        receipt = run(RecallRequest(query="secret tea", timeout_ms=50), fakes)
+
+    assert receipt.mode == "raw" and receipt.truncated_by == "timeout_budget"
+    messages = [record.getMessage() for record in caplog.records]
+    assert any(m.startswith("recall_raw_search_timeout") for m in messages)
+    assert all("secret tea" not in m for m in messages)
+
+
 def test_the_probe_never_falls_back():
     calls, fakes = _fakes(ready=False, memories=[], has_memories=False, raw=[_raw("r1", "x")])
 

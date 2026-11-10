@@ -119,22 +119,7 @@ async def recall_with_fallback(
         reason: FallbackReason = "no_memories"
     else:
         reason = "model_unavailable"
-    # The outer handler already bounds this request with
-    # `recall_total_timeout_seconds(request.timeout_ms)`; the raw fallback has to
-    # measure against the same budget, not against the caller's bare
-    # `timeout_ms`. Using the bare value handed the fallback 2 s out of the 5 s
-    # the outer budget allowed, so a slow memory search spent the difference and
-    # the raw lane then saw `remaining <= 0` and returned an empty answer.
-    remaining = recall_total_timeout_seconds(request.timeout_ms) - (
-        time.monotonic() - started
-    )
-    if remaining <= 0:
-        logger.warning(
-            "recall_raw_fallback_skipped remaining_ms=%.0f timeout_ms=%d reason=%s",
-            remaining * 1_000,
-            request.timeout_ms,
-            reason,
-        )
+    remaining = request.timeout_ms / 1_000 - (time.monotonic() - started)
     return await _raw_recall(
         request,
         reason=reason,
