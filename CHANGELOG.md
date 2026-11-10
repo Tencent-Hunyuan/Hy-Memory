@@ -4,6 +4,58 @@ Hy Memory and MemHub are versioned and released independently.
 
 ## Unreleased
 
+- Hy Memory's Kuzu graph store bounds its memory, shares one database per
+  file, and keeps its setup off the event loop. Every `kuzu.Database` the SDK
+  opens (the graph store and the re-embed copies) now gets an explicit buffer
+  pool, 512 MB by default (`GraphStoreConfig.buffer_pool_mb` /
+  `MEMORY_GRAPH_BUFFER_POOL_MB`; 0 keeps Kuzu's default of about 80% of RAM),
+  and at most 4 query threads (`max_threads` / `MEMORY_GRAPH_MAX_THREADS`).
+  Graph stores in one process that point at the same file now share a single
+  `kuzu.Database`, each with its own connection. Before, every client opened
+  its own, and Kuzu's file lock does not stop a second open from the same
+  process: the two databases overwrote each other's checkpoints, losing
+  writes, and could corrupt the primary-key index. A file corrupted this way
+  can make the next open allocate gigabytes. `close()` and
+  `build_memory_graph` now run `CHECKPOINT`, so no WAL is left for the next
+  open to replay. The schema check and DDL run in the same worker thread as
+  the open instead of on the loop thread. One limit remains: kuzu 0.11 holds
+  the GIL for the whole `kuzu.Database()` call and has no option to release
+  it, so an open that stalls inside Kuzu still stalls every thread in the
+  process.
+- MemHub: a knowledge graph that freezes or kills the process opening it is
+  quarantined and rebuilt instead of restarting Core forever. In ultra, Kuzu's
+  open of a corrupt graph file held the GIL, grew RSS to 5–13 GB and the OS
+  killed Core after 26–33 s; the Runtime relaunched it into the same file in an
+  endless `restart_scheduled → spawn_started → ready` loop. Before Core reports
+  ready, the live graph is now opened once by a short-lived child process,
+  bounded by a wall clock (60 s plus 0.5 s per MB, at most 120 s;
+  `ONE_MEMORY_GRAPH_PROBE_TIMEOUT_S`) and an RSS cap polled from Core (2 GB;
+  `ONE_MEMORY_GRAPH_PROBE_MAX_RSS_MB`). A probe that is killed, crashes or
+  exits non-zero renames the graph and its sidecars to
+  `graph.quarantined-<UTC>` on the first failure (never deleted, the two newest
+  kept), records `graph_store.quarantined`, starts Core without it and runs the
+  normal per-user graph rebuild. `graph-open-in-progress.json` still
+  quarantines after two starts in which Core itself died mid-probe. The
+  graph-width check reads through the same child and is primed by the probe,
+  so Core no longer opens its own `kuzu.Database` (with Kuzu's default buffer
+  pool) beside the SDK's. An embedding switch's staging graph is never
+  touched, and quarantine waits while a switch is open. `memory-processing`,
+  `settings/memory-mode` and `memhub status` report `pipeline.graph_store`
+  (`opening` / `ready` / `rebuilding_after_quarantine`, the quarantine count
+  and reason), and the App shows "知识图谱文件损坏，已自动重建" in all 11
+  languages. The Runtime supervisor waits for the declared startup phase
+  (now at most 3 minutes) instead of killing Core at the readiness budget,
+  respawns a Core that died inside it (bounded), restarts a Core that is alive
+  but has not answered for 90 s after ready (twice the longest loop stall seen
+  in the field), and only forgives a crash streak once Core stayed up 2
+  minutes, so the relaunch delay grows and the circuit opens instead of a
+  relaunch every ~20 s.
+- MemHub: `agent_max_tokens` (512–32000) is now a persistent memory-features
+  setting (`memhub settings features set agent_max_tokens=6000 --yes` /
+  `reset agent_max_tokens`), applied to the SDK's `MemoryConfig` when clients
+  are built, so evolve and System 2 output from local models is no longer cut
+  off at 2000 tokens without a `launchctl setenv` that is lost on reboot. An
+  existing `MEMORY_AGENT_MAX_TOKENS` still sets the default while it is unset.
 - Hermes and OpenCode history imports now produce memories. Neither adapter
   ended a file with a `ScanCursorTouch`, and that event is the only thing that
   turns staged records into a write job: `finalize_sdk_file` is reached from
