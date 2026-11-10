@@ -386,3 +386,105 @@ def test_a_recall_that_cannot_finish_in_time_is_a_clear_timeout(tmp_path, monkey
 
     assert response.status_code == 504
     assert response.json()["detail"] == "recall_timeout"
+
+
+def test_model_readiness_time_counts_against_search_budget():
+    calls, fakes = _fakes(ready=True, memories=[_memory_hit()], has_memories=True, raw=[])
+
+    async def slow_ready():
+        await asyncio.sleep(0.12)
+        return True
+
+    fakes["model_ready"] = slow_ready
+    receipt = asyncio.run(
+        recall_with_fallback(
+            RecallRequest(query="tea", timeout_ms=100, user_id="alice"),
+            bounded_sdk_primary=True,
+            **fakes,
+        )
+    )
+    assert receipt.state == RecallState.EMPTY
+    assert receipt.truncated_by == "timeout_budget"
+    assert receipt.user_id == "alice"
+    assert calls["memory"] == calls["library"] == calls["raw"] == 0
+
+
+def test_http_ceiling_limits_primary_search_budget(monkeypatch):
+    import one_memory.recall_fallback as fallback
+
+    monkeypatch.setattr(fallback, "RECALL_TOTAL_CEILING_SECONDS", 0.8)
+    monkeypatch.setattr(fallback, "RECALL_TOTAL_GRACE_SECONDS", 0.2)
+    calls, fakes = _fakes(ready=True, memories=[_memory_hit()], has_memories=True, raw=[])
+    observed = []
+    original = fakes["recall_memories"]
+
+    async def inspect_budget(request):
+        observed.append(request.timeout_ms)
+        return await original(request)
+
+    fakes["recall_memories"] = inspect_budget
+    receipt = asyncio.run(
+        recall_with_fallback(
+            RecallRequest(query="tea", timeout_ms=30000), bounded_sdk_primary=True, **fakes
+        )
+    )
+    assert receipt.hits and calls["memory"] == 1
+    assert 50 <= observed[0] <= 600
+
+
+def test_timed_out_memory_recall_does_not_masquerade_as_raw_fallback():
+    calls, fakes = _fakes(ready=True, memories=[], has_memories=False, raw=[_raw("r1", "x")])
+
+    async def timed_out(request):
+        return RecallReceipt(
+            state=RecallState.EMPTY,
+            query=request.query,
+            scope=request.scope,
+            hits=(),
+            used_characters=0,
+            truncated=True,
+            truncated_by="timeout_budget",
+            user_id=request.user_id,
+        )
+
+    fakes["recall_memories"] = timed_out
+    receipt = asyncio.run(
+        recall_with_fallback(RecallRequest(query="tea"), bounded_sdk_primary=True, **fakes)
+    )
+    assert receipt.mode == "memory" and receipt.truncated_by == "timeout_budget"
+    assert calls["library"] == calls["raw"] == 0
+
+
+def test_governed_recall_retains_original_budget_and_partial_policy():
+    calls, fakes = _fakes(ready=True, memories=[_memory_hit()], has_memories=True, raw=[])
+    seen = []
+    original = fakes["recall_memories"]
+
+    async def inspect(request):
+        seen.append(request.timeout_ms)
+        return await original(request)
+
+    fakes["recall_memories"] = inspect
+    receipt = run(RecallRequest(query="tea", timeout_ms=30000), fakes)
+    assert receipt.hits and calls["memory"] == 1
+    assert seen == [30000]
+
+
+def test_sdk_unavailable_model_keeps_raw_fallback():
+    calls, fakes = _fakes(ready=False, memories=[], has_memories=False, raw=[_raw("r1", "x")])
+    receipt = asyncio.run(
+        recall_with_fallback(RecallRequest(query="tea"), bounded_sdk_primary=True, **fakes)
+    )
+    assert receipt.mode == "raw" and receipt.fallback_reason == "model_unavailable"
+    assert calls["raw"] == 1
+
+
+def test_sdk_minimum_budget_still_runs_immediate_search():
+    calls, fakes = _fakes(ready=True, memories=[_memory_hit()], has_memories=True, raw=[])
+    receipt = asyncio.run(
+        recall_with_fallback(
+            RecallRequest(query="tea", timeout_ms=50), bounded_sdk_primary=True, **fakes
+        )
+    )
+    assert calls["memory"] == 1
+    assert receipt.state == RecallState.GROUNDED
