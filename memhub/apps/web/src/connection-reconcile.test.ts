@@ -15,6 +15,7 @@ import {
 import {
   enableHostConnection,
   hostConnectionApproved,
+  hostWriteReason,
   refreshRecallHosts,
 } from "./host-state";
 import { connectSourceSet } from "./source-state";
@@ -104,7 +105,9 @@ it("repoints an already approved host without installing again", async () => {
   expect(installRecall).not.toHaveBeenCalled();
 });
 
-function piBridge(state: string) {
+/** A bridge whose host reports this permission state. The state is what the
+ * write path acts on; the host id is only a fixture. */
+function stateBridge(state: string) {
   const previewRecallInstall = vi.fn(async () => {
     throw Error("connection_client_unavailable");
   });
@@ -127,14 +130,14 @@ function piBridge(state: string) {
 }
 
 it("reports a host without a revocable connection as unsupported instead of previewing it", async () => {
-  const previewRecallInstall = piBridge("unsupported");
+  const previewRecallInstall = stateBridge("unsupported");
   await expect(enableHostConnection("pi")).rejects.toThrow("host_unsupported");
   expect(previewRecallInstall).not.toHaveBeenCalled();
 });
 
 it("stops retrying an unsupported host on later refreshes", async () => {
   saveConnectionPreferences({ syncSourceIds: [], hostSourceIds: ["pi"] });
-  const previewRecallInstall = piBridge("unsupported");
+  const previewRecallInstall = stateBridge("unsupported");
   await reconcileConnectionPreferences({ sources: [] });
   await reconcileConnectionPreferences({ sources: [] });
   expect(previewRecallInstall).not.toHaveBeenCalled();
@@ -143,11 +146,31 @@ it("stops retrying an unsupported host on later refreshes", async () => {
 
 it("keeps retrying a supported host whose preview failed", async () => {
   saveConnectionPreferences({ syncSourceIds: [], hostSourceIds: ["pi"] });
-  const previewRecallInstall = piBridge("not-installed");
+  const previewRecallInstall = stateBridge("not-installed");
   await reconcileConnectionPreferences({ sources: [] });
   await reconcileConnectionPreferences({ sources: [] });
   expect(previewRecallInstall).toHaveBeenCalledTimes(2);
   expect(readConnectionPreferences().hostSourceIds).toEqual(["pi"]);
+});
+
+it("keeps a remembered insertion for the desktop app when this shell has no bridge", async () => {
+  saveConnectionPreferences({ syncSourceIds: [], hostSourceIds: ["pi"] });
+  window.oneMemory = undefined;
+  // A browser Console reads hosts as empty: nothing here can be granted.
+  await refreshRecallHosts();
+  const failures = await autoReconcile({ sources: [] });
+  expect(failures).toEqual([]);
+  expect(readConnectionPreferences().hostSourceIds).toEqual(["pi"]);
+});
+
+it("names the page, not the host, when there is no bridge to write through", async () => {
+  window.oneMemory = undefined;
+  await expect(enableHostConnection("pi")).rejects.toThrow(
+    "desktop_bridge_unavailable",
+  );
+  expect(hostWriteReason(Error("desktop_bridge_unavailable"))).toBe(
+    "一键插入需要在 MemHub 桌面 App 中操作",
+  );
 });
 
 it("does not treat a relink-required host as admitted", () => {

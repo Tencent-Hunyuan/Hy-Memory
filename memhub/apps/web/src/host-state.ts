@@ -206,7 +206,8 @@ export function hostConnectionUnknown(
   );
 }
 
-/** No revocable credential can be issued to this host (Pi has no MCP channel). */
+/** No revocable credential can be issued to this host: it carries neither an
+ * MCP channel nor a CLI the installer can put a credential behind. */
 export function hostConnectionUnsupported(
   host: Pick<RecallHostStatus, "permission"> | null | undefined,
 ) {
@@ -232,6 +233,7 @@ export function matchHost(
 const REASONS: Record<string, string> = {
   host_unsupported: "它没有 MCP 通道，无法发放可撤销的记忆凭证",
   profile_name_unsupported: "appProfileNameUnsupported",
+  desktop_bridge_unavailable: "一键插入需要在 MemHub 桌面 App 中操作",
   unsupported_host: "当前安装不支持一键插入",
   connection_client_unavailable: "桌面端的连接组件不可用",
   noncanonical_data_dir_host_integration_disabled: "测试实例不接入应用",
@@ -246,6 +248,13 @@ const REASONS: Record<string, string> = {
   runtime_broker_unavailable: "本机运行时暂不可用",
   host_read_timeout: "桌面端读取接入状态超时",
 };
+
+/** Opened in a plain browser there is no desktop bridge, so this shell can
+ * never mint a credential. That is a limit of the page, not of the host. */
+export function hostWriteUnavailable(error: unknown) {
+  const text = error instanceof Error ? error.message : String(error ?? "");
+  return /\bdesktop_bridge_unavailable\b/.test(text);
+}
 
 /** Desktop errors arrive as IPC text ending in a code; name the known ones. */
 export function hostWriteReason(error: unknown): string | null {
@@ -428,9 +437,12 @@ async function connect(sourceId: string): Promise<Connected[]> {
   const profiles = isProfileSource(sourceId);
   const hostId = profiles ? sourceId : connectionHostId(sourceId);
   const api = bridge();
+  // A browser Console has no desktop bridge: say so, rather than blaming a host
+  // that the desktop app can connect fine.
+  if (!api) throw Error("desktop_bridge_unavailable");
   if (
     !hostId ||
-    !api?.previewRecallInstall ||
+    !api.previewRecallInstall ||
     !api.installRecall ||
     !api.getRecallPermission ||
     !api.setRecallPermission

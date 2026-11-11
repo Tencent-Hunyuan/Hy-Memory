@@ -15,6 +15,7 @@ import {
   hostConnectionUnsupported,
   hostWriteInFlight,
   hostWriteReason,
+  hostWriteUnavailable,
   matchHost,
   profileHosts,
   profileWriteFailures,
@@ -328,6 +329,9 @@ async function runReconcile(
     try {
       await enableHostConnection(sourceId);
     } catch (error) {
+      // A browser Console cannot write grants at all; keep the preference and
+      // stay quiet, so the desktop app applies it when the app is opened.
+      if (hostWriteUnavailable(error)) continue;
       // Per-app: other hosts keep going. Unsupported never succeeds on retry.
       if (error instanceof Error && error.message === "host_unsupported")
         writeConnectionPreference("host", sourceId, false);
