@@ -2,7 +2,9 @@
 
 Two properties matter and both are asserted:
 
-1. It makes a real, readable copy — not just a 200 with a path.
+1. It makes a real, readable copy — not just a 200 with a path. Since 1.0.7
+   the copy is a v2 backup directory with the memories
+   (`test_backup_includes_memories` covers those).
 2. It refuses a target outside the data dir. The CLI can name any path, so an
    unrestricted write here would turn a read-only client into a file-write
    primitive.
@@ -10,6 +12,7 @@ Two properties matter and both are asserted:
 
 from __future__ import annotations
 
+import json
 import sqlite3
 
 import pytest
@@ -55,9 +58,13 @@ async def test_backup_writes_a_readable_copy(tmp_path) -> None:
 
     assert response.status_code == 200, response.text
     body = response.json()
-    target = tmp_path / "backups" / "one.sqlite3"
-    assert body["bytes"] == target.stat().st_size
-    assert body["bytes"] > 0
+    # A v2 backup is a directory: `one.sqlite3` names `one.memhub-backup`.
+    backup = tmp_path / "backups" / "one.memhub-backup"
+    assert body["target"] == str(backup.resolve())
+    assert body["memories_included"] is True and body["schema_version"] == 2
+    manifest = json.loads((backup / "manifest.json").read_text())
+    assert body["bytes"] == manifest["total_bytes"] > 0
+    target = backup / "management" / "one-memory.sqlite3"
 
     # A backup that cannot be opened is worse than none: it looks like safety
     # and is not.

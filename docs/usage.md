@@ -38,6 +38,10 @@ with HyMemoryClient(mode="pro") as client:
             print(channel, memory["score"], memory["content"])
 ```
 
+## 业务存储
+
+Working / Coding 业务数据默认使用 SQLite，也支持 PostgreSQL；向量配置独立。安装、部署和切换边界见 [业务存储后端](business_storage.md)。
+
 ## 配置
 
 SDK 会加载项目目录中的 `.env`。完整配置见 [env_reference.md](env_reference.md)。
@@ -346,10 +350,23 @@ page = client.list_memories(
 )
 
 result = client.clone_user("user_001", "user_002", agent_id=None)
+
+# 备份 / 恢复：按原 id 与向量导出、写回一个用户（向量库全部层级与状态，含 raw）
+exported = client.export_user_memories("user_001")
+restored = other_client.import_user_memories("user_001", exported["nodes"])
 ```
 
 对应异步方法为 `async_get()`、`async_update()`、`async_delete()`、
-`async_delete_all()`、`async_list_memories()`、`async_clone_user()`。
+`async_delete_all()`、`async_list_memories()`、`async_clone_user()`、
+`async_export_user_memories()`、`async_import_user_memories()`。
+
+`export_user_memories()` 返回该用户向量库里的每个节点（`MemoryNode.to_dict()`，
+默认带 `embedding`），每个层级（含 `L1_RAW`）、每种状态（含 superseded / shadow），
+并给出 `embedding_dims` 与 `embedding_model`。`import_user_memories()` 把这些节点
+原样写回：保留 `node_id`、层级、状态、演化链指针与时间；带向量的按原向量写入
+（宽度必须与目标向量库一致），不带的用当前 embedding 服务重算。目标用户默认
+必须为空，写入失败会回滚。两者都不碰图库：图是派生数据，恢复后用
+`build_memory_graph()` 重建。Chroma、Qdrant、FAISS 后端都适用。
 
 `get()` / `async_get()` 是统一的 ID 精确读取：返回结果的 `layer`、`kind` 和
 `variant` 表明实际类型。授权由调用 SDK 前的产品边界完成，不由 SDK 根据 layer

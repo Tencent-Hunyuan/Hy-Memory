@@ -163,3 +163,33 @@ def test_zstd_reader_resumes_across_frames(tmp_path) -> None:
     ]
 
     assert records == [3, 4]
+
+
+def test_zstd_reader_treats_a_frozen_partial_frame_as_eof(tmp_path) -> None:
+    """A byte-extent snapshot can end inside an append in progress.
+
+    DeepSeek Harness appends one checksummed frame per durable batch and keeps
+    writing while a sync runs. Freezing a byte extent therefore can copy a
+    truncated final frame; its decompressed bytes are a record that does not
+    exist yet, not invalid JSON. The reader must stop there without a failure,
+    and the same file must read completely once the append finishes.
+    """
+    compressor = zstandard.ZstdCompressor(write_checksum=True)
+    header = compressor.compress(b'{"type":"session","version":4}\n')
+    turn = compressor.compress(b'{"type":"user","content":"still being written"}\n')
+    source = tmp_path / "session.v4.jsonl.zstd"
+    source.write_bytes(header + turn[: max(1, len(turn) // 2)])
+
+    events = list(read_zstd_jsonl(authorized(source), immutable=True))
+
+    assert [event.value for event in events] == [{"type": "session", "version": 4}]
+    assert not any(isinstance(event, RawReadFailure) for event in events)
+
+    source.write_bytes(header + turn)
+    complete = [
+        event.value for event in read_zstd_jsonl(authorized(source), immutable=True)
+    ]
+    assert complete == [
+        {"type": "session", "version": 4},
+        {"type": "user", "content": "still being written"},
+    ]

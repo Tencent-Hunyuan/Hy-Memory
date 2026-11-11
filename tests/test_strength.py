@@ -15,7 +15,7 @@ import asyncio
 import math
 import random
 import uuid
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 import pytest
 
@@ -91,6 +91,87 @@ class TestComputeStrength:
         stale = _FakeNode(access_count=1, last_accessed_at=now - timedelta(days=300),
                           gmt_created=now - timedelta(days=10))
         assert compute_strength(kobe, now=now) > compute_strength(stale, now=now)
+
+
+class TestComputeStrengthMixedTimezones:
+    """真实 MemoryNode 的时间字段可能不是 naive datetime。
+
+    VDB payload 把时间存成 epoch 整数（`_node_to_payload` / `bump_access`），
+    外部调用方也可能塞进 timezone-aware datetime 或带偏移的 ISO 串。任何
+    naive/aware 或 datetime/int 的减法都会抛 TypeError；修复前它被 except 吞掉，
+    idle_days 静默归零 → strength 恒满值，衰减整体失效。
+
+    All instants are fixed and tz-aware so the result does not depend on the
+    machine's local timezone or a DST transition inside the 300-day window.
+    Naive values are derived from those instants via local-time conversion,
+    which is exactly how the project interprets naive datetimes.
+    """
+
+    DAYS = 300
+    NOW = datetime(2026, 6, 15, 12, 0, tzinfo=timezone.utc)
+    LAST = NOW - timedelta(days=DAYS)
+
+    @staticmethod
+    def _naive_local(aware):
+        return aware.astimezone().replace(tzinfo=None)
+
+    def _expected(self):
+        return math.exp(-self.DAYS / DEFAULT_TAU)
+
+    def test_aware_last_with_naive_now_decays(self):
+        n = MemoryNode(content="x", layer=MemoryLayer.L2_FACT, access_count=0,
+                       last_accessed_at=self.LAST)
+        got = compute_strength(n, now=self._naive_local(self.NOW))
+        assert abs(got - self._expected()) < 1e-6
+
+    def test_naive_last_with_aware_now_decays(self):
+        n = MemoryNode(content="x", layer=MemoryLayer.L2_FACT, access_count=0,
+                       last_accessed_at=self._naive_local(self.LAST))
+        assert abs(compute_strength(n, now=self.NOW) - self._expected()) < 1e-6
+
+    def test_aware_last_with_other_offset_now_decays(self):
+        now = self.NOW.astimezone(timezone(timedelta(hours=-5)))
+        n = MemoryNode(content="x", layer=MemoryLayer.L2_FACT, access_count=0,
+                       last_accessed_at=self.LAST.astimezone(timezone(timedelta(hours=8))))
+        assert abs(compute_strength(n, now=now) - self._expected()) < 1e-6
+
+    def test_int_last_accessed_at_decays(self):
+        """bump_access 写回的是 int(now.timestamp())；读到 int 时也必须衰减。"""
+        n = MemoryNode(content="x", layer=MemoryLayer.L2_FACT, access_count=0)
+        n.last_accessed_at = int(self.LAST.timestamp())
+        assert abs(compute_strength(n, now=self.NOW) - self._expected()) < 1e-6
+
+    def test_int_gmt_created_cold_start_decays(self):
+        n = MemoryNode(content="x", layer=MemoryLayer.L2_FACT, access_count=0)
+        n.last_accessed_at = None
+        n.gmt_created = int(self.LAST.timestamp())
+        assert abs(compute_strength(n, now=self.NOW) - self._expected()) < 1e-6
+
+    def test_iso_string_with_offset_decays(self):
+        last = self.LAST.isoformat()
+        n = MemoryNode.from_dict({
+            "content": "x", "layer": "l2_fact", "access_count": 0,
+            "last_accessed_at": last, "gmt_created": last,
+        })
+        assert abs(compute_strength(n, now=self.NOW) - self._expected()) < 1e-6
+
+    def test_payload_roundtrip_int_still_decays(self):
+        """_node_to_payload 存 epoch int → from_dict 还原；两跳都不能让衰减失效。"""
+        ts = int(self.LAST.timestamp())
+        n = MemoryNode.from_dict({
+            "content": "x", "layer": "l2_fact", "access_count": 0,
+            "last_accessed_at": ts, "gmt_created": ts,
+        })
+        # from_dict 把 int 还原成 naive 本地时间
+        assert n.last_accessed_at.tzinfo is None
+        assert abs(compute_strength(n, now=self.NOW) - self._expected()) < 1e-6
+
+    def test_apply_strength_normal_channel_with_aware_last(self):
+        node = MemoryNode(content="x", layer=MemoryLayer.L2_FACT, access_count=1,
+                          last_accessed_at=self.LAST)
+        hits = [{"node": node, "score": 1.0, "layer": "l2_fact"}]
+        apply_strength_to_normal(hits, now=self._naive_local(self.NOW))
+        assert hits[0]["score"] < 0.5
 
 
 class TestApplyStrengthToNormal:

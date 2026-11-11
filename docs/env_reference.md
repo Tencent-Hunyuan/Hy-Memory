@@ -24,6 +24,7 @@
 | `MEMORY_LLM_MODEL` | `gpt-4.1-nano` | 模型名 |
 | `MEMORY_LLM_API_KEY` | — | 回退：`LLM_API_KEY`、`OPENAI_API_KEY` |
 | `MEMORY_LLM_BASE_URL` | — | 回退到 `LLM_BASE_URL` |
+| `MEMORY_LLM_OUTPUT_TOKEN_PARAMETER` | `max_tokens` | Chat Completions output limit field; set to `max_completion_tokens` for endpoints that require it. Applies to the SDK LLM provider. `MEMORY_LLM_EXTRA_BODY` is merged afterwards and may override or add either limit field; omit those keys when using this setting. |
 | `MEMORY_LLM_TEMPERATURE` | `0.1` | 统一温度；`none` / `omit` / 空值表示不发送 |
 | `MEMORY_LLM_OMIT_TEMPERATURE` | `false` | `true` 时完全不发送 `temperature` |
 | `MEMORY_LLM_MAX_TOKENS` | `1024` | 通用生成上限 |
@@ -93,6 +94,17 @@ Graph 写入和读侧 Rerank 的高级开关见 [pro_graph_design.md](pro_graph_
 | `MEMORY_MYSQL_DATABASE` | `hy_memory` | MySQL 数据库 |
 | `MEMORY_MYSQL_POOL_SIZE` | `10` | 连接池大小 |
 | `MEMORY_MYSQL_POOL_RECYCLE` | `3600` | 连接回收周期，秒 |
+
+## Working / Coding 业务存储
+
+| 变量 | 默认值 | 说明 |
+|---|---|---|
+| `MEMORY_BUSINESS_STORE` | `sqlite` | `sqlite` / `postgres`；不改变向量库或审计缓存后端 |
+| `MEMORY_POSTGRES_DSN` | — | PostgreSQL 连接串，仅 postgres 后端需要 |
+| `MEMORY_POSTGRES_SCHEMA` | `hy_memory` | schema 前缀，1–48 个小写字母、数字或下划线，不能以数字开头 |
+| `MEMORY_POSTGRES_CONNECT_TIMEOUT` | `10` | 建连超时秒数，必须为正整数 |
+
+详见[业务存储后端](business_storage.md)。切换配置不自动迁移已有 SQLite 数据。
 
 ## 写入、场景与 Query Rewrite
 
@@ -211,6 +223,7 @@ client = HyMemoryClient.from_config({
 |---|---|---|
 | `MEMORY_LOG_LEVEL` | `INFO` | 运行日志级别 |
 | `MEMORY_LOG_FORMAT` | `text` | `text` / `json` |
+| `MEMORY_LOG_STREAM` | `stdout` | 控制台 DEBUG/INFO 日志的输出流：`stdout`（默认，双流分离）/ `stderr`（stdio 传输宿主设置，避免 SDK 日志破坏 stdout 上的协议帧）|
 | `MEMORY_LOG_DIR` | — | 统一日志根目录 |
 | `MEMORY_TRACE_LOG_DIR` | — | JSONL 日志目录的兼容旧名；优先使用 `MEMORY_LOG_DIR` |
 | `MEMORY_PIPELINE_LOG_ENABLED` | `true` | 是否写 pipeline JSONL 日志（`{MEMORY_LOG_DIR}/<subdir>/<date>.log`）；`false` 完全不写 |

@@ -8,7 +8,10 @@
 
 ## Architecture Principles
 
-1. Memory 读写与存储 backend **只经 SDK**（config / env）。
+1. Memory 读写与存储 backend **只经 SDK config**（由 `build_sdk_config` 构造；SDK
+   的环境变量默认值在产品里不生效）。图 / 向量后端默认 Kuzu + Chroma，可用
+   `memhub settings backends` 改为 Neo4j/Memgraph、Qdrant 服务器，见
+   [`docs/contracts/storage-backends-v1.md`](docs/contracts/storage-backends-v1.md)。
 2. MemHub 运行时对 memory 的原子操作 **只经 SDK 公共 Client**；缺正常业务
    接口先补 SDK。Runtime writers 停止后的 App 启动迁移可直接操作底层存储，
    但不得把迁移专用方法加入公共 Client。
@@ -39,7 +42,10 @@ reader:       hybrid
 
 MemHub 通过公开 `HyMemoryClient` 配置使用可复现的本地策略：
 
-- vector / graph / cache / history / coding 等 **一律 SDK config/env**；
+- vector / graph / cache / history / coding 等 **一律 SDK config**，由 MemHub 显式
+  构造：图 / 向量后端来自持久化设置 `storage_backends`（默认 Kuzu + Chroma，只能
+  用 CLI / API 修改，密钥进安全存储），cache / history / coding / raw 始终是本 home
+  的 SQLite；SDK 自身的 `MEMORY_*` 环境变量不改变产品配置；
 - 模型与 embedding 来自版本化 Model Profile；密钥进安全存储；
 - MemHub 管理库可存 harness/model/队列状态与 **`memory_id` 引用**。
 

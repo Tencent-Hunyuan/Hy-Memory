@@ -45,6 +45,8 @@ const blockerKeys: Record<string, MessageKey> = {
   embedding_switch_requires_migration:
     "embeddingSwitch.blocker.embedding_switch_requires_migration",
   sdk_reembed_unavailable: "embeddingSwitch.blocker.sdk_reembed_unavailable",
+  embedding_switch_backend_unsupported:
+    "embeddingSwitch.blocker.embedding_switch_backend_unsupported",
   insufficient_disk_space: "embeddingSwitch.blocker.insufficient_disk_space",
   embedding_switch_running: "embeddingSwitch.blocker.embedding_switch_running",
   memory_lifecycle_busy: "embeddingSwitch.blocker.memory_lifecycle_busy",

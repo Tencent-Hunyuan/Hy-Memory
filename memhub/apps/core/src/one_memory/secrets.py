@@ -1,6 +1,5 @@
 import json
 import os
-import pwd
 import subprocess
 import sys
 import threading
@@ -86,7 +85,7 @@ class KeyringSecretStore:
         kr = _keyring()
         with self._lock:
             try:
-                if type(kr.get_keyring()).__module__ == "keyring.backends.macOS":
+                if _uses_bounded_child(kr):
                     _bounded_keychain_write(secret_ref, value)
                 else:
                     kr.set_password(keychain_service_name(), secret_ref, value)
@@ -114,7 +113,7 @@ class KeyringSecretStore:
                     code=SecretStoreErrorCode.BACKOFF,
                 )
             try:
-                if type(kr.get_keyring()).__module__ == "keyring.backends.macOS":
+                if _uses_bounded_child(kr):
                     value = _bounded_keychain_read(secret_ref)
                 else:
                     value = kr.get_password(keychain_service_name(), secret_ref)
@@ -137,7 +136,7 @@ class KeyringSecretStore:
         kr = _keyring()
         with self._lock:
             try:
-                if type(kr.get_keyring()).__module__ == "keyring.backends.macOS":
+                if _uses_bounded_child(kr):
                     _bounded_keychain_delete(secret_ref)
                 elif self.resolve(secret_ref) is not None:
                     kr.delete_password(keychain_service_name(), secret_ref)
@@ -154,7 +153,7 @@ class KeyringSecretStore:
         kr = _keyring()
         with self._lock:
             try:
-                if type(kr.get_keyring()).__module__ == "keyring.backends.macOS":
+                if _uses_bounded_child(kr):
                     _bounded_keychain_delete_many(secret_refs)
                 else:
                     for secret_ref in secret_refs:
@@ -167,6 +166,19 @@ class KeyringSecretStore:
             for secret_ref in secret_refs:
                 self._cache[secret_ref] = None
                 self._read_failures.pop(secret_ref, None)
+
+
+def _uses_bounded_child(kr: Any) -> bool:
+    """Whether this backend must be called from a killable child process.
+
+    A thread cannot cancel a stuck Security.framework call, and SecretService
+    blocks on a D-Bus prompt forever on headless Linux (#375). Reads, writes
+    and deletes on either backend all go through the bounded child.
+    """
+    backend = type(kr.get_keyring()).__module__
+    return backend == "keyring.backends.macOS" or backend.startswith(
+        "keyring.backends.SecretService"
+    )
 
 
 def _keychain_read_command() -> list[str]:
@@ -192,8 +204,29 @@ def _keychain_delete_many_command() -> list[str]:
 
 
 def _keychain_environment() -> dict[str, str]:
+    """Environment for the Keychain child process; macOS backend only.
+
+    ``pwd`` and ``os.getuid`` do not exist on Windows. Importing pwd at
+    module level made this whole module unimportable there, and with it
+    ``model_profiles`` -> ``memory_tasks`` -> ``durable_queue``, so
+    ``_submit_live_memory`` raised inside capture_stdio's fail-open
+    handler and live record assembly never ran -- silently.
+
+    The passwd lookup is kept rather than replaced with ``expanduser``:
+    it deliberately ignores an inherited ``HOME``, which is what keeps a
+    rewritten environment from redirecting the child's Keychain lookup.
+    Both calls are POSIX-only, so a platform without them keeps the
+    environment it inherited instead of raising.
+    """
     environment = dict(os.environ)
-    environment["HOME"] = pwd.getpwuid(os.getuid()).pw_dir
+    try:
+        import pwd
+
+        home = pwd.getpwuid(os.getuid()).pw_dir
+    except (ImportError, AttributeError, KeyError):
+        # No passwd database here, and no macOS Keychain to reach either.
+        return environment
+    environment["HOME"] = home
     return environment
 
 
@@ -302,9 +335,9 @@ def _bounded_keychain_delete_many(secret_refs: tuple[str, ...]) -> None:
 
 
 def _bounded_keychain_read(secret_ref: str) -> str | None:
-    # A thread cannot cancel a stuck Security.framework call. The same
-    # executable reads in a short-lived child so its Keychain identity stays
-    # unchanged, while timeout kills and reaps the blocked process.
+    # A thread cannot cancel a stuck Security.framework or D-Bus call. The
+    # same executable reads in a short-lived child so its store identity
+    # stays unchanged, while timeout kills and reaps the blocked process.
     try:
         result = subprocess.run(
             _keychain_read_command(),

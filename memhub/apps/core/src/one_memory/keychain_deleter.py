@@ -13,7 +13,7 @@ from one_memory.secrets import keychain_service_name
 def main() -> int:
     try:
         raw = sys.stdin.read(16_385)
-        if not raw or len(raw) > 16_384 or sys.platform != "darwin":
+        if not raw or len(raw) > 16_384:
             return 1
         if sys.argv[1:] == ["--many"]:
             body = json.loads(raw)

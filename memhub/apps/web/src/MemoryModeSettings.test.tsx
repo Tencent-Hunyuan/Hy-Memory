@@ -664,3 +664,100 @@ it("blocks lifecycle controls while the knowledge graph is being built", async (
     true,
   );
 });
+
+it("says a damaged graph was quarantined and is being rebuilt", async () => {
+  prepare("ultra");
+  vi.mocked(getMemoryMode).mockResolvedValue({
+    ...state("ultra"),
+    graph_store: {
+      state: "rebuilding_after_quarantine",
+      quarantine_count: 1,
+      last_quarantined_at: "2026-11-09T00:00:00Z",
+      failed_open_attempts: 0,
+    },
+  });
+  render(<MemoryModeSettings hasActiveModel onConfigureModel={vi.fn()} />);
+
+  expect(await screen.findByText("知识图谱文件损坏，已自动重建")).toBeTruthy();
+});
+
+it("shows no graph notice once the graph is ready", async () => {
+  prepare("ultra");
+  vi.mocked(getMemoryMode).mockResolvedValue({
+    ...state("ultra"),
+    graph_store: {
+      state: "ready",
+      quarantine_count: 1,
+      last_quarantined_at: "2026-11-09T00:00:00Z",
+      failed_open_attempts: 0,
+    },
+  });
+  render(<MemoryModeSettings hasActiveModel onConfigureModel={vi.fn()} />);
+
+  await screen.findByRole("combobox", { name: "记忆模式" });
+  expect(screen.queryByText("知识图谱文件损坏，已自动重建")).toBeNull();
+});
+
+function withBackends(storage_backends: unknown) {
+  vi.mocked(getMemoryProcessing).mockResolvedValue({
+    pipeline: { storage_backends },
+  } as never);
+}
+
+it("shows a custom storage backend read-only, with no control to change it", async () => {
+  prepare();
+  withBackends({
+    graph: "neo4j",
+    vector: "qdrant",
+    is_default: false,
+    label: "Neo4j + Qdrant",
+    health: "ok",
+    health_code: null,
+  });
+  render(<MemoryModeSettings hasActiveModel onConfigureModel={vi.fn()} />);
+  const note = await screen.findByTestId("storage-backends-note");
+  expect(note.textContent).toBe("存储后端：Neo4j + Qdrant（通过 CLI 配置）");
+  expect(within(note).queryAllByRole("button")).toHaveLength(0);
+  expect(screen.queryByRole("button", { name: /存储后端/ })).toBeNull();
+  expect(screen.queryByRole("textbox")).toBeNull();
+  expect(screen.queryByRole("alert")).toBeNull();
+});
+
+it("warns read-only when the configured storage backend does not answer", async () => {
+  prepare();
+  withBackends({
+    graph: "kuzu",
+    vector: "qdrant",
+    is_default: false,
+    label: "Kuzu + Qdrant",
+    health: "failed",
+    health_code: "storage_backend_unreachable",
+  });
+  render(<MemoryModeSettings hasActiveModel onConfigureModel={vi.fn()} />);
+  const alert = await screen.findByRole("alert");
+  expect(alert.textContent).toContain("Kuzu + Qdrant");
+  expect(alert.textContent).toContain("storage_backend_unreachable");
+  expect(alert.textContent).toContain("memhub settings backends test");
+});
+
+it.each([
+  [
+    "the default pair",
+    {
+      graph: "kuzu",
+      vector: "chroma",
+      is_default: true,
+      label: "Kuzu + Chroma",
+      health: "local",
+      health_code: null,
+    },
+  ],
+  ["an older Core", undefined],
+])("shows no storage backend line for %s", async (_name, backends) => {
+  prepare();
+  withBackends(backends);
+  render(<MemoryModeSettings hasActiveModel onConfigureModel={vi.fn()} />);
+  await screen.findByRole("combobox", { name: "记忆模式" });
+  await waitFor(() => expect(getMemoryProcessing).toHaveBeenCalled());
+  expect(screen.queryByTestId("storage-backends-note")).toBeNull();
+});

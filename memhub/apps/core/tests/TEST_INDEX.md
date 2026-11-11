@@ -14,6 +14,7 @@
 | `test_background_work.py` | `contract` | 覆盖 a request does not wait behind a catch up、bulk work is kept to a few threads at a time、the pool outlives one hand off 等 4 个场景。 |
 | `test_backup_destroy_restore_reconciliation.py` | `contract` | Backup -> destroy -> restore, reconciled row for row. |
 | `test_backup_endpoint.py` | `integration` | The 'POST /api/v1/backup' endpoint the CLI's 'backup create' calls. |
+| `test_backup_includes_memories.py` | `integration` | A backup holds the memories: back up, wipe, restore, and everything is back. |
 | `test_backup_restore_api.py` | `integration` | 覆盖 restore endpoint refuses when runtime owns the core、restore endpoint restores a managed backup、restore endpoint rejects a source outside home 场景。 |
 | `test_baseline_probe.py` | `contract` | A0-04: the baseline probe itself must be trustworthy. |
 | `test_bug01_workbuddy_root.py` | `contract` | 3925a kernel item 2 (BUG-01, backend half): WorkBuddy import root. |
@@ -104,12 +105,14 @@
 | `test_file_import_operations_review.py` | `contract` | Upload refusal/legacy compatibility review with bounded synthetic files only. |
 | `test_frozen_core_layout.py` | `contract` | 覆盖 single file layout remains available without private preset、folder layout keeps same core and all native dependencies、unknown layout does not silently build another package 等 5 个场景。 |
 | `test_golden_corpus.py` | `contract` | A7-01: the golden corpus comparison. |
+| `test_graph_open_guard.py` | `integration` | The ultra graph's guarded first open: marker, quarantine and rebuild. |
 | `test_graph_width_endpoint.py` | `integration` | The width mismatch has to reach the interface, not just the log. |
 | `test_graph_width_export.py` | `unit` | EXPORT_FIRST has to actually export. |
 | `test_graph_width_guard.py` | `unit` | Graph width mismatch must ask, never silently archive. |
 | `test_harness_contract_suite.py` | `contract` | A4-09: one contract, ten harnesses. |
 | `test_health.py` | `contract` | 覆盖 a backfill that fails says so rather than disappearing、a failed catch up leaves a traceback behind、configured model without content consent does not start backfill 等 15 个场景。 |
 | `test_hermes_gateway_injection.py` | `contract` | Hermes gateway text in `user` rows: notices are skipped, relayed messages unwrapped. |
+| `test_history_adapter_cursor_touch.py` | `contract` | History imports must reach the write queue, not stop at `assembling`. |
 | `test_history_listing_rotation.py` | `contract` | 覆盖 history listing alternates started and untouched files、history listing drains whichever cohort is longer 场景。 |
 | `test_home_projection.py` | `contract` | 覆盖 memory projection covers pro and ultra、memory projection preserves productivity namespace、project raw latest uses import time without conversation time 等 7 个场景。 |
 | `test_host_capabilities.py` | `unit` | A plugin does not become realtime on every host or every unknown version. |
@@ -161,6 +164,7 @@
 | `test_measure_c1_loop_blocking_contract.py` | `integration` | Contract guards for the C1 event-loop blocking measurement. |
 | `test_memhub_display_identity.py` | `contract` | Display name MemHub must not fork the technical identity. |
 | `test_memory_additions.py` | `integration` | Add one memory directly: `POST /api/v2/memories` and `GET /api/v2/memories/additions/{id}`. |
+| `test_memory_backup_format.py` | `contract` | The v2 backup format without the SDK: what is copied, named, verified, rolled back. |
 | `test_memory_batch_extraction.py` | `contract` | 覆盖 batch extractor keeps only unique known evidence ids、batch extractor maps provider failure to machine error 场景。 |
 | `test_memory_citation_query_plan.py` | `contract` | Correlated citation checks must look links up by memory, not scan by 'active'. |
 | `test_memory_content_import.py` | `integration` | 覆盖 existing memory preview keeps unknown author and exact original、invalid existing memory records never leave a partial upload、memory content requires explicit mode and rejects vendor guessing 等 5 个场景。 |
@@ -192,6 +196,7 @@
 | `test_memory_write_registry.py` | `contract` | A3-01: acceptance and outcome recording for the unified write path. |
 | `test_memory_write_routes.py` | `integration` | A3-01: the HTTP write entry, tested against a real FastAPI app. |
 | `test_migrate_off_sqlite.py` | `contract` | A1-06: the migration is only done when reconciliation agrees. |
+| `test_migration_idempotency.py` | `contract` | A migration interrupted after a statement must be replayable, not fatal. |
 | `test_model_backoff.py` | `contract` | A broken model configuration must not turn a backlog into a request storm (#245). |
 | `test_model_creation_api.py` | `integration` | Normal protected model creation routes with temporary data and in-memory secrets. |
 | `test_model_creation_operations.py` | `contract` | 覆盖 lookup without table is read only and legacy create does not initialize、operation commits with profile and version without autoactivation、any replay conflicts before secret put 等 21 个场景。 |
@@ -215,6 +220,7 @@
 | `test_oversized_file_guard.py` | `contract` | One pass over a source file is bounded by a byte budget, not skipped. |
 | `test_parent_watchdog.py` | `integration` | A Core that outlives its launcher makes the next launch impossible. |
 | `test_pinned_sdk_raw_search.py` | `integration` | MemHub's raw search against the hy-memory wheel it pins, not the repo source. |
+| `test_pinned_sdk_shared_graph.py` | `contract` | Two ultra clients MemHub builds in one Core share one Kuzu database. |
 | `test_policy_api_wiring.py` | `integration` | 覆盖 global model permission off does not backfill、backfill puts history on write jobs without scheduling memory tasks、source pause skips history until the source is reenabled 场景。 |
 | `test_policy_production_entry.py` | `contract` | 覆盖 production serve passes only supported app options、maintenance serve does not own the runtime 场景。 |
 | `test_precipitation_concurrency_setting.py` | `contract` | Rule 2/9: precipitation concurrency is configurable, not hardcoded to 1. |
@@ -270,6 +276,7 @@
 | `test_secondary_source_adapters.py` | `contract` | 覆盖 pi and qwenwork keep tool and sidechain content out of the persons words、qwen code reads only the transcript beside its bookkeeping、qwen native parts preserve visible text not reasoning or tools 等 22 个场景。 |
 | `test_secret_store_error_code_api.py` | `integration` | 3925a kernel item 3: the error code reaches the HTTP boundary. |
 | `test_secret_store_error_codes.py` | `integration` | 3925a kernel item 3: keychain failure classification and backoff that heals. |
+| `test_secrets_bounded_keyring.py` | `contract` | A D-Bus keyring read must be bounded, not block the whole process (#375). |
 | `test_secure_storage.py` | `integration` | 覆盖 isolated keychain service namespace、custom keychain service is refused outside isolated tests、packaged keychain budget covers loaded process startup 等 20 个场景。 |
 | `test_sedimentation_switch.py` | `contract` | Stopping model-driven sedimentation without losing the configuration. |
 | `test_service_level_pressure_acceptance.py` | `contract` | 覆盖 workbuddy recall remains available during 100k import 场景。 |
@@ -301,10 +308,15 @@
 | `test_sql_compat.py` | `contract` | The shared compatibility layer, especially 'rowcount'. |
 | `test_sqlite_semantics_gate.py` | `contract` | D56: prevent SQLite implementation details spreading outside the data layer. |
 | `test_sqlite_write_contention.py` | `contract` | Measure whether SQLite's single writer actually blocks us. |
+| `test_storage_backend_neo4j_live.py` | `contract` | A real Neo4j/Memgraph server, when one is named: probe, then an ultra SDK client. |
+| `test_storage_backend_packaging.py` | `contract` | The frozen Core ships every driver a selectable storage backend needs. |
+| `test_storage_backend_qdrant.py` | `contract` | MemHub on a Qdrant vector store, end to end, against the pinned SDK wheel. |
+| `test_storage_backends.py` | `contract` | The `storage_backends` setting: what it accepts, where its secrets go, what it builds. |
 | `test_storage_ingest_journal.py` | `contract` | 覆盖 legacy put and reopen never initialize journal、initialized put records final origins create revision and noop、attribution propagation journals old rows as maintenance only 等 11 个场景。 |
 | `test_store_binding.py` | `contract` | A2: which store is in force, and honest reporting of it. |
 | `test_store_binding_ratchet.py` | `contract` | D56: ratchet the retired dual-engine 'store_for' seam out of the Core. |
 | `test_store_port.py` | `contract` | A1-04/A2: the store port, and that real implementations satisfy it. |
+| `test_stranded_depths.py` | `contract` | `stranded_running` must count rows a worker no longer holds. |
 | `test_subscription_visibility.py` | `unit` | A shared directory is not a read grant. |
 | `test_sync_facade.py` | `contract` | A2: the sync facade must keep the sync shape call sites already use. |
 | `test_tail_metadata_lane.py` | `contract` | Post-response metadata retries must be bounded and never block the route. |
@@ -323,4 +335,4 @@
 | `test_workspace_recall.py` | `contract` | Workspace memories were unreachable from every host; these pin the way in. |
 | `test_write_queue_lease_renewal.py` | `contract` | Rule 8: a lease must outlive the work it covers, and be renewed while it runs. |
 
-共 318 个测试文件。
+共 330 个测试文件。

@@ -183,6 +183,10 @@ const modeChineseMessages = {
     "模型已在当前模式下生效，会用于整理新对话并沉淀记忆。",
   "模型配置已保留，确认记忆模式后会显示是否生效。":
     "模型配置已保留，确认记忆模式后会显示是否生效。",
+  "mode.graphStore.quarantined": "知识图谱文件损坏，已自动重建",
+  "mode.storageBackends.configured": "存储后端：{label}（通过 CLI 配置）",
+  "mode.storageBackends.unreachable":
+    "存储后端 {label} 暂时无法连接（{code}）。它通过 CLI 配置，可运行 memhub settings backends test 检查。",
 } as const;
 
 export { modeChineseMessages };
@@ -394,6 +398,12 @@ export const modeEnglishMessages: ModeMessages = {
     "The model is active in this mode and creates memories from new conversations.",
   "模型配置已保留，确认记忆模式后会显示是否生效。":
     "The model configuration is kept. Its active state appears after the memory mode is confirmed.",
+  "mode.graphStore.quarantined":
+    "The knowledge graph file was damaged and has been rebuilt automatically.",
+  "mode.storageBackends.configured":
+    "Storage backend: {label} (configured via CLI)",
+  "mode.storageBackends.unreachable":
+    "The storage backend {label} cannot be reached right now ({code}). It is configured via CLI; run memhub settings backends test to check it.",
 };
 
 export const modeSpanishMessages: ModeMessages = {
@@ -602,6 +612,12 @@ export const modeSpanishMessages: ModeMessages = {
     "El modelo está activo en este modo y crea memorias a partir de conversaciones nuevas.",
   "模型配置已保留，确认记忆模式后会显示是否生效。":
     "La configuración se conserva. Su estado aparecerá cuando se confirme el modo de memoria.",
+  "mode.graphStore.quarantined":
+    "El archivo del grafo de conocimiento estaba dañado y se ha reconstruido automáticamente.",
+  "mode.storageBackends.configured":
+    "Backend de almacenamiento: {label} (configurado por CLI)",
+  "mode.storageBackends.unreachable":
+    "No se puede conectar con el backend de almacenamiento {label} ({code}). Se configura por CLI; ejecuta memhub settings backends test para comprobarlo.",
 };
 
 export const modeTraditionalChineseMessages: ModeMessages = {
@@ -792,6 +808,10 @@ export const modeTraditionalChineseMessages: ModeMessages = {
   "记忆维护正在进行，完成后才能切换模式。":
     "記憶維護正在進行，完成後才能切換模式。",
   "模式切换影响暂时无法读取，请重试。": "暫時無法讀取模式切換影響，請重試。",
+  "mode.graphStore.quarantined": "知識圖譜檔案損壞，已自動重建",
+  "mode.storageBackends.configured": "儲存後端：{label}（透過 CLI 設定）",
+  "mode.storageBackends.unreachable":
+    "儲存後端 {label} 暫時無法連線（{code}）。它透過 CLI 設定，可執行 memhub settings backends test 檢查。",
 };
 
 export const modeJapaneseMessages: ModeMessages = {
@@ -993,6 +1013,12 @@ export const modeJapaneseMessages: ModeMessages = {
     "記憶の保守処理中です。完了後にモードを切り替えてください。",
   "模式切换影响暂时无法读取，请重试。":
     "モード変更の影響を読み取れません。もう一度お試しください。",
+  "mode.graphStore.quarantined":
+    "ナレッジグラフのファイルが破損していたため、自動的に再構築しました。",
+  "mode.storageBackends.configured":
+    "ストレージバックエンド：{label}（CLI で設定）",
+  "mode.storageBackends.unreachable":
+    "ストレージバックエンド {label} に接続できません（{code}）。CLI で設定されています。memhub settings backends test で確認してください。",
 };
 
 export const modeGermanMessages: ModeMessages = {
@@ -1202,6 +1228,12 @@ export const modeGermanMessages: ModeMessages = {
     "Die Speicherwartung läuft. Wechseln Sie den Modus nach Abschluss.",
   "模式切换影响暂时无法读取，请重试。":
     "Die Auswirkungen des Moduswechsels sind nicht verfügbar. Bitte erneut versuchen.",
+  "mode.graphStore.quarantined":
+    "Die Wissensgraph-Datei war beschädigt und wurde automatisch neu aufgebaut.",
+  "mode.storageBackends.configured":
+    "Speicher-Backend: {label} (über die CLI konfiguriert)",
+  "mode.storageBackends.unreachable":
+    "Das Speicher-Backend {label} ist gerade nicht erreichbar ({code}). Es wird über die CLI konfiguriert; prüfe es mit memhub settings backends test.",
 };
 
 export const modePortugueseMessages: ModeMessages = {
@@ -1410,6 +1442,12 @@ export const modePortugueseMessages: ModeMessages = {
     "A manutenção da memória está em curso. Aguarde antes de mudar de modo.",
   "模式切换影响暂时无法读取，请重试。":
     "Não é possível ler os efeitos da mudança de modo. Tente novamente.",
+  "mode.graphStore.quarantined":
+    "O arquivo do grafo de conhecimento estava danificado e foi reconstruído automaticamente.",
+  "mode.storageBackends.configured":
+    "Backend de armazenamento: {label} (configurado pela CLI)",
+  "mode.storageBackends.unreachable":
+    "Não foi possível conectar ao backend de armazenamento {label} ({code}). Ele é configurado pela CLI; execute memhub settings backends test para verificar.",
 };
 
 export const modeFrenchMessages: ModeMessages = {
@@ -1620,6 +1658,12 @@ export const modeFrenchMessages: ModeMessages = {
     "La maintenance de la mémoire est en cours. Attendez avant de changer de mode.",
   "模式切换影响暂时无法读取，请重试。":
     "Les effets du changement de mode sont indisponibles. Réessayez.",
+  "mode.graphStore.quarantined":
+    "Le fichier du graphe de connaissances était endommagé et a été reconstruit automatiquement.",
+  "mode.storageBackends.configured":
+    "Backend de stockage : {label} (configuré via la CLI)",
+  "mode.storageBackends.unreachable":
+    "Le backend de stockage {label} est injoignable pour le moment ({code}). Il est configuré via la CLI ; lancez memhub settings backends test pour le vérifier.",
 };
 
 export const modeKoreanMessages: ModeMessages = {
@@ -1821,6 +1865,11 @@ export const modeKoreanMessages: ModeMessages = {
     "메모리 유지 관리 중입니다. 완료 후 모드를 전환하세요.",
   "模式切换影响暂时无法读取，请重试。":
     "모드 전환 영향을 읽을 수 없습니다. 다시 시도하세요.",
+  "mode.graphStore.quarantined":
+    "지식 그래프 파일이 손상되어 자동으로 다시 구축했습니다.",
+  "mode.storageBackends.configured": "저장소 백엔드: {label} (CLI로 설정됨)",
+  "mode.storageBackends.unreachable":
+    "저장소 백엔드 {label}에 지금 연결할 수 없습니다({code}). CLI로 설정되어 있으니 memhub settings backends test로 확인하세요.",
 };
 
 export const modeRussianMessages: ModeMessages = {
@@ -2028,6 +2077,11 @@ export const modeRussianMessages: ModeMessages = {
     "Идёт обслуживание памяти. Дождитесь завершения перед сменой режима.",
   "模式切换影响暂时无法读取，请重试。":
     "Не удалось прочитать последствия смены режима. Повторите попытку.",
+  "mode.graphStore.quarantined":
+    "Файл графа знаний был повреждён и автоматически перестроен.",
+  "mode.storageBackends.configured": "Хранилище: {label} (настроено через CLI)",
+  "mode.storageBackends.unreachable":
+    "Хранилище {label} сейчас недоступно ({code}). Оно настроено через CLI; проверьте его командой memhub settings backends test.",
 };
 
 export const modeIndonesianMessages: ModeMessages = {
@@ -2234,4 +2288,10 @@ export const modeIndonesianMessages: ModeMessages = {
     "Pemeliharaan memori sedang berjalan. Tunggu sebelum mengganti mode.",
   "模式切换影响暂时无法读取，请重试。":
     "Dampak perubahan mode tidak dapat dibaca. Coba lagi.",
+  "mode.graphStore.quarantined":
+    "File grafik pengetahuan rusak dan telah dibangun ulang secara otomatis.",
+  "mode.storageBackends.configured":
+    "Backend penyimpanan: {label} (dikonfigurasi lewat CLI)",
+  "mode.storageBackends.unreachable":
+    "Backend penyimpanan {label} tidak dapat dihubungi saat ini ({code}). Backend ini dikonfigurasi lewat CLI; jalankan memhub settings backends test untuk memeriksanya.",
 };

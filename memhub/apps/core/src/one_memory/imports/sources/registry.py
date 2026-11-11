@@ -254,10 +254,12 @@ def build_source_catalog(
                 environment=current_environment,
             ),
             create_adapter=create_opencode_adapter,
-            # OpenCode is a recall target: verified on 1.18.29, which completed
-            # an MCP handshake with our server. Import stays fixture-verified —
-            # no real OpenCode conversation has been replayed through it yet.
-            # New rows use the same append cursor and the shared poller.
+            # OpenCode is a recall target: verified on 1.18.29 and 2.2.6, both
+            # of which completed an MCP handshake with our server. Import stays
+            # fixture-verified, although a read-only replay of a real 2.2.6
+            # store produced user/assistant/tool rows with resolved workspaces;
+            # no real conversation ships with the repo. New rows use the same
+            # append cursor and the shared poller.
             capabilities=with_recall_install_target(
                 polling_live_sync_capabilities(verification=VerificationLevel.FIXTURE_ONLY)
             ),

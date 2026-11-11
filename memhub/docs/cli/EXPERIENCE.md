@@ -31,6 +31,10 @@ node apps/cli/dist/one-memory.cjs doctor
 ```
 
 `status` 显示 Runtime 是否运行；`doctor` 按诊断口径做只读检查（默认不修复）。
+`status` 还有一行 `存储后端：Kuzu + Chroma（默认）`；换过后端时是
+`存储后端：Neo4j + Qdrant（通过 CLI 配置，连接正常）`。服务器没有响应最近一次连接测试时显示
+`连接失败：<code>`，并算作异常（`storage_backends`，`status` 退出码 1）；`--json` 在
+`pipeline.storage_backends`。
 
 ## 2. 首次接入（init / sources connect）—— 没有独立的「授权」步骤
 
@@ -187,7 +191,7 @@ node apps/cli/dist/one-memory.cjs settings features reset                       
 ```
 
 - 全局设置，不分用户；没设置的功能保持 SDK 默认值，什么都不设时与以前完全一样（App 不变）。
-- 可设：`graph_rerank`（图谱重排，仅 ultra）、`same_series_timeline`（需 graph_rerank）、`episode_recall`（片段召回，pro 即可）、`session_episodes`（片段写入）、`episode_summary`（片段摘要，每个片段一次模型调用）、`intention`（默认开）、`intention_dedup`（意图判重，默认开；关闭后检索和写入都不判重、不删除意图）、`few_shot`；以及数值 `intention_dedup_threshold`（意图判重的余弦阈值，默认 0.95，可设 0.8–1.0，例如 `settings features set intention_dedup_threshold=0.9 --yes`）。
+- 可设：`graph_rerank`（图谱重排，仅 ultra）、`same_series_timeline`（需 graph_rerank）、`episode_recall`（片段召回，pro 即可）、`session_episodes`（片段写入）、`episode_summary`（片段摘要，每个片段一次模型调用）、`intention`（默认开）、`intention_dedup`（意图判重，默认开；关闭后检索和写入都不判重、不删除意图）、`few_shot`；以及数值 `intention_dedup_threshold`（意图判重的余弦阈值，默认 0.95，可设 0.8–1.0，例如 `settings features set intention_dedup_threshold=0.9 --yes`），以及整数 `agent_max_tokens`（evolve、System 2 等 Agent 调用的输出上限，默认 2000 或已设置的 `MEMORY_AGENT_MAX_TOKENS`，可设 512–32000；本地模型输出被截断、报 `invalid_operations_json` 时调大，例如 `settings features set agent_max_tokens=6000 --yes`，`settings features reset agent_max_tokens` 恢复默认；保存在 config.json，重启不丢）。
 - 片段召回只对带片段的记忆有用：同时开 `session_episodes`，之后提取的记忆才按会话归入片段。
 - 在当前模式下不生效的功能照样保存，并注明原因（如 `graph_rerank` 在 pro 下「需要 ultra」）。
 - 修改会重建 SDK 客户端：正在写的一批按旧设置写完，之后的写入和检索用新设置；不迁移数据，不改集合名。
@@ -208,6 +212,38 @@ node apps/cli/dist/one-memory.cjs settings language system   # 清除设置（�
 - 修改会像功能开关一样重建 SDK 客户端；不迁移数据，不改集合名（需要 hy-memory 2.0.11 的 `MemoryConfig.language`）。
 - `status --json` 的 `pipeline.ui_language` / `pipeline.sdk_language`（`auto` 或语言代码；`zh-Hans` 用户显示 `zh-Hans`）。API：`GET`/`PUT /api/v1/settings/ui-language`。
 
+### 存储后端（`settings backends`）
+
+记忆默认存在本机的 Kuzu（图数据库，ultra 使用）和 Chroma（向量库）里。只能用 CLI 或 API
+更换；App 只读显示。契约见 `docs/contracts/storage-backends-v1.md`。
+
+```bash
+node apps/cli/dist/one-memory.cjs settings backends                     # 当前后端、连接状态、哪些功能可用
+node apps/cli/dist/one-memory.cjs settings backends test --graph neo4j --graph-url bolt://127.0.0.1:7687 \
+  --graph-user neo4j --graph-password-file ~/.neo4j-pass                # 只测连接，不保存
+node apps/cli/dist/one-memory.cjs settings backends set --vector qdrant --vector-host 127.0.0.1   # 测连接 + 显示计划
+node apps/cli/dist/one-memory.cjs settings backends set --vector qdrant --vector-host 127.0.0.1 --yes  # 保存并生效
+node apps/cli/dist/one-memory.cjs settings backends reset --yes         # 回到 Kuzu + Chroma
+```
+
+- 图数据库：`kuzu`（默认）、`neo4j`、`memgraph`（`--graph-url bolt://…`、`--graph-user`、
+  `--graph-database`、`--graph-password-file`）。向量库：`chroma`（默认）、`qdrant`（必须是服务器：
+  `--vector-host`、`--vector-port` 默认 6333、`--vector-prefix`、`--vector-api-key-file`）。
+  FAISS 和 Qdrant 本地模式不支持（`storage_backend_faiss_unsupported` /
+  `storage_backend_vector_host_required`）。只写一侧时另一侧不变。
+- 密码和 API key 只从文件读（文件须是自己的、权限 600；`-` 从管道读），保存在系统钥匙串，
+  不写进 `config.json`，输出里只显示「已保存」。不写这个参数时保留已保存的值。
+- `set` 先做连接测试，失败就不保存；再显示计划，加 `--yes` 才保存。`reset` 同样需要 `--yes`。
+- **不迁移数据**：已有记忆留在原后端，不会被搬到新后端；新后端从它现在的内容开始。原来的数据
+  不会被删除或改写，改回原后端就能再次看到。
+- 图数据库里已经有记忆图谱时（图谱不按资料空间隔离，可能是另一个 MemHub 的），需要加
+  `--adopt-existing-graph` 才能接管。Qdrant 的集合都带本资料空间的前缀（`namespace`），多个
+  MemHub 共用一台服务器也不会互相读写。
+- 在 Qdrant 上更换向量模型会被拒绝（`embedding_switch_backend_unsupported`，SDK 还不能为 Qdrant
+  重新生成向量）；Neo4j/Memgraph 在 ultra 下同样拒绝。`show` 列出每个功能在当前后端上是
+  可用、跳过还是不支持。升级迁移在自定义后端上跳过。
+- API：`GET`/`PUT`/`DELETE /api/v1/settings/storage-backends`，`POST /api/v1/settings/storage-backends/test`。
+
 ## 8. 召回（recall）
 
 `recall` 两条路径（raw / memory）此前已真机验证。文本输出会标明每条是「原始对话摘录」
@@ -216,13 +252,30 @@ node apps/cli/dist/one-memory.cjs settings language system   # 清除设置（�
 ## 9. 备份
 
 ```bash
-node apps/cli/dist/one-memory.cjs backup create --target <数据目录>/backups/<文件名> --json
-node apps/cli/dist/one-memory.cjs backup restore --source <数据目录>/backups/<文件名>        # 预览
-node apps/cli/dist/one-memory.cjs backup restore --source <数据目录>/backups/<文件名> --yes --confirm <数据目录>/backups/<文件名>  # 执行
+node apps/cli/dist/one-memory.cjs backup create --target <数据目录>/backups/<名字>              # 预览：预计大小
+node apps/cli/dist/one-memory.cjs backup create --target <数据目录>/backups/<名字> --yes --json  # 执行
+node apps/cli/dist/one-memory.cjs backup restore --source <数据目录>/backups/<名字>.memhub-backup        # 预览
+node apps/cli/dist/one-memory.cjs backup restore --source <数据目录>/backups/<名字>.memhub-backup --yes --confirm <数据目录>/backups/<名字>.memhub-backup  # 执行
 ```
 
-备份只包含主库（来源、写入队列、配置），**不包含记忆本身**（`hy-memory/`）。目标必须在
-数据目录内（否则拒绝），放在 `backups/` 下才能被 restore 使用；restore 需 Runtime 已停止。
+从 1.0.7 起备份**包含全部记忆**：主库（来源、写入队列、配置）加记忆库 `hy-memory/`
+（Chroma、Kuzu 图谱、SDK 的 SQLite 缓存）；向量在 Qdrant 服务器上时另含一份经 SDK
+导出的 `export/memories.jsonl`。备份是一个目录 `backups/<名字>.memhub-backup/`
+（`backups/x.sqlite3` 也写成 `backups/x.memhub-backup`），只有本人可读写（0700/0600）。
+
+- `create` 不加 `--yes` 只显示目标和预计大小（`GET /api/v1/backup/estimate`），
+  不写任何东西；加 `--yes` 才写。复制期间记忆写入短暂暂停（约 1 秒 / 千条记忆），
+  结束后自动恢复，结果里有 `pause_ms`。目标必须是 `<数据目录>/backups/` 下尚不存在的名字（路径中的 `..` 与符号链接都会被解析，指向别处一律拒绝）。
+- `restore` 需 Runtime 已停止，并用 `--confirm` 再写一遍路径。它替换主库和记忆库，
+  然后核对记忆条数（每个用户每一层、每个向量集合、图谱节点）；不一致就整体回滚，
+  `backup_restore_counts_mismatch`。之前的数据留在
+  `backups/pre-restore-<时间>.memhub-previous/`。图谱打不开会被隔离并在下次启动时重建。
+- 旧格式备份（单个 `.sqlite3` 文件）照旧恢复主库，结果写明
+  `memories_included: false`：它不含记忆，记忆库保持原样。
+- 后端不同（本机 Kuzu + Chroma 与服务器之间）拒绝恢复：`backup_restore_backend_mismatch`；
+  记忆在 Qdrant 上时暂不支持恢复记忆：`backup_restore_remote_sdk_unsupported`。
+
+合同：[`../contracts/backup-v2.md`](../contracts/backup-v2.md)。
 
 ## 10. 宿主接入（host）
 
@@ -250,7 +303,7 @@ node apps/cli/dist/one-memory.cjs sync resume --source codex
 `backup restore`、`graph-width --decision rebuild_with_new`。不加时只说明将要做什么，不做任何
 改动（exit 0）。`delete-data` 和 `backup restore` 还要用 `--confirm <路径>` 再写一遍目标（数据目录 /
 备份文件），只加 `--yes` 会被拒绝。install / upgrade / uninstall / service-install / service-uninstall 不加 `--yes`
-时只出计划。其它写命令直接执行。
+时只出计划。`backup create` 不加 `--yes` 时只显示预计大小（备份含全部记忆，可能很大）。其它写命令直接执行。
 
 ## 12. 卸载（保留数据）
 

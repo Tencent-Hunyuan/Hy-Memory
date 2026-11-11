@@ -3,11 +3,11 @@
  *
  * The SDK's optional retrieval and extraction features (graph rerank, episode
  * recall, the episode write side, intention and its dedup, few-shot), plus the
- * intention dedup threshold, the one numeric setting. One global setting in
- * the Runtime; an unset feature keeps the SDK default, so an install nobody
- * touched behaves as before. `set` prints its plan first and needs `--yes`,
- * like `settings mode`, because some features spend model calls; `reset`
- * only returns features to their defaults and applies at once.
+ * numeric settings (the intention dedup threshold and agent_max_tokens). One
+ * global setting in the Runtime; an unset feature keeps the SDK default, so an
+ * install nobody touched behaves as before. `set` prints its plan first and
+ * needs `--yes`, like `settings mode`, because some features spend model
+ * calls; `reset` only returns features to their defaults and applies at once.
  */
 
 import type { CoreReader } from "./core-client.js";
@@ -26,9 +26,11 @@ export const MEMORY_FEATURES = [
 ] as const;
 export type MemoryFeature = (typeof MEMORY_FEATURES)[number];
 
-/** Numeric settings, with the range the Runtime accepts (inclusive). */
+/** Numeric settings, with the range the Runtime accepts (inclusive). An
+ *  `integer` one takes whole numbers only. */
 export const MEMORY_PARAMETERS = {
-  intention_dedup_threshold: { minimum: 0.8, maximum: 1 },
+  intention_dedup_threshold: { minimum: 0.8, maximum: 1, integer: false },
+  agent_max_tokens: { minimum: 512, maximum: 32000, integer: true },
 } as const;
 export type MemoryParameter = keyof typeof MEMORY_PARAMETERS;
 export type MemorySetting = MemoryFeature | MemoryParameter;
@@ -58,6 +60,8 @@ const REASON_TEXT: Record<string, string> = {
 
 const PARAMETER_LABEL: Record<MemoryParameter, string> = {
   intention_dedup_threshold: "意图判重阈值（余弦相似度，越高保留越多）",
+  agent_max_tokens:
+    "Agent 输出上限（evolve、System 2 的单次输出 token 数；本地模型输出被截断时调大）",
 };
 
 export type FeaturesCommand =
@@ -81,11 +85,12 @@ function isSetting(value: string): value is MemorySetting {
   return isFeature(value) || isParameter(value);
 }
 
-/** A parameter's value: a plain decimal in its range; null = usage. */
+/** A parameter's value: a plain decimal (a whole number for an integer
+ *  parameter) in its range; null = usage. */
 function parameterValue(name: MemoryParameter, raw: string): number | null {
-  if (!/^\d+(\.\d+)?$/.test(raw)) return null;
+  const { minimum, maximum, integer } = MEMORY_PARAMETERS[name];
+  if (!(integer ? /^\d+$/ : /^\d+(\.\d+)?$/).test(raw)) return null;
   const value = Number(raw);
-  const { minimum, maximum } = MEMORY_PARAMETERS[name];
   return value >= minimum && value <= maximum ? value : null;
 }
 
@@ -148,7 +153,7 @@ export interface ParameterState {
   maximum: number;
   active: boolean;
   reason: string | null;
-  requires_feature: string;
+  requires_feature: string | null;
   description: string;
 }
 

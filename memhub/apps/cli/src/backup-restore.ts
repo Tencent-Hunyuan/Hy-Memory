@@ -8,6 +8,8 @@
  * `POST /api/v1/backup/restore`, and then tears that process down. Core keeps
  * the safety envelope (managed `backups/` source, protective copy, atomic
  * replace, stable failure codes); the CLI only adds preview + explicit confirm.
+ * A v2 backup (docs/contracts/backup-v2.md) restores the memories too, and
+ * Core verifies their counts before the restore stands.
  */
 
 export interface RestoreResult {
@@ -15,7 +17,18 @@ export interface RestoreResult {
   restoredBytes: number;
   previousBackupPath: string;
   sourceSchemaVersion: number;
+  /** 1: an old backup (management database only); 2: memories included.
+   * A Core before 1.0.7 answers without it: that is a 1. */
+  backupSchemaVersion?: 1 | 2;
+  memoriesIncluded?: boolean;
+  restoredFiles?: number | null;
+  verification?: Record<string, unknown> | null;
+  graphRebuildScheduled?: boolean;
+  note?: string | null;
 }
+
+/** How long the CLI waits for Core's restore answer. */
+export const RESTORE_TIMEOUT_MS = 60 * 60_000;
 
 export type RestoreOutcome =
   | { state: "restored" }
@@ -28,6 +41,19 @@ const CONTRACT_CODES = new Set([
   "backup_restore_source_too_new",
   "backup_restore_protective_backup_failed",
   "backup_restore_replace_failed",
+  "backup_restore_manifest_invalid",
+  "backup_restore_verify_failed",
+  "backup_restore_backend_mismatch",
+  "backup_restore_remote_sdk_unsupported",
+  "backup_restore_counts_mismatch",
+  "backup_restore_disk_space_insufficient",
+  "backup_restore_stage_failed",
+  "backup_restore_pending",
+  "backup_restore_rollback_failed",
+  "backup_in_progress",
+  "backup_lifecycle_busy",
+  "backup_writes_busy",
+  "backup_clients_busy",
 ]);
 
 /** Validate the HTTP result. Anything malformed returns null so the caller
@@ -58,11 +84,25 @@ export function normalizeRestoreResult(value: unknown): RestoreResult | null {
   ) {
     return null;
   }
+  const version = record.backup_schema_version === 2 ? 2 : 1;
   return {
     state: "restored",
     restoredBytes: record.restored_bytes,
     previousBackupPath: record.previous_backup_path,
     sourceSchemaVersion: record.source_schema_version,
+    backupSchemaVersion: version,
+    // Only a v2 answer that says so counts as memories restored.
+    memoriesIncluded: version === 2 && record.memories_included === true,
+    restoredFiles:
+      typeof record.restored_files === "number" ? record.restored_files : null,
+    verification:
+      record.verification !== null &&
+      typeof record.verification === "object" &&
+      !Array.isArray(record.verification)
+        ? (record.verification as Record<string, unknown>)
+        : null,
+    graphRebuildScheduled: record.graph_rebuild_scheduled === true,
+    note: typeof record.note === "string" ? record.note : null,
   };
 }
 
@@ -189,7 +229,9 @@ async function defaultPost(
   const { default: axios } = await import("axios");
   const response = await axios.post(url, body, {
     headers,
-    timeout: 120_000,
+    // A v2 restore stages and verifies every SDK file of the backup: a
+    // large library takes minutes, not seconds.
+    timeout: RESTORE_TIMEOUT_MS,
     proxy: false,
     maxRedirects: 0,
     maxContentLength: 4 * 1024 * 1024,

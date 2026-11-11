@@ -97,6 +97,8 @@ export const embeddingSwitchChineseMessages = {
   "embeddingSwitch.rollback.reason": "{reason} {safety}",
   "embeddingSwitch.action.checkConnection": "检查连接",
   "embeddingSwitch.action.closeFailure": "关闭失败提示",
+  "embeddingSwitch.blocker.embedding_switch_backend_unsupported":
+    "当前存储后端（通过 CLI 配置）还不支持更换搜索模型。",
 } as const;
 
 type EmbeddingSwitchMessages = Record<
@@ -214,6 +216,8 @@ export const embeddingSwitchEnglishMessages: EmbeddingSwitchMessages = {
   "embeddingSwitch.rollback.reason": "{reason} {safety}",
   "embeddingSwitch.action.checkConnection": "Check connection",
   "embeddingSwitch.action.closeFailure": "Dismiss failure message",
+  "embeddingSwitch.blocker.embedding_switch_backend_unsupported":
+    "The storage backend (configured via CLI) does not support changing the search model yet.",
 };
 
 export const embeddingSwitchSpanishMessages: EmbeddingSwitchMessages = {
@@ -328,6 +332,8 @@ export const embeddingSwitchSpanishMessages: EmbeddingSwitchMessages = {
   "embeddingSwitch.rollback.reason": "{reason} {safety}",
   "embeddingSwitch.action.checkConnection": "Comprobar conexión",
   "embeddingSwitch.action.closeFailure": "Cerrar aviso de error",
+  "embeddingSwitch.blocker.embedding_switch_backend_unsupported":
+    "El backend de almacenamiento (configurado por CLI) aún no permite cambiar el modelo de búsqueda.",
 };
 
 const embeddingSwitchKeys = Object.keys(
@@ -422,6 +428,7 @@ export const embeddingSwitchTraditionalChineseMessages = localized([
   "{reason} {safety}",
   "檢查連線",
   "關閉失敗訊息",
+  "目前的儲存後端（透過 CLI 設定）尚不支援更換搜尋模型。",
 ]);
 
 export const embeddingSwitchJapaneseMessages = localized([
@@ -502,6 +509,7 @@ export const embeddingSwitchJapaneseMessages = localized([
   "{reason} {safety}",
   "接続を確認",
   "失敗メッセージを閉じる",
+  "現在のストレージバックエンド（CLI で設定）では、まだ検索モデルを変更できません。",
 ]);
 
 export const embeddingSwitchGermanMessages = localized([
@@ -582,6 +590,7 @@ export const embeddingSwitchGermanMessages = localized([
   "{reason} {safety}",
   "Verbindung prüfen",
   "Fehlermeldung schließen",
+  "Das Speicher-Backend (über die CLI konfiguriert) unterstützt das Wechseln des Suchmodells noch nicht.",
 ]);
 
 export const embeddingSwitchPortugueseMessages = localized([
@@ -662,6 +671,7 @@ export const embeddingSwitchPortugueseMessages = localized([
   "{reason} {safety}",
   "Verificar ligação",
   "Fechar mensagem de falha",
+  "O backend de armazenamento (configurado pela CLI) ainda não permite trocar o modelo de busca.",
 ]);
 
 export const embeddingSwitchFrenchMessages = localized([
@@ -742,6 +752,7 @@ export const embeddingSwitchFrenchMessages = localized([
   "{reason} {safety}",
   "Vérifier la connexion",
   "Fermer le message d’échec",
+  "Le backend de stockage (configuré via la CLI) ne permet pas encore de changer de modèle de recherche.",
 ]);
 
 export const embeddingSwitchKoreanMessages = localized([
@@ -822,6 +833,7 @@ export const embeddingSwitchKoreanMessages = localized([
   "{reason} {safety}",
   "연결 확인",
   "실패 메시지 닫기",
+  "현재 저장소 백엔드(CLI로 설정됨)에서는 아직 검색 모델을 바꿀 수 없습니다.",
 ]);
 
 export const embeddingSwitchRussianMessages = localized([
@@ -902,6 +914,7 @@ export const embeddingSwitchRussianMessages = localized([
   "{reason} {safety}",
   "Проверить подключение",
   "Закрыть сообщение об ошибке",
+  "Текущее хранилище (настроено через CLI) пока не поддерживает смену модели поиска.",
 ]);
 
 export const embeddingSwitchIndonesianMessages = localized([
@@ -982,4 +995,5 @@ export const embeddingSwitchIndonesianMessages = localized([
   "{reason} {safety}",
   "Periksa koneksi",
   "Tutup pesan kegagalan",
+  "Backend penyimpanan (dikonfigurasi lewat CLI) belum mendukung penggantian model pencarian.",
 ]);
