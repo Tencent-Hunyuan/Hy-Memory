@@ -772,7 +772,7 @@ async def reembed_vector_space(
                 def _write_target():
                     from contextlib import nullcontext
 
-                    if tgt.provider == "chroma" and not tgt.host:
+                    if tgt.provider == "chroma" and not tgt.host and role == "memory":
                         from .data.chroma_lexical_index import raw_collection_mutation
                         coordination = raw_collection_mutation(tgt.persist_directory, tgt_name)
                     else:
@@ -1293,7 +1293,7 @@ def _drop_sync(
     for name in selected:
         if _get_collection(client, name) is None:
             continue
-        if space.provider == "chroma" and not space.host:
+        if space.provider == "chroma" and not space.host and name == names.get("memory"):
             from .data.chroma_lexical_index import raw_collection_mutation
             with raw_collection_mutation(space.persist_directory, name, discard=True):
                 client.delete_collection(name=name)

@@ -237,3 +237,108 @@ false-positive rate; use the recorded `vdb_keyword_only` provenance for that.
 Use `--sizes 1000 --warmup 1 --repeats 3 --write-samples 2` for a smoke run. The
 declared 10k/100k latency budgets above are acceptance targets, not measurements;
 results and any failures must be reported on the measured hardware.
+
+## Validation record (2026-11-11)
+
+Acceptance was committed as `7161052` before production implementation. The
+immutable pre-change source is `b90d1303f0de3084c512902e96113d8956da7074`.
+Baseline execution overlapped development in a separate source snapshot; this
+record does not claim that every baseline test finished before implementation.
+Local checks used Windows x86-64, Python 3.13.13, Chroma 1.5.9, SQLite FTS5,
+pytest 9.1.1 and filelock 4.2.0. Local Python 3.12 dependency preparation did not
+finish; no Python 3.12 test result is claimed. The repository CI uses Python 3.12.
+
+| Check | Observed result |
+|---|---|
+| Analyzer/index/keyword/public-search/recovery/score/reconcile/Qdrant focused suite | 138 passed, 42.55s |
+| Reembed lifecycle, existing Chroma filters/payload, source/evolution/layer regression suite | 36 passed, 9.39s |
+| Reembed lifecycle after limiting coordination to the memory role | 2 passed, 5.65s |
+| Spec review follow-up: missing-source filters and content/vector update | 6 passed, 3.35s |
+| New analyzer/index/benchmark and feature test files: Ruff | Passed |
+| `git diff --check`; `uv lock --check --offline` | Passed |
+
+Focused command:
+
+```text
+python -m pytest tests/test_chroma_lexical_analyzer.py tests/test_chroma_lexical_index.py tests/test_chroma_keyword_search.py tests/test_chroma_lexical_public_search.py tests/test_chroma_lexical_recovery.py tests/test_hybrid_min_score_gate.py tests/test_reconcile_hybrid_v2_align.py tests/test_qdrant_batch_search.py -q -o log_cli=false
+```
+
+The full default suite was executed with
+`python -u -m pytest tests/ -q -o log_cli=false -o faulthandler_timeout=60`:
+
+| Source | Passed | Failed | Skipped | Errors | Deselected |
+|---|---:|---:|---:|---:|---:|
+| Immutable baseline | 1772 | 70 | 41 | 21 | 19 |
+| Implementation before review follow-up | 1904 | 68 | 29 | 18 | 19 |
+
+The full suite is **not green** in this local environment. JUnit test-ID comparison
+found no newly failing test: all 86 current failing/error test IDs also failed in
+the baseline. Of these, 85 normalized messages matched; the remaining reader
+class-dictionary assertion listed the same Python 3.13 metadata attributes in a
+different order. Observed baseline errors include FAISS open-file exhaustion,
+Windows database-file cleanup errors, GBK decoding, unavailable `tzset`/symlink
+privileges and native Chroma HNSW reads. These observations do not establish one
+common root cause. The review follow-up was checked by the focused suites above;
+it is not represented as another complete full-suite run.
+
+Two isolated-process mutations failed the intended assertions (exit 1), without
+editing tracked implementation files:
+
+- Pretending dirty metadata was ready exposed an unchanged row after another
+  record's projection update failed; the recovery test rejected that stale use.
+- Dropping reader `raw_query` forwarding lost the `C++` target outside dense
+  top-30 in a corpus containing ordinary `C` distractors.
+
+The normal focused suite subsequently passed without either mutation. Standards
+review closed the duplicated projection-field ownership and missing type-hint
+findings; Spec review closed the confirmed missing-source `$nin` parity defect.
+No broad storage or fusion framework was introduced.
+
+### Measured synthetic benchmark
+
+Hardware: Intel Core i9-13900HX, 32 logical processors, approximately 16 GiB RAM,
+local Windows 11 filesystem. SQLite 3.50.4, NumPy 2.5.4; other versions are listed
+above. Each timing row uses seed 42, 10 warmups and 100 warm samples per mode.
+The 1k/10k run overlapped repository tests; the final 100k run started after both
+full suites ended. This is a shared development machine, not an isolated lab.
+
+| Records | Dense reader P95 | Lexical P95 | Hybrid reader P95 | Unchanged startup audit | Forced rebuild | Projection bytes |
+|---:|---:|---:|---:|---:|---:|---:|
+| 1,000 | 21.62ms | 25.91ms | 38.71ms | 0.33s | 0.52s | 1,089,536 |
+| 10,000 | 386.33ms | 52.90ms | 261.54ms | 4.76s | 6.26s | 10,407,936 |
+| 100,000 | 2,519.72ms | 124.25ms | 2,272.42ms | 50.20s | 60.53s | 105,271,296 |
+
+The proposed warm lexical budgets were met at 10k and 100k. These are separate
+runs with different contention; the table does not establish that lexical scales
+better than every alternative or that adding it makes the existing reader faster.
+The full reader includes other existing retrieval and post-processing work.
+
+At 1k/10k, 20 single-upsert samples compared enabled indexing against a separate
+same-version collection with indexing disabled: enabled/disabled P95 was
+98.02/54.04ms (1.81x) and 289.36/70.38ms (4.11x), respectively. At 100k the enabled
+single-upsert P95 was 101.90ms; no disabled write-control run was made at that size.
+Initial loading of 100k records in batches of 1,000 took 334.98s. These costs, and
+the approximately 50-second unchanged startup audit, are explicit first-version
+tradeoffs of synchronous coordination and full authoritative validation.
+
+On the 24 positive synthetic queries, dense Recall@5/10 was 0.5 and lexical and
+hybrid Recall@5/10 were 1.0. The corpus deliberately puts selected targets outside
+dense top-30, so this demonstrates a mechanism rather than a production recall
+improvement. Exact provenance at both the final 1k reporting smoke and 100k run
+recorded 22 keyword-only final results, of which 10 were nonrelevant under the
+fixture's labels (45.45%). On the three negative queries the final 1k smoke's
+lexical baseline returned no results; at 100k it returned one candidate for each
+of two negative queries. Dense and hybrid returned ten synthetic vector
+distractors for every negative query at both sizes. Partial ordinary
+term matches can still enter the hybrid output; the score mapping is a heuristic,
+not a calibrated relevance probability. Real deployment quality requires a real
+labeled corpus; the existing global fusion was not tuned to these held-out rows.
+
+Run history is retained rather than hidden: the first combined run stopped on a
+native Chroma compaction error during the 10k authoritative load; a fresh 10k run
+succeeded. A subsequent combined run completed 1k/10k but stopped recording after
+40k of its 100k load without a completion result. That partial attempt is not a
+pass. The dedicated final 100k run completed with exit 0 and ready state containing
+100,000 indexed records. A final-script 1k smoke with exact provenance reporting
+also completed with exit 0. No production retry/fallback was added to hide native
+Chroma write failures, and no unsupported root cause is assigned to them.
