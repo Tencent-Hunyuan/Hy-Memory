@@ -65,6 +65,40 @@ def _mk(node_id, content, vec, tags=None):
 
 
 class TestHybridAdditiveScore:
+    def test_real_fts_keyword_only_score_keeps_public_threshold(self, config):
+        """A real FTS symbol hit passes the usual gate, but not a stricter one."""
+        from hy_memory.data.vector_store_chroma import ChromaVectorStore
+        from hy_memory.pipelines.reader_hybrid import HybridReadPipeline
+
+        config.vector_store.chroma_lexical_enabled = True
+        store = ChromaVectorStore(config)
+        run(store.initialize())
+        try:
+            # Zero cosine excludes this record from semantic admission.
+            run(store.upsert(_mk(
+                "keyword-only", "ECONNRESET requires refreshing the socket pool", _unit([0.0, 1.0] + [0.0] * 30),
+            )))
+            lexical = run(store.keyword_search("ECONNRESET", user_id="u1"))
+            assert [hit["node_id"] for hit in lexical] == ["keyword-only"]
+            assert 0.9 <= lexical[0]["score"] <= 1.0
+
+            reader = HybridReadPipeline(config, vector_store=store)
+            run(reader.initialize())
+            ordinary = run(reader.read(ReadRequest(
+                query="ECONNRESET", query_embedding=_q(), user_ids=["u1"],
+                agent_ids=["a1"], min_score=0.4,
+            )))
+            assert [memory["memory_id"] for memory in ordinary.memories] == ["keyword-only"]
+            assert ordinary.memories[0]["score"] >= 0.4
+
+            strict = run(reader.read(ReadRequest(
+                query="ECONNRESET", query_embedding=_q(), user_ids=["u1"],
+                agent_ids=["a1"], min_score=0.99,
+            )))
+            assert strict.memories == []
+        finally:
+            run(store.close())
+
     def test_no_bm25_keeps_full_sem_above_min_score(self, config, monkeypatch):
         """B 无 BM25：旧逻辑 final=sem*0.6 跌破 0.2；新逻辑 final=sem 应保留。"""
         from hy_memory.data.vector_store_chroma import ChromaVectorStore

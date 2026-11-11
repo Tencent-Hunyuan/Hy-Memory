@@ -637,6 +637,9 @@ class VectorStoreBase(ABC):
         isolation_keys: Optional[List[str]] = None,
         include_sources: Optional[List[str]] = None,
         exclude_sources: Optional[List[str]] = None,
+        *,
+        raw_query: Optional[str] = None,
+        user_ids: Optional[List[str]] = None,
     ) -> List[Dict[str, Any]]:
         """
         Full-text keyword search via payload text index.
@@ -646,6 +649,11 @@ class VectorStoreBase(ABC):
 
         Backend implementations should use their native full-text search
         capabilities. Default implementation returns empty (no-op fallback).
+
+        ``raw_query`` preserves symbols that preprocessing may remove; backends
+        without a raw-text analyzer may continue using ``query``. Nonempty
+        ``user_ids`` takes precedence over ``user_id``, unless an isolation key
+        or isolation keys already define the scope, as in semantic search.
         """
         return []
 

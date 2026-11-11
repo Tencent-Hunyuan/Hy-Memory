@@ -555,6 +555,88 @@ async def test_scan_of_missing_directory_is_empty(tmp_path):
     assert await scan_vector_spaces(tmp_path / "nope") == []
 
 
+async def _lexical_reembed_store(path, base, contents):
+    from hy_memory.data.vector_store_chroma import ChromaVectorStore
+
+    config = MemoryConfig.from_dict({"vector_store": {
+        "provider": "chroma", "persist_directory": str(path),
+        "collection_name": base, "embedding_dims": 8,
+        "chroma_lexical_enabled": True,
+    }})
+    store = ChromaVectorStore(config)
+    await store.initialize()
+    embedder = FakeEmbedder("lexical-test", 8)
+    nodes = []
+    for node_id, content in contents:
+        node = MemoryNode(
+            node_id=node_id, user_id="alice", agent_id="a", session_id="s",
+            layer=MemoryLayer.L2_FACT, content=content,
+        )
+        node.embedding = embedder.vector(content)
+        nodes.append(node)
+    if nodes:
+        await store.upsert_batch(nodes)
+    return store
+
+
+async def test_reembed_invalidates_existing_lexical_index_and_drop_cannot_reuse_it(tmp_path):
+    path = tmp_path / "lexical_reembed"
+    source = await _lexical_reembed_store(path, "lexical_src", [("shared", "NEWTOKEN")])
+    target = await _lexical_reembed_store(path, "lexical_tgt", [("shared", "OLDTOKEN")])
+    src = _space(path, "lexical_src", 8)
+    tgt = _space(path, "lexical_tgt", 8)
+    try:
+        assert await target.keyword_search("OLDTOKEN", user_id="alice")
+        report = await reembed_vector_space(
+            src, tgt, embedding=FakeEmbedder("new", 8),
+            roles=["memory"], skip_existing=False,
+        )
+        assert report.embedded == 1
+        # Direct writes must revoke ready status before changing authoritative data.
+        assert await target.keyword_search("OLDTOKEN", user_id="alice") == []
+        assert (await target.get_by_id("shared")).content == "NEWTOKEN"
+        await target.rebuild_lexical_index()
+        assert await target.keyword_search("NEWTOKEN", user_id="alice")
+        assert await target.keyword_search("OLDTOKEN", user_id="alice") == []
+    finally:
+        await source.close()
+        await target.close()
+
+    await drop_vector_space(tgt, roles=["memory"])
+    replacement = await _lexical_reembed_store(path, "lexical_tgt", [])
+    try:
+        assert await replacement.keyword_search("NEWTOKEN", user_id="alice") == []
+    finally:
+        await replacement.close()
+
+
+async def test_cancelled_reembed_keeps_partial_target_lexical_index_unavailable(tmp_path):
+    path = tmp_path / "lexical_cancel"
+    source = await _lexical_reembed_store(
+        path, "cancel_src", [("first", "FIRSTTOKEN"), ("second", "SECONDTOKEN")],
+    )
+    target = await _lexical_reembed_store(path, "cancel_tgt", [("existing", "OLDTOKEN")])
+    progress_seen = []
+    try:
+        with pytest.raises(ReembedCancelled):
+            await reembed_vector_space(
+                _space(path, "cancel_src", 8), _space(path, "cancel_tgt", 8),
+                embedding=FakeEmbedder("new", 8), roles=["memory"],
+                batch_size=1, max_inflight=1,
+                cancel=lambda: bool(progress_seen), on_progress=progress_seen.append,
+            )
+        assert len(progress_seen) == 1
+        assert await target.keyword_search("OLDTOKEN", user_id="alice") == []
+        await target.rebuild_lexical_index()
+        assert await target.keyword_search("OLDTOKEN", user_id="alice")
+        first = await target.keyword_search("FIRSTTOKEN", user_id="alice")
+        second = await target.keyword_search("SECONDTOKEN", user_id="alice")
+        assert len(first) + len(second) == 1
+    finally:
+        await source.close()
+        await target.close()
+
+
 # ----------------------------------------------------------------------
 # EmbedService fixes
 # ----------------------------------------------------------------------

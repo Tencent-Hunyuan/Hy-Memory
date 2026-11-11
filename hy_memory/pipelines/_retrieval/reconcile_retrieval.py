@@ -157,13 +157,18 @@ class ReconcileHybridRetriever:
         status_filter: List[MemoryStatus],
         top_k: int,
         include_sources: Optional[List[str]] = None,
+        raw_query: Optional[str] = None,
     ) -> List[Dict[str, Any]]:
         """独立 keyword 通道；不支持则空。"""
-        if not query_lemmatized or not hasattr(vector_store, "keyword_search"):
+        if (
+            not (query_lemmatized or raw_query)
+            or not hasattr(vector_store, "keyword_search")
+        ):
             return []
         try:
             hits = await vector_store.keyword_search(
                 query=query_lemmatized,
+                raw_query=raw_query,
                 top_k=top_k,
                 user_id=user_id,
                 # 与 vec 主路一致：user 维度，不按 agent 收窄
@@ -371,6 +376,7 @@ class ReconcileHybridRetriever:
             keyword_requests = [
                 {
                     "query": lemmatized,
+                    "raw_query": text,
                     "top_k": max(self._cfg.limit * 4, 60),
                     "user_id": user_id,
                     "agent_ids": None,
@@ -379,7 +385,7 @@ class ReconcileHybridRetriever:
                     "only_latest": False,
                     "include_sources": include_sources,
                 }
-                for lemmatized in query_lemmatized
+                for text, lemmatized in zip(texts, query_lemmatized)
             ]
             dense_batch = getattr(vector_store, "search_batch", None)
             keyword_batch = getattr(vector_store, "keyword_search_batch", None)
@@ -397,6 +403,7 @@ class ReconcileHybridRetriever:
                     self._keyword_channel(
                         vector_store=vector_store,
                         query_lemmatized=request["query"],
+                        raw_query=request["raw_query"],
                         user_id=user_id,
                         layers=layers,
                         status_filter=status_filter,
@@ -488,6 +495,7 @@ class ReconcileHybridRetriever:
         kw_task = self._keyword_channel(
             vector_store=vector_store,
             query_lemmatized=query_lemmatized,
+            raw_query=query_text,
             user_id=user_id,
             layers=layers,
             status_filter=status_filter,

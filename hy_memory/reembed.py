@@ -769,13 +769,25 @@ async def reembed_vector_space(
                 if not batch["pending"]:
                     continue
                 idx = batch["pending"]
-                await _vdb(
-                    tgt_coll.upsert,
-                    ids=[batch["ids"][i] for i in idx],
-                    embeddings=vectors,
-                    documents=[batch["documents"][i] for i in idx],
-                    metadatas=[batch["metadatas"][i] for i in idx],
-                )
+                def _write_target():
+                    from contextlib import nullcontext
+
+                    if tgt.provider == "chroma" and not tgt.host:
+                        from .data.chroma_lexical_index import raw_collection_mutation
+                        coordination = raw_collection_mutation(tgt.persist_directory, tgt_name)
+                    else:
+                        coordination = nullcontext()
+                    # Keep invalidation and the authoritative write in one worker:
+                    # cancellation must not release the lock ahead of the write.
+                    with coordination:
+                        tgt_coll.upsert(
+                            ids=[batch["ids"][i] for i in idx],
+                            embeddings=vectors,
+                            documents=[batch["documents"][i] for i in idx],
+                            metadatas=[batch["metadatas"][i] for i in idx],
+                        )
+
+                await _vdb(_write_target)
                 embedded += len(idx)
             done = sum(len(b["ids"]) for b in batches)
             progress = ReembedProgress(
@@ -1281,7 +1293,12 @@ def _drop_sync(
     for name in selected:
         if _get_collection(client, name) is None:
             continue
-        client.delete_collection(name=name)
+        if space.provider == "chroma" and not space.host:
+            from .data.chroma_lexical_index import raw_collection_mutation
+            with raw_collection_mutation(space.persist_directory, name, discard=True):
+                client.delete_collection(name=name)
+        else:
+            client.delete_collection(name=name)
         dropped.append(name)
     return dropped
 

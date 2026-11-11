@@ -64,8 +64,17 @@
 | `MEMORY_VECTOR_HOST` | — | Qdrant 等远程后端主机 |
 | `MEMORY_VECTOR_PORT` | — | 远程后端端口 |
 | `MEMORY_VECTOR_API_KEY` | — | 远程后端 API Key |
-`hybrid` 的关键词候选依赖后端实现。Chroma 会退化为纯向量；Qdrant 可使用
-sparse/BM25 候选。
+| `MEMORY_CHROMA_LEXICAL_ENABLED` | `false` | 为本地 Chroma 启用可重建的 SQLite FTS5 词面索引；仅影响使用关键词通道的检索 |
+
+`hybrid` 的关键词候选依赖后端实现。本地 Chroma 显式开启上述开关后使用独立词面
+召回；未开启、索引不可用或使用 Chroma HttpClient 时，关键词通道返回空。Qdrant
+可使用 sparse/BM25 候选。此开关不改变默认 `legacy` reader；使用 `reader="hybrid"`
+或现有 reader 配置启用读取侧混合召回。写入 reconcile 也会调用关键词通道。
+
+本地 Chroma 初始化会完整扫描并核验词面投影，成本为 O(N)；重建期间词面通道
+退化为空，向量召回继续。即使关闭词面查询，同版本 SDK 的写入仍会使已有投影
+失效，防止其他 client 读取旧结果。启用、重建及回滚见
+[Chroma 本地词面检索](chroma_lexical_retrieval.md)。
 
 ## Graph Store
 

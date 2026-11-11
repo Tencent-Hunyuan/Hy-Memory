@@ -9,7 +9,7 @@ Agent Memory V2 - VectorStore (Chroma)
 - 同步 API → _run_in_vdb_pool() 包装为异步
 """
 
-from typing import Optional, List, Dict, Any, Set, Tuple
+from typing import Optional, List, Dict, Any, Set, Tuple, Callable
 import concurrent.futures
 import functools
 import logging
@@ -25,6 +25,11 @@ from .vector_store_base import VectorStoreBase, passes_created_after
 
 # created_after 走 post-filter，先按倍数扩池再过滤，避免过滤后不够 limit
 _CREATED_AFTER_POOL_MULTIPLIER = 4
+
+_LEXICAL_PAYLOAD_FIELDS = {
+    "node_id", "content", "tags", "source", "user_id", "agent_id",
+    "session_id", "isolation_key", "layer", "status", "is_latest",
+}
 
 logger = logging.getLogger(__name__)
 
@@ -65,6 +70,53 @@ async def _run_in_vdb_pool(func, *args, **kwargs):
     return await run_in_executor_guarded(_vdb_executor, call)
 
 
+def _retrieval_scope(
+    *,
+    isolation_key: str = "",
+    isolation_keys: Optional[List[str]] = None,
+    user_id: Optional[str] = None,
+    user_ids: Optional[List[str]] = None,
+    agent_ids: Optional[List[str]] = None,
+    layers: Optional[List[MemoryLayer]] = None,
+    status_filter: Optional[List[MemoryStatus]] = None,
+    only_latest: bool = True,
+    include_sources: Optional[List[str]] = None,
+    exclude_sources: Optional[List[str]] = None,
+) -> Dict[str, Dict[str, List[Any]]]:
+    """Resolve Chroma's scope once for dense and lexical query languages."""
+    included: Dict[str, List[Any]] = {}
+    if isolation_keys:
+        included["isolation_key"] = list(isolation_keys)
+    elif isolation_key:
+        included["isolation_key"] = [isolation_key]
+    else:
+        users = user_ids if user_ids else ([user_id] if user_id else [])
+        if users:
+            included["user_id"] = list(users)
+            if agent_ids:
+                included["agent_id"] = list(agent_ids)
+    if layers:
+        included["layer"] = [getattr(layer, "value", layer) for layer in layers]
+    statuses = status_filter or [MemoryStatus.ACTIVE]
+    included["status"] = [getattr(status, "value", status) for status in statuses]
+    if only_latest:
+        included["is_latest"] = [True]
+    if include_sources:
+        included["source"] = list(include_sources)
+    excluded = {"source": list(exclude_sources)} if exclude_sources else {}
+    return {"in": included, "not_in": excluded}
+
+
+def _scope_to_chroma_where(scope: Dict[str, Dict[str, List[Any]]]) -> Dict[str, Any]:
+    conditions = []
+    for field, values in scope["in"].items():
+        predicate = {"$eq": values[0]} if len(values) == 1 else {"$in": values}
+        conditions.append({field: predicate})
+    for field, values in scope["not_in"].items():
+        conditions.append({field: {"$nin": values}})
+    return conditions[0] if len(conditions) == 1 else {"$and": conditions}
+
+
 class ChromaVectorStore(VectorStoreBase):
     """
     Chroma 向量存储实现
@@ -78,6 +130,11 @@ class ChromaVectorStore(VectorStoreBase):
         self._client = None
         self._collection = None
         self._entity_collection = None  # lazy: {collection}_entities
+        self._lexical_index = None
+        self._lexical_enabled = bool(
+            config.vector_store.chroma_lexical_enabled and not config.vector_store.host
+        )
+        self._keyword_score_normalized = self._lexical_enabled
 
     async def initialize(self) -> None:
         """初始化 Chroma 客户端，确保集合存在"""
@@ -92,8 +149,6 @@ class ChromaVectorStore(VectorStoreBase):
         vs_config = self.config.vector_store
 
         def _init():
-            import chromadb
-
             # 优先使用远程连接
             if vs_config.host:
                 client = chromadb.HttpClient(
@@ -111,11 +166,28 @@ class ChromaVectorStore(VectorStoreBase):
                 name=self._collection_name,
                 metadata={"hnsw:space": "cosine"},
             )
-            return client, collection
+            lexical_index = None
+            if not vs_config.host:
+                from .chroma_lexical_index import ChromaLexicalIndex
 
-        self._client, self._collection = await _run_in_vdb_pool(_init)
+                lexical_index = ChromaLexicalIndex(
+                    vs_config.persist_directory, self._collection_name, str(collection.id),
+                )
+                if self._lexical_enabled:
+                    lexical_index.audit(collection)
+            return client, collection, lexical_index
+
+        self._client, self._collection, self._lexical_index = await _run_in_vdb_pool(_init)
         _LIVE_STORES.add(self)
         logger.debug(f"VectorStore initialized (Chroma), collection={self._collection_name}")
+
+    def _mutate(self, operation: Callable[[], Tuple[Any, List[str]]]) -> Any:
+        """Keep the complete lexical write protocol in one synchronous worker."""
+        if self._lexical_index is None:
+            return operation()[0]
+        return self._lexical_index.mutate(
+            self._collection, operation, maintain=self._lexical_enabled,
+        )
 
     # ================================================================
     # 写入
@@ -137,8 +209,9 @@ class ChromaVectorStore(VectorStoreBase):
                 metadatas=[metadata],
                 documents=[node.content],
             )
+            return node.node_id, [point_id]
 
-        await _run_in_vdb_pool(_upsert)
+        await _run_in_vdb_pool(self._mutate, _upsert)
         logger.debug(
             f"[vector-store] upsert: id={node.node_id} "
             f"layer={node.layer.value if hasattr(node.layer, 'value') else node.layer} "
@@ -174,8 +247,9 @@ class ChromaVectorStore(VectorStoreBase):
                 metadatas=metadatas,
                 documents=documents,
             )
+            return [n.node_id for n in valid_nodes], ids
 
-        await _run_in_vdb_pool(_upsert_batch)
+        await _run_in_vdb_pool(self._mutate, _upsert_batch)
         return [n.node_id for n in valid_nodes]
 
     async def update_embedding(self, node_id: str, embedding: List[float]) -> bool:
@@ -223,9 +297,25 @@ class ChromaVectorStore(VectorStoreBase):
                 if new_embedding is not None:
                     kwargs["embeddings"] = [new_embedding]
                 if "content" in updates:  # content 变更同步全文 documents
+                    if new_embedding is None:
+                        # Chroma otherwise invokes its default embedding model
+                        # for documents, despite this being a payload-only update.
+                        current = self._collection.get(
+                            ids=[point_id], include=["embeddings"],
+                        )
+                        if not current.get("ids"):
+                            return True, [point_id]
+                        embeddings = current.get("embeddings")
+                        if embeddings is None or len(embeddings) == 0:
+                            raise ValueError("Existing embedding unavailable for content update")
+                        kwargs["embeddings"] = [list(embeddings[0])]
                     kwargs["documents"] = [updates["content"]]
                 self._collection.update(**kwargs)
-            await _run_in_vdb_pool(_update)
+                return True, [point_id]
+            if _LEXICAL_PAYLOAD_FIELDS.intersection(updates):
+                await _run_in_vdb_pool(self._mutate, _update)
+            else:
+                await _run_in_vdb_pool(_update)
             logger.debug(
                 f"[vector-store] update_payload: id={node_id} updates={list(updates.keys())} "
                 f"embedding={'yes' if new_embedding is not None else 'no'}"
@@ -258,60 +348,13 @@ class ChromaVectorStore(VectorStoreBase):
         created_after: Optional[float] = None,
     ) -> List[Dict[str, Any]]:
         """语义检索"""
-        # 构建 Chroma where 过滤条件
-        where_conditions = []
-
-        # 隔离过滤: 精确 keys > 单 key > user_ids/user_id + agent 级
-        if isolation_keys:
-            if len(isolation_keys) == 1:
-                where_conditions.append({"isolation_key": {"$eq": isolation_keys[0]}})
-            else:
-                where_conditions.append({"isolation_key": {"$in": isolation_keys}})
-        elif isolation_key:
-            where_conditions.append({"isolation_key": {"$eq": isolation_key}})
-        else:
-            # user_ids 优先于 user_id
-            effective_uids = user_ids if user_ids else ([user_id] if user_id else [])
-            if effective_uids:
-                if len(effective_uids) == 1:
-                    where_conditions.append({"user_id": {"$eq": effective_uids[0]}})
-                else:
-                    where_conditions.append({"user_id": {"$in": effective_uids}})
-                if agent_ids:
-                    if len(agent_ids) == 1:
-                        where_conditions.append({"agent_id": {"$eq": agent_ids[0]}})
-                    else:
-                        where_conditions.append({"agent_id": {"$in": agent_ids}})
-
-        if layers:
-            layer_values = [l.value for l in layers]
-            if len(layer_values) == 1:
-                where_conditions.append({"layer": {"$eq": layer_values[0]}})
-            else:
-                where_conditions.append({"layer": {"$in": layer_values}})
-
-        if include_sources:
-            where_conditions.append({"source": {"$in": list(include_sources)}})
-        if exclude_sources:
-            where_conditions.append({"source": {"$nin": list(exclude_sources)}})
-
-        if status_filter:
-            status_values = [s.value for s in status_filter]
-            if len(status_values) == 1:
-                where_conditions.append({"status": {"$eq": status_values[0]}})
-            else:
-                where_conditions.append({"status": {"$in": status_values}})
-        else:
-            where_conditions.append({"status": {"$eq": MemoryStatus.ACTIVE.value}})
-
-        # 只搜索演化链末端节点
-        if only_latest:
-            where_conditions.append({"is_latest": {"$eq": True}})
-
-        if len(where_conditions) == 1:
-            where = where_conditions[0]
-        else:
-            where = {"$and": where_conditions}
+        scope = _retrieval_scope(
+            isolation_key=isolation_key, isolation_keys=isolation_keys,
+            user_id=user_id, user_ids=user_ids, agent_ids=agent_ids,
+            layers=layers, status_filter=status_filter, only_latest=only_latest,
+            include_sources=include_sources, exclude_sources=exclude_sources,
+        )
+        where = _scope_to_chroma_where(scope)
 
         # created_after 走 post-filter：语义是「事件时间 memory_at 优先，为空才回退
         # gmt_created」，而 Chroma 的 where DSL 表达不了 null 判断（本后端把空值写成
@@ -394,7 +437,8 @@ class ChromaVectorStore(VectorStoreBase):
         try:
             def _delete():
                 self._collection.delete(ids=[point_id])
-            await _run_in_vdb_pool(_delete)
+                return True, [point_id]
+            await _run_in_vdb_pool(self._mutate, _delete)
             return True
         except Exception as e:
             logger.warning(f"Failed to delete vector point {node_id}: {e}")
@@ -412,8 +456,8 @@ class ChromaVectorStore(VectorStoreBase):
                 ids = results["ids"] if results and results["ids"] else []
                 if ids:
                     self._collection.delete(ids=ids)
-                return len(ids)
-            return await _run_in_vdb_pool(_delete)
+                return len(ids), ids
+            return await _run_in_vdb_pool(self._mutate, _delete)
         except Exception as e:
             logger.warning(f"Failed to delete vectors for {isolation_key}: {e}")
             return 0
@@ -442,8 +486,8 @@ class ChromaVectorStore(VectorStoreBase):
                 ids = results["ids"] if results and results["ids"] else []
                 if ids:
                     self._collection.delete(ids=ids)
-                return len(ids)
-            return await _run_in_vdb_pool(_delete)
+                return len(ids), ids
+            return await _run_in_vdb_pool(self._mutate, _delete)
         except Exception as e:
             logger.warning(f"Failed to delete vectors by metadata (user_id={user_id}): {e}")
             return 0
@@ -573,13 +617,16 @@ class ChromaVectorStore(VectorStoreBase):
         """获取集合统计"""
         try:
             def _stats():
-                return self._collection.count()
-            total = await _run_in_vdb_pool(_stats)
+                total = self._collection.count()
+                lexical_status = self._lexical_status()
+                return total, lexical_status
+            total, lexical_status = await _run_in_vdb_pool(_stats)
             return {
                 "collection": self._collection_name,
                 "points_count": total,
                 "vectors_count": total,
                 "status": "ok",
+                "lexical_index": lexical_status,
             }
         except Exception as e:
             return {"error": str(e)}
@@ -646,8 +693,30 @@ class ChromaVectorStore(VectorStoreBase):
         ]
 
     # ================================================================
-    # Keyword Search (full-text, jieba + $contains)
+    # Keyword Search (local SQLite FTS5 projection)
     # ================================================================
+
+    def _lexical_status(self) -> Dict[str, Any]:
+        if self._lexical_index is None:
+            return {"state": "unavailable", "reason": "remote_chroma"}
+        status = self._lexical_index.get_status()
+        if not self._lexical_enabled:
+            status = {**status, "enabled": False}
+        return status
+
+    async def rebuild_lexical_index(self) -> Dict[str, Any]:
+        """Rebuild the local lexical projection while lexical reads degrade.
+
+        This only operates on an enabled local Chroma store. The index is derived
+        data: Chroma records are never changed by rebuilding it.
+        """
+        if self._lexical_index is None:
+            return {"state": "unavailable", "reason": "remote_chroma"}
+        if not self._lexical_enabled:
+            return {"state": "disabled", "reason": "lexical_disabled"}
+        return await _run_in_vdb_pool(
+            self._lexical_index.audit, self._collection, force=True,
+        )
 
     async def keyword_search(
         self,
@@ -662,20 +731,38 @@ class ChromaVectorStore(VectorStoreBase):
         isolation_keys: Optional[List[str]] = None,
         include_sources: Optional[List[str]] = None,
         exclude_sources: Optional[List[str]] = None,
+        *,
+        raw_query: Optional[str] = None,
+        user_ids: Optional[List[str]] = None,
     ) -> List[Dict[str, Any]]:
+        """Recall independent local lexical candidates with normalized scores.
+
+        The original query preserves symbols that the legacy preprocessor can
+        remove. Dirty, busy, disabled and unavailable projections return no hits;
+        the existing reader continues with its dense recall channel.
         """
-        Chroma 不支持原生 BM25 / sparse 检索 —— 不提供关键词通道。
-
-        之前的实现用 where_document=$contains 做子串匹配，命中返回 binary 1.0，
-        再靠 reader 端 normalize_bm25 sigmoid 归一。但该 sigmoid 是为"经典 BM25
-        原始分（0~20）"标定的，binary 1.0 会被压成 ~0.039，对融合几乎无贡献，
-        反而稀释强语义结果。与其用这种失真的假 BM25，不如老实退化：
-
-          → keyword_search 返回 []，hybrid reader 自动退化为纯向量召回。
-
-        如需真关键词检索，请使用支持 sparse/BM25 的后端（qdrant / tencent）。
-        """
-        return []
+        text = query if raw_query is None else raw_query
+        if not self._lexical_enabled or not text.strip() or top_k <= 0:
+            return []
+        scope = _retrieval_scope(
+            isolation_key=isolation_key, isolation_keys=isolation_keys,
+            user_id=user_id, user_ids=user_ids, agent_ids=agent_ids,
+            layers=layers, status_filter=status_filter, only_latest=only_latest,
+            include_sources=include_sources, exclude_sources=exclude_sources,
+        )
+        hits = await _run_in_vdb_pool(
+            self._lexical_index.search, self._collection, text, top_k, scope,
+        )
+        return [
+            {
+                "node_id": hit["node_id"],
+                "score": hit["score"],
+                "node": self._payload_to_node(
+                    self._chroma_metadata_to_payload(hit["metadata"]),
+                ),
+            }
+            for hit in hits
+        ]
 
 
     # ================================================================

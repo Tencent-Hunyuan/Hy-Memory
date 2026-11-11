@@ -193,3 +193,52 @@ async def test_reconcile_batch_collapses_transport_and_preserves_query_rows(monk
     assert [[hit["node"].node_id for hit in row] for row in rows] == [
         ["n1"], ["n1"], ["n1"],
     ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("transport", ["scalar", "batch", "fallback"])
+async def test_reconcile_preserves_raw_queries_per_row(monkeypatch, transport):
+    queries = ["C++", "src/foo_bar.py"]
+    normalized = {"C++": "", "src/foo_bar.py": "src foo bar py"}
+    monkeypatch.setattr(
+        "hy_memory.pipelines._retrieval.reconcile_retrieval.lemmatize_for_bm25",
+        lambda text: normalized[text],
+    )
+    requests = []
+    vs = _FakeVS([], {})
+
+    async def keyword_search(**request):
+        requests.append(request)
+        return []
+
+    vs.keyword_search = keyword_search
+    if transport == "batch":
+        async def keyword_search_batch(batch):
+            requests.extend(batch)
+            return [[] for _ in batch]
+
+        vs.keyword_search_batch = keyword_search_batch
+
+    retriever = ReconcileHybridRetriever(ReconcileRetrievalConfig())
+    options = {
+        "vector_store": vs,
+        "user_id": "u1",
+        "agent_id": "a1",
+        "layers": [MemoryLayer.L2_FACT],
+        "include_sources": ["imported"],
+    }
+    if transport == "scalar":
+        for query in queries:
+            assert await retriever.search_candidates(query, [1.0, 0.0], **options) == []
+    else:
+        rows = await retriever.search_candidates_batch(
+            queries, [[1.0, 0.0], [0.0, 1.0]], **options,
+        )
+        assert rows == [[], []]
+
+    assert [(request["raw_query"], request["query"]) for request in requests] == [
+        ("C++", ""), ("src/foo_bar.py", "src foo bar py"),
+    ]
+    assert all(request["user_id"] == "u1" for request in requests)
+    assert all(request["agent_ids"] is None for request in requests)
+    assert all(request["include_sources"] == ["imported"] for request in requests)

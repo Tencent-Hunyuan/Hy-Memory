@@ -1567,6 +1567,9 @@ class QdrantVectorStore(VectorStoreBase):
         isolation_keys: Optional[List[str]] = None,
         include_sources: Optional[List[str]] = None,
         exclude_sources: Optional[List[str]] = None,
+        *,
+        raw_query: Optional[str] = None,
+        user_ids: Optional[List[str]] = None,
     ) -> List[Dict[str, Any]]:
         """
         关键词检索。
@@ -1577,10 +1580,6 @@ class QdrantVectorStore(VectorStoreBase):
         - 否则（旧 dense-only collection）：降级返回 []，hybrid 退化为纯向量。
           注：不再用旧的 scroll text-match + binary 1.0 假 BM25。
         """
-        from qdrant_client.models import (
-            Filter, FieldCondition, MatchValue, MatchAny,
-        )
-
         if not query or not query.strip() or top_k <= 0:
             return []
 
@@ -1603,55 +1602,18 @@ class QdrantVectorStore(VectorStoreBase):
             return []
         q_indices, q_values = q_sp
 
-        must_conditions = []
-        must_not_conditions = []
-        if isolation_keys:
-            must_conditions.append(
-                FieldCondition(key="isolation_key", match=MatchAny(any=isolation_keys))
-            )
-        elif isolation_key:
-            must_conditions.append(
-                FieldCondition(key="isolation_key", match=MatchValue(value=isolation_key))
-            )
-        elif user_id:
-            must_conditions.append(
-                FieldCondition(key="user_id", match=MatchValue(value=user_id))
-            )
-        if agent_ids:
-            must_conditions.append(
-                FieldCondition(key="agent_id", match=MatchAny(any=agent_ids))
-            )
-        if layers:
-            must_conditions.append(
-                FieldCondition(
-                    key="layer",
-                    match=MatchAny(any=[layer.value for layer in layers]),
-                )
-            )
-        if status_filter:
-            must_conditions.append(
-                FieldCondition(key="status", match=MatchAny(any=[s.value for s in status_filter]))
-            )
-        else:
-            must_conditions.append(
-                FieldCondition(key="status", match=MatchValue(value=MemoryStatus.ACTIVE.value))
-            )
-        if only_latest:
-            must_conditions.append(
-                FieldCondition(key="is_latest", match=MatchValue(value=True))
-            )
-        if include_sources:
-            must_conditions.append(
-                FieldCondition(key="source", match=MatchAny(any=list(include_sources)))
-            )
-        if exclude_sources:
-            must_not_conditions.append(
-                FieldCondition(key="source", match=MatchAny(any=list(exclude_sources)))
-            )
-        query_filter = Filter(
-            must=must_conditions,
-            must_not=must_not_conditions or None,
-        ) if (must_conditions or must_not_conditions) else None
+        query_filter = self._build_search_filter(
+            isolation_key=isolation_key,
+            isolation_keys=isolation_keys,
+            user_id=user_id,
+            user_ids=user_ids,
+            agent_ids=agent_ids,
+            include_sources=include_sources,
+            exclude_sources=exclude_sources,
+            layers=layers,
+            status_filter=status_filter,
+            only_latest=only_latest,
+        )
 
         def _fetch_bm25(limit):
             resp = self._client.query_points(
@@ -1727,6 +1689,8 @@ class QdrantVectorStore(VectorStoreBase):
             for index, raw in enumerate(requests):
                 request = dict(raw)
                 query = str(request.pop("query", "")).strip()
+                # Sparse BM25 keeps its existing processed-query representation.
+                request.pop("raw_query", None)
                 top_k = int(request.pop("top_k", 10))
                 if not query or top_k <= 0:
                     continue
@@ -1734,7 +1698,10 @@ class QdrantVectorStore(VectorStoreBase):
                 if not sparse_query:
                     continue
                 query_filter = self._build_search_filter(
+                    isolation_key=request.pop("isolation_key", ""),
+                    isolation_keys=request.pop("isolation_keys", None),
                     user_id=request.pop("user_id", None),
+                    user_ids=request.pop("user_ids", None),
                     agent_ids=request.pop("agent_ids", None),
                     include_sources=request.pop("include_sources", None),
                     exclude_sources=request.pop("exclude_sources", None),

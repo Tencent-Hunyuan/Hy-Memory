@@ -1,0 +1,39 @@
+{
+  "schema_version": 1,
+  "description": "Synthetic mechanism dataset. Vectors deliberately include dense-supported and dense-missed targets; this is not a business recall benchmark.",
+  "cases": [
+    {"id":"error-reset","category":"error_code","split":"development","query":"ECONNRESET","content":"When ECONNRESET occurs, disable stale connection reuse before retrying.","tags":["network"],"dense_supported":false,"relevant_ids":["target-error-reset"]},
+    {"id":"error-timeout","category":"error_code","split":"heldout","query":"ETIMEDOUT","content":"ETIMEDOUT is handled by the outbound request timeout policy.","tags":["network"],"dense_supported":true,"relevant_ids":["target-error-timeout"]},
+    {"id":"error-pipe","category":"error_code","split":"development","query":"EPIPE","content":"The EPIPE recovery policy reopens the upstream socket.","tags":["network"],"dense_supported":true,"relevant_ids":["target-error-pipe"]},
+    {"id":"error-mixed","category":"error_code","split":"heldout","query":"ERR_SOCKET_CLOSED","content":"修复ERR_SOCKET_CLOSED错误时先检查连接生命周期。","tags":["连接"],"dense_supported":false,"relevant_ids":["target-error-mixed"]},
+    {"id":"identifier-snake","category":"identifier","split":"development","query":"refresh_cache_entry","content":"Call refresh_cache_entry after replacing the cached response.","tags":["cache"],"dense_supported":false,"relevant_ids":["target-identifier-snake"]},
+    {"id":"identifier-camel","category":"identifier","split":"heldout","query":"loadUserProfile","content":"loadUserProfile reads the current account profile from the local store.","tags":["profile"],"dense_supported":false,"relevant_ids":["target-identifier-camel"]},
+    {"id":"identifier-api","category":"identifier","split":"development","query":"createSessionToken","content":"createSessionToken issues the short lived session credential.","tags":["session"],"dense_supported":true,"relevant_ids":["target-identifier-api"]},
+    {"id":"identifier-cpp","category":"identifier","split":"heldout","query":"C++","content":"The native adapter is implemented in C++ with a stable ABI.","tags":["native"],"dense_supported":true,"relevant_ids":["target-identifier-cpp"]},
+    {"id":"path-pool","category":"path","split":"development","query":"src/cache/connection_pool.py","content":"Connection reuse is configured in src/cache/connection_pool.py.","tags":["configuration"],"dense_supported":false,"relevant_ids":["target-path-pool"]},
+    {"id":"path-basename","category":"path","split":"heldout","query":"runtime_settings.yaml","content":"Edit config/runtime_settings.yaml to change the worker runtime.","tags":["configuration"],"dense_supported":false,"relevant_ids":["target-path-basename"]},
+    {"id":"path-windows","category":"path","split":"development","query":"C:\\services\\socket_adapter.cpp","content":"The Windows adapter lives at C:\\services\\socket_adapter.cpp.","tags":["native"],"dense_supported":true,"relevant_ids":["target-path-windows"]},
+    {"id":"path-client","category":"path","split":"heldout","query":"packages/client/request.ts","content":"packages/client/request.ts owns the outbound request wrapper.","tags":["client"],"dense_supported":true,"relevant_ids":["target-path-client"]},
+    {"id":"version-123","category":"version","split":"development","query":"v1.2.3","content":"The regression was introduced by deployment v1.2.3.","tags":["release"],"dense_supported":false,"relevant_ids":["target-version-123"]},
+    {"id":"version-2015","category":"version","split":"heldout","query":"v2.0.15","content":"The compatibility fix ships in v2.0.15.","tags":["release"],"dense_supported":false,"relevant_ids":["target-version-2015"]},
+    {"id":"version-rc","category":"version","split":"development","query":"v4.8.1-rc2","content":"Use v4.8.1-rc2 for the release candidate compatibility check.","tags":["release"],"dense_supported":true,"relevant_ids":["target-version-rc"]},
+    {"id":"version-710","category":"version","split":"heldout","query":"v7.1.0","content":"The storage format remains compatible with v7.1.0.","tags":["release"],"dense_supported":true,"relevant_ids":["target-version-710"]},
+    {"id":"cjk-donghu","category":"chinese","split":"development","query":"东湖高新","content":"东湖高新项目采用独立的本地部署配置。","tags":["项目"],"dense_supported":false,"relevant_ids":["target-cjk-donghu"]},
+    {"id":"cjk-qinghua","category":"chinese","split":"heldout","query":"清华大学","content":"清华大学合作项目的资料保存在知识库中。","tags":["项目"],"dense_supported":false,"relevant_ids":["target-cjk-qinghua"]},
+    {"id":"cjk-yangtze","category":"chinese","split":"development","query":"长江存储","content":"长江存储项目需要核验新的供应商信息。","tags":["项目"],"dense_supported":true,"relevant_ids":["target-cjk-yangtze"]},
+    {"id":"cjk-xinghe","category":"chinese","split":"heldout","query":"星河计划","content":"星河计划的验收记录包含部署和恢复步骤。","tags":["项目"],"dense_supported":true,"relevant_ids":["target-cjk-xinghe"]},
+    {"id":"natural-backoff","category":"natural","split":"development","query":"exponential backoff jitter","content":"Exponential backoff with jitter prevents synchronized retry storms.","tags":["resilience"],"dense_supported":false,"relevant_ids":["target-natural-backoff"]},
+    {"id":"natural-lease","category":"natural","split":"heldout","query":"distributed lease renewal","content":"Distributed lease renewal must complete before the leadership deadline.","tags":["coordination"],"dense_supported":false,"relevant_ids":["target-natural-lease"]},
+    {"id":"natural-checksum","category":"natural","split":"development","query":"archive checksum verification","content":"Archive checksum verification catches incomplete backup transfers.","tags":["backup"],"dense_supported":true,"relevant_ids":["target-natural-checksum"]},
+    {"id":"natural-rotation","category":"natural","split":"heldout","query":"credential rotation schedule","content":"The credential rotation schedule is reviewed before each release.","tags":["operations"],"dense_supported":true,"relevant_ids":["target-natural-rotation"]}
+  ],
+  "negative_queries": [
+    {"id":"absent-code","category":"negative","split":"development","query":"ZXQ_ABSENT_90817","relevant_ids":[]},
+    {"id":"absent-path","category":"negative","split":"heldout","query":"unlisted/never_created_90817.xyz","relevant_ids":[]},
+    {"id":"absent-chinese","category":"negative","split":"heldout","query":"海王星珊瑚观测站","relevant_ids":[]}
+  ],
+  "latency_queries": [
+    {"id":"hot-term","category":"hot","query":"connection"},
+    {"id":"long-phrase","category":"long","query":"routine storage monitoring connection configuration"}
+  ]
+}

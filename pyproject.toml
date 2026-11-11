@@ -20,6 +20,7 @@ dependencies = [
     "python-dotenv",
     "pyyaml",
     "chromadb>=1.5.9",
+    "filelock",
     "kuzu",
     "langdetect",
     "scikit-learn",

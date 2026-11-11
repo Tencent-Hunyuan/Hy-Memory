@@ -1715,10 +1715,13 @@ wheels = [
 
 [[package]]
 name = "hy-memory"
-version = "2.0.13"
+version = "2.0.15"
 source = { editable = "." }
 dependencies = [
     { name = "chromadb" },
+    { name = "filelock", version = "3.19.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.10'" },
+    { name = "filelock", version = "4.1.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version == '3.10.*'" },
+    { name = "filelock", version = "4.2.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11'" },
     { name = "jieba" },
     { name = "json-repair", version = "0.44.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.10'" },
     { name = "json-repair", version = "0.64.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.10'" },
@@ -1808,6 +1811,7 @@ requires-dist = [
     { name = "faiss-cpu", marker = "extra == 'faiss'" },
     { name = "fastembed", marker = "extra == 'all'" },
     { name = "fastembed", marker = "extra == 'qdrant'" },
+    { name = "filelock" },
     { name = "httpx", marker = "extra == 'dev'" },
     { name = "jieba" },
     { name = "json-repair" },

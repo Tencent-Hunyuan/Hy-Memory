@@ -101,8 +101,14 @@ class VectorStoreConfig:
     host: Optional[str] = None
     port: Optional[int] = None
     api_key: Optional[str] = None
+    # Local Chroma's derived lexical index; None lets the environment decide.
+    chroma_lexical_enabled: Optional[bool] = None
 
     def __post_init__(self):
+        if self.chroma_lexical_enabled is None:
+            self.chroma_lexical_enabled = _get_env_bool(
+                "MEMORY_CHROMA_LEXICAL_ENABLED", False,
+            )
         if self.provider is None:
             self.provider = os.getenv("MEMORY_VECTOR_STORE", "chroma")
         if self.collection_name is None:
@@ -1420,6 +1426,7 @@ class MemoryConfig:
                 "collection_name": self.vector_store.collection_name,
                 "persist_directory": self.vector_store.persist_directory,
                 "embedding_dims": self.vector_store.embedding_dims,
+                "chroma_lexical_enabled": self.vector_store.chroma_lexical_enabled,
             },
             "graph_store": {
                 "provider": self.graph_store.provider,

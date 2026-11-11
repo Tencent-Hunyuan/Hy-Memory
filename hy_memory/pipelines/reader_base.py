@@ -1597,8 +1597,10 @@ class BaseReadPipeline(ReadPipeline):
                 self._keyword_search(
                     vector_store,
                     query=query_lemmatized,
+                    raw_query=request.query,
                     top_k=vdb_kw_limit,
                     user_id=kw_user_id,
+                    user_ids=search_kwargs.get("user_ids"),
                     agent_ids=kw_agent_ids,
                     isolation_key=search_kwargs.get("isolation_key", ""),
                     isolation_keys=search_kwargs.get("isolation_keys"),
@@ -1669,14 +1671,18 @@ class BaseReadPipeline(ReadPipeline):
                 recall_tasks.append(self._keyword_search(
                     vector_store,
                     query=query_lemmatized,
+                    raw_query=request.query,
                     top_k=episode_pool_limit,
                     user_id=kw_user_id,
+                    user_ids=search_kwargs.get("user_ids"),
                     agent_ids=kw_agent_ids,
                     isolation_key=search_kwargs.get("isolation_key", ""),
                     isolation_keys=search_kwargs.get("isolation_keys"),
                     layers=[MemoryLayer.L3_SUMMARY],
                     status_filter=[MemoryStatus.ACTIVE],
                     only_latest=True,
+                    include_sources=request.include_sources,
+                    exclude_sources=request.exclude_sources,
                 ))
 
             # Channel 3: Graph 正路（only if graph_store available）
