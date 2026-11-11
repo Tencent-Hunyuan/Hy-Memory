@@ -1,6 +1,6 @@
 {
   "name": "one-memory",
-  "version": "1.0.6",
+  "version": "1.0.6+tianshu1",
   "release": {
     "build_number": 45,
     "macos_min_version": "13.0",

@@ -11,6 +11,7 @@ export const SOURCE_HOST: Readonly<Record<string, string>> = {
   "qwen-code": "qwen-code",
   hermes: "hermes",
   pi: "pi",
+  tianshu: "tianshu",
 };
 
 export const ONE_CLICK_SOURCES = new Set(Object.keys(SOURCE_HOST));

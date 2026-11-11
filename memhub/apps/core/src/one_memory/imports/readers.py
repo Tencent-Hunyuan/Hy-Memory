@@ -2,7 +2,7 @@ import hashlib
 import io
 import json
 import re
-from collections.abc import Generator, Iterator
+from collections.abc import Callable, Generator, Iterator
 from dataclasses import dataclass
 from enum import StrEnum
 from typing import BinaryIO
@@ -115,8 +115,17 @@ def read_zstd_jsonl(
     max_record_bytes: int = MAX_JSONL_RECORD_BYTES,
     max_bytes: int | None = None,
     immutable: bool = False,
+    decode: Callable[[bytes, str], RawReadEvent] | None = None,
 ) -> Generator[RawReadEvent, None, None]:
-    """Use immutable EOF semantics only for a caller-owned frozen input."""
+    """Use immutable EOF semantics only for a caller-owned frozen input.
+
+    ``decode`` defaults to :func:`_decode_json_record`; a source whose
+    decompressed lines carry extra framing (a checksum suffix, a length
+    prefix) passes its own decoder so the rest of the zstd streaming loop is
+    reused rather than forked.
+    """
+    if decode is None:
+        decode = _decode_json_record
     if max_record_bytes < 1:
         raise ValueError("max_record_bytes must be positive")
     if max_bytes is not None and max_bytes < 1:
@@ -144,7 +153,7 @@ def read_zstd_jsonl(
             if not line.endswith(b"\n"):
                 if len(line) <= max_record_bytes:
                     if immutable and index > completed_records:
-                        yield _decode_json_record(line, next_checkpoint)
+                        yield decode(line, next_checkpoint)
                     return
                 terminated = _discard_until_newline(
                     decompressed,
@@ -166,7 +175,37 @@ def read_zstd_jsonl(
                     RawReadFailureCode.RECORD_TOO_LARGE,
                 )
                 continue
-            yield _decode_json_record(line, next_checkpoint)
+            yield decode(line, next_checkpoint)
+
+
+#: Rivet (天枢) writes each turn as one zstd-compressed line whose decompressed
+#: payload is ``<json>|<hex checksum>``. The JSON is valid up to the last
+#: ``|``; the suffix is a host-side integrity tag the importer must strip
+#: before decoding, because ``json.loads`` rejects the trailing token.
+_RIVET_CHECKSUM_SUFFIX = re.compile(rb"\|[0-9a-f]{8,32}$")
+
+
+def _decode_rivet_record(line: bytes, checkpoint: str) -> RawReadEvent:
+    return _decode_json_record(_RIVET_CHECKSUM_SUFFIX.sub(b"", line), checkpoint)
+
+
+def read_rivet_jsonl(
+    source_file: AuthorizedSourceFile,
+    *,
+    checkpoint: str | None = None,
+    max_record_bytes: int = MAX_JSONL_RECORD_BYTES,
+    max_bytes: int | None = None,
+    immutable: bool = False,
+) -> Generator[RawReadEvent, None, None]:
+    """Read a Rivet session file: zstd-framed lines with a ``|<hex>`` checksum."""
+    return read_zstd_jsonl(
+        source_file,
+        checkpoint=checkpoint,
+        max_record_bytes=max_record_bytes,
+        max_bytes=max_bytes,
+        immutable=immutable,
+        decode=_decode_rivet_record,
+    )
 
 
 def read_sqlite_table(

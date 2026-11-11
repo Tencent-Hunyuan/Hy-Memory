@@ -12,6 +12,7 @@ import {
   piLayout,
   qwenCodeLayout,
   type RecallHostLayout,
+  tianshuLayout,
   workbuddyLayout,
 } from "@one-memory/host-bridge/installer";
 
@@ -57,6 +58,11 @@ export async function recallHosts(
   // its skills live — so it is the directory that says the agent is set up,
   // not `~/.pi` itself.
   const piDir = path.join(home, ".pi", "agent");
+  // 天枢 (Rivet) keeps its config, sessions and skills under `~/.rivet`.
+  // `RIVET_HOME` mirrors the host's own override convention.
+  const rivetHome = environment.RIVET_HOME?.trim()
+    ? path.resolve(environment.RIVET_HOME.trim())
+    : path.join(home, ".rivet");
   const dshHome = environment.DSH_HOME?.trim()
     ? path.resolve(environment.DSH_HOME.trim())
     : path.join(home, ".dsh");
@@ -121,6 +127,12 @@ export async function recallHosts(
       label: "Pi",
       layout: piLayout(piDir),
       presencePath: piDir,
+    },
+    {
+      hostId: "tianshu",
+      label: "天枢",
+      layout: tianshuLayout(rivetHome),
+      presencePath: rivetHome,
     },
     ...(await deepseekHarnessProfiles(dshHome)),
   ];

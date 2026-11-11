@@ -49,6 +49,10 @@ from one_memory.imports.sources.qwenwork import (
     QWENWORK_DESCRIPTOR,
     create_qwenwork_adapter,
 )
+from one_memory.imports.sources.tianshu import (
+    TIANSHU_DESCRIPTOR,
+    create_tianshu_adapter,
+)
 from one_memory.imports.sources.workbuddy import (
     WORKBUDDY_DESCRIPTOR,
     create_workbuddy_adapter,
@@ -275,6 +279,25 @@ def build_source_catalog(
                 default_home=".openclaw",
             ),
             create_adapter=create_openclaw_adapter,
+            capabilities=with_recall_install_target(
+                polling_live_sync_capabilities(verification=VerificationLevel.FIXTURE_ONLY)
+            ),
+        ),
+        SourceRegistration(
+            descriptor=TIANSHU_DESCRIPTOR,
+            # 天枢 (Rivet) writes zstd-framed `.jsonl` transcripts under
+            # `~/.rivet/sessions/<uuid>.jsonl` with a sibling `.meta.json`.
+            # `RIVET_HOME` mirrors the host's own override convention.
+            candidate=_configured_child(
+                home=home,
+                environment=current_environment,
+                variables=("RIVET_HOME",),
+                default_home=".rivet",
+                child="sessions",
+            ),
+            create_adapter=create_tianshu_adapter,
+            # Import replayed against a real session on this machine; recall
+            # target is fixture-only until a live MCP handshake is verified.
             capabilities=with_recall_install_target(
                 polling_live_sync_capabilities(verification=VerificationLevel.FIXTURE_ONLY)
             ),

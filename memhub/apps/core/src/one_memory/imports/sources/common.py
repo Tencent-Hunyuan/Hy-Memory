@@ -234,6 +234,20 @@ class JsonlSourceAdapter:
     def descriptor(self) -> SourceDescriptor:
         return self._descriptor
 
+    def _is_zstd_framed(self, source_file: AuthorizedSourceFile) -> bool:
+        """Whether a file is zstd-framed and so uses record-count checkpoints.
+
+        Defaults to the ``.zstd`` extension. Sources that store zstd frames
+        under a different name (Rivet uses ``.jsonl``) override this so the
+        reader, the empty-file checkpoint and the live-baseline skip all agree.
+        """
+        return source_file.relative_path.name.endswith(".zstd")
+
+    def _reader_for(self, source_file: AuthorizedSourceFile) -> JsonlReader:
+        """Pick the line reader for one file. Overridden by zstd-framed sources
+        whose lines carry extra framing a plain ``json.loads`` would reject."""
+        return read_zstd_jsonl if self._is_zstd_framed(source_file) else read_jsonl
+
     async def detect(self) -> bool:
         state = await self.install_state()
         return state.detected
@@ -308,7 +322,7 @@ class JsonlSourceAdapter:
         for item in files:
             if not isinstance(item, AuthorizedSourceFile) or not self.file_predicate(item):
                 continue
-            if item.relative_path.name.endswith(".zstd"):
+            if self._is_zstd_framed(item):
                 continue
             checkpoint, anchor = jsonl_complete_tail(item)
             cursors[item.safe_id] = source_cursor(
@@ -429,11 +443,7 @@ class JsonlSourceAdapter:
                         budget,
                         source_file.relative_path,
                     )
-                reader: JsonlReader = (
-                    read_zstd_jsonl
-                    if source_file.relative_path.name.endswith(".zstd")
-                    else read_jsonl
-                )
+                reader: JsonlReader = self._reader_for(source_file)
                 before = _start_cursor(source_file, options, checkpoint)
                 async for raw in iterate_in_worker(
                     partial(reader, source_file, checkpoint=checkpoint, max_bytes=budget),
@@ -478,7 +488,7 @@ class JsonlSourceAdapter:
                     options,
                     last=last,
                     empty_checkpoint=(
-                        "record:0" if listed.relative_path.name.endswith(".zstd") else "byte:0"
+                        "record:0" if self._is_zstd_framed(listed) else "byte:0"
                     ),
                 )
             )
@@ -488,9 +498,7 @@ class JsonlSourceAdapter:
     ) -> tuple[AuthorizedSourceFile, str | None, dict[str, JsonValue] | None]:
         source_file = listed.admit()
         checkpoint = resume_checkpoint(source_file, options)
-        reader: JsonlReader = (
-            read_zstd_jsonl if source_file.relative_path.name.endswith(".zstd") else read_jsonl
-        )
+        reader: JsonlReader = self._reader_for(source_file)
         header = None if self.header_selector is None else self._header_for(source_file, reader)
         return source_file, checkpoint, header
 

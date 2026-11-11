@@ -785,6 +785,25 @@ export function piLayout(piDir: string): RecallHostLayout {
   };
 }
 
+/** 天枢 (Rivet) keeps its MCP config inside the desktop app bundle and exposes
+ * no file the installer can safely merge, so it is listed as present without a
+ * config target — the same shape as Pi. Recall already reaches it through the
+ * host's own MCP pairing; this entry makes the host visible in `memhub host
+ * list` and reserves the id used for source attribution. */
+export function tianshuLayout(rivetDir: string): RecallHostLayout {
+  const root = path.resolve(rivetDir);
+  return {
+    hostId: "tianshu",
+    hostLabel: "天枢",
+    configPath: null,
+    format: "none",
+    channel: "mcp",
+    ...looseSkill(root),
+    journalPath: path.join(root, ".one-memory", "recall-install.json"),
+    containmentRoot: root,
+  };
+}
+
 /** Claude Code keeps `mcpServers` in `~/.claude.json`, beside `~/.claude`. */
 export function claudeCodeLayout(options: {
   claudeDir: string;

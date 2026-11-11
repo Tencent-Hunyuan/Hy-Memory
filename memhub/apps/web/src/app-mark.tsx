@@ -13,6 +13,8 @@ const APP_ICON_BY_ID: ReadonlyArray<readonly [string, string]> = [
   ["deepseek", "deepseek"],
   ["qwen", "qwen"],
   ["pi", "pi"],
+  ["tianshu", "tianshu"],
+  ["rivet", "tianshu"],
 ];
 
 export function appIconName(id: string): string | null {
@@ -37,7 +39,7 @@ export function AppMark({
   if (icon) {
     return (
       <img
-        src={`${import.meta.env.BASE_URL}r6/${icon}.${icon === "qwen" || ["deepseek", "hermes", "openclaw", "opencode", "pi"].includes(icon) ? "svg" : "png"}`}
+        src={`${import.meta.env.BASE_URL}r6/${icon}.${icon === "qwen" || ["deepseek", "hermes", "openclaw", "opencode", "pi", "tianshu"].includes(icon) ? "svg" : "png"}`}
         width={size}
         height={size}
         alt=""

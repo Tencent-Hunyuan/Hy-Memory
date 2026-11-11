@@ -1801,7 +1801,7 @@ wheels = [
 
 [[package]]
 name = "one-memory"
-version = "1.0.6"
+version = "1.0.6+tianshu1"
 source = { editable = "." }
 dependencies = [
     { name = "aiomysql" },

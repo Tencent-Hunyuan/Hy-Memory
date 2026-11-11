@@ -226,9 +226,52 @@ def _open_relative_file(source: AuthorizedSourceFile) -> BinaryIO:
                     raise SourceAccessError(SourceAccessErrorCode.SOURCE_UNAVAILABLE) from None
 
 
+def _open_accepts_dir_fd() -> bool:
+    """Runtime probe: does ``os.open`` actually accept ``dir_fd`` here?
+
+    CPython's ``os.supports_dir_fd`` is a static set computed at build time
+    from feature macros. Stock macOS CPython builds do not advertise
+    ``os.open`` there even though the underlying ``openat`` syscall works and
+    ``os.open(path, flags, dir_fd=fd)`` succeeds at runtime — which leaves the
+    whole access gate refusing every file on a machine the real product runs
+    on. Probe once, cache, and trust the probe over the static set.
+    """
+    global _OPEN_DIR_FD_PROBE
+    if _OPEN_DIR_FD_PROBE is not None:
+        return _OPEN_DIR_FD_PROBE
+    probe = False
+    import tempfile
+
+    with tempfile.TemporaryDirectory() as tmp:
+        root_fd = os.open(tmp, os.O_RDONLY | os.O_DIRECTORY)
+        try:
+            probe_path = os.path.join(tmp, ".dir_fd_probe")
+            with open(probe_path, "wb") as handle:
+                handle.write(b"x")
+            try:
+                child = os.open(
+                    ".dir_fd_probe",
+                    os.O_RDONLY | os.O_CLOEXEC | os.O_NOFOLLOW,
+                    dir_fd=root_fd,
+                )
+                os.close(child)
+                probe = True
+            except (TypeError, NotImplementedError, OSError):
+                probe = False
+            with suppress(FileNotFoundError):
+                os.unlink(probe_path)
+        finally:
+            os.close(root_fd)
+    _OPEN_DIR_FD_PROBE = probe
+    return probe
+
+
+_OPEN_DIR_FD_PROBE: bool | None = None
+
+
 def _supports_descriptor_relative_open() -> bool:
     return (
-        os.open in os.supports_dir_fd
+        (os.open in os.supports_dir_fd or _open_accepts_dir_fd())
         and os.stat in os.supports_dir_fd
         and os.stat in os.supports_follow_symlinks
         and callable(getattr(os, "fstat", None))
