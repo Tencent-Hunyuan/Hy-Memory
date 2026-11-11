@@ -200,6 +200,21 @@ def test_scope_composes_all_conditions_and_source_exclusion_wins(tmp_path):
     assert ids(index, collection, "ECONNRESET", selected=selected) == ["good"]
 
 
+def test_source_exclusion_keeps_legacy_missing_metadata_like_chroma(tmp_path):
+    legacy = metadata(node_id="legacy")
+    del legacy["source"]
+    index, collection = ready(tmp_path, {
+        "missing": legacy,
+        "allowed": metadata(node_id="allowed"),
+        "blocked": metadata(node_id="blocked", source="blocked"),
+    })
+    selected = scope()
+    selected["not_in"] = {"source": ["blocked"]}
+    assert ids(index, collection, "ECONNRESET", selected=selected) == ["allowed", "legacy"]
+    selected["in"]["source"] = ["allowed", "blocked"]
+    assert ids(index, collection, "ECONNRESET", selected=selected) == ["allowed"]
+
+
 def test_equal_score_ties_are_stable_by_node_id(tmp_path):
     index, collection = ready(tmp_path, {
         "z": metadata(node_id="zeta"), "a": metadata(node_id="alpha"),

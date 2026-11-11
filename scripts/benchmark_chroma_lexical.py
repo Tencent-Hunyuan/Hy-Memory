@@ -28,7 +28,10 @@ import sys
 import tempfile
 import threading
 import time
-from typing import Any, Dict, Iterable
+from typing import Any, Dict, Iterable, Iterator, List, Mapping, Optional, Sequence, Tuple, TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from hy_memory.models.memory import MemoryNode
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -48,19 +51,21 @@ GROUPS = ("error_code", "identifier", "path", "version", "chinese", "natural")
 class CountingCollection:
     """Benchmark-only wrapper counting payload transfer at the Chroma seam."""
 
-    def __init__(self, collection):
+    def __init__(self, collection: Any) -> None:
         self.collection = collection
         self.counts = defaultdict(int)
         self.lock = threading.Lock()
 
-    def __getattr__(self, name):
+    def __getattr__(self, name: str) -> Any:
         return getattr(self.collection, name)
 
-    def snapshot(self):
+    def snapshot(self) -> Dict[str, int]:
         with self.lock:
             return dict(self.counts)
 
-    def _record(self, method, result, include):
+    def _record(
+        self, method: str, result: Mapping[str, Any], include: Optional[Sequence[str]],
+    ) -> None:
         ids = result.get("ids") or []
         count = sum(map(len, ids)) if ids and isinstance(ids[0], list) else len(ids)
         with self.lock:
@@ -69,12 +74,12 @@ class CountingCollection:
             if "embeddings" in (include or []):
                 self.counts[f"{method}_embedding_records"] += count
 
-    def get(self, *args, **kwargs):
+    def get(self, *args: Any, **kwargs: Any) -> Dict[str, Any]:
         result = self.collection.get(*args, **kwargs)
         self._record("get", result, kwargs.get("include"))
         return result
 
-    def query(self, *args, **kwargs):
+    def query(self, *args: Any, **kwargs: Any) -> Dict[str, Any]:
         result = self.collection.query(*args, **kwargs)
         self._record("query", result, kwargs.get("include"))
         return result
@@ -83,7 +88,7 @@ class CountingCollection:
 class SyntheticEmbeddings:
     """No-network fallback for optional entity-tag embedding in the real reader."""
 
-    async def embed_batch(self, texts):
+    async def embed_batch(self, texts: Sequence[str]) -> List[List[float]]:
         vectors = []
         for text in texts:
             digest = hashlib.sha256(text.encode("utf-8")).digest()
@@ -93,7 +98,7 @@ class SyntheticEmbeddings:
         return vectors
 
 
-def percentile(values, quantile):
+def percentile(values: Sequence[float], quantile: float) -> Optional[float]:
     ordered = sorted(values)
     if not ordered:
         return None
@@ -103,7 +108,7 @@ def percentile(values, quantile):
     return ordered[lower] + (ordered[upper] - ordered[lower]) * (position - lower)
 
 
-def latency_summary(values):
+def latency_summary(values: Sequence[float]) -> Dict[str, Any]:
     return {
         "samples": len(values),
         "p50_ms": percentile(values, 0.5),
@@ -112,21 +117,21 @@ def latency_summary(values):
     }
 
 
-def vector(group, cosine, component=0):
+def vector(group: int, cosine: float, component: int = 0) -> List[float]:
     result = [0.0] * DIMS
     result[group] = cosine
     result[len(GROUPS) + component % (DIMS - len(GROUPS))] = math.sqrt(1 - cosine ** 2)
     return result
 
 
-def query_vector(case):
+def query_vector(case: Mapping[str, Any]) -> List[float]:
     group = GROUPS.index(case["category"]) if case["category"] in GROUPS else 0
     result = [0.0] * DIMS
     result[group] = 1.0
     return result
 
 
-def corpus(size, fixture, seed):
+def corpus(size: int, fixture: Mapping[str, Any], seed: int) -> Iterator[MemoryNode]:
     from hy_memory.models.memory import MemoryLayer, MemoryNode
 
     rng = random.Random(seed)
@@ -166,7 +171,7 @@ def corpus(size, fixture, seed):
         yield node
 
 
-def batches(items: Iterable, size):
+def batches(items: Iterable[Any], size: int) -> Iterator[List[Any]]:
     pending = []
     for item in items:
         pending.append(item)
@@ -177,7 +182,7 @@ def batches(items: Iterable, size):
         yield pending
 
 
-def evaluate(ids, relevant):
+def evaluate(ids: Sequence[str], relevant: Sequence[str]) -> Dict[str, Any]:
     wanted = set(relevant)
     if not wanted:
         return {"negative_returned": len(ids), "negative_false_positive": bool(ids)}
@@ -191,7 +196,7 @@ def evaluate(ids, relevant):
     }
 
 
-def quality_summary(rows):
+def quality_summary(rows: Sequence[Mapping[str, Any]]) -> Dict[str, Any]:
     summaries = {}
     for dimension in ("all", "split", "category"):
         groups = defaultdict(list)
@@ -212,11 +217,13 @@ def quality_summary(rows):
     return summaries
 
 
-def count_delta(before, after):
+def count_delta(before: Mapping[str, int], after: Mapping[str, int]) -> Dict[str, int]:
     return {key: after.get(key, 0) - before.get(key, 0) for key in sorted(set(before) | set(after))}
 
 
-async def measure_size(size, fixture, args, directory):
+async def measure_size(
+    size: int, fixture: Mapping[str, Any], args: argparse.Namespace, directory: Path,
+) -> Dict[str, Any]:
     from hy_memory.config import MemoryConfig
     from hy_memory.data.vector_store_chroma import ChromaVectorStore
     from hy_memory.models.memory import MemoryLayer, MemoryStatus
@@ -258,8 +265,9 @@ async def measure_size(size, fixture, args, directory):
         }
         for reader in readers.values():
             await reader.initialize()
+        provenance: Dict[Tuple[str, str], Dict[str, str]] = {}
 
-        async def retrieve(mode, case):
+        async def retrieve(mode: str, case: Mapping[str, Any]) -> List[str]:
             if mode == "lexical":
                 hits = await store.keyword_search(
                     query=case["query"], raw_query=case["query"], top_k=LEXICAL_BUDGET,
@@ -268,7 +276,9 @@ async def measure_size(size, fixture, args, directory):
                     status_filter=[MemoryStatus.ACTIVE, MemoryStatus.SUPERSEDED],
                     only_latest=False,
                 )
-                return [hit["node_id"] for hit in hits[:RESULT_K]]
+                ids = [hit["node_id"] for hit in hits[:RESULT_K]]
+                provenance[(mode, case["id"])] = {node_id: "lexical_candidate" for node_id in ids}
+                return ids
             response = await readers[mode].read(ReadRequest(
                 query=case["query"], query_embedding=query_vector(case),
                 user_ids=[USER], agent_ids=[AGENT], include_sources=[SOURCE],
@@ -277,6 +287,10 @@ async def measure_size(size, fixture, args, directory):
             ))
             if not response.success:
                 raise RuntimeError(f"{mode} read failed: {response.error_code}")
+            provenance[(mode, case["id"])] = {
+                memory["memory_id"]: memory.get("retrieval_source", "")
+                for memory in response.memories
+            }
             return [memory["memory_id"] for memory in response.memories]
 
         modes = {}
@@ -293,6 +307,7 @@ async def measure_size(size, fixture, args, directory):
                 rows.append({
                     "id": case["id"], "category": case["category"], "split": case["split"],
                     "returned_ids": ids, "metrics": evaluate(ids, case["relevant_ids"]),
+                    "retrieval_sources": provenance[(mode, case["id"])],
                 })
             for repeat in range(args.warmup):
                 await retrieve(mode, workload[repeat % len(workload)])
@@ -316,17 +331,29 @@ async def measure_size(size, fixture, args, directory):
 
         dense_by_query = {row["id"]: set(row["returned_ids"]) for row in modes["dense"]["queries"]}
         labels_by_query = {case["id"]: set(case["relevant_ids"]) for case in labeled}
-        keyword_only_added = keyword_only_nonrelevant = 0
+        added_count = added_nonrelevant = keyword_only_count = keyword_only_nonrelevant = 0
         for row in modes["hybrid"]["queries"]:
             added = set(row["returned_ids"]) - dense_by_query[row["id"]]
             nonrelevant = added - labels_by_query[row["id"]]
             row["added_over_dense_ids"] = sorted(added)
             row["added_over_dense_nonrelevant_ids"] = sorted(nonrelevant)
-            keyword_only_added += len(added)
-            keyword_only_nonrelevant += len(nonrelevant)
+            added_count += len(added)
+            added_nonrelevant += len(nonrelevant)
+            keyword_only = {
+                node_id for node_id, source in row["retrieval_sources"].items()
+                if source == "vdb_keyword_only"
+            }
+            row["keyword_only_ids"] = sorted(keyword_only)
+            row["keyword_only_nonrelevant_ids"] = sorted(keyword_only - labels_by_query[row["id"]])
+            keyword_only_count += len(keyword_only)
+            keyword_only_nonrelevant += len(keyword_only - labels_by_query[row["id"]])
         modes["hybrid"]["added_over_dense"] = {
-            "results": keyword_only_added, "nonrelevant_results": keyword_only_nonrelevant,
-            "nonrelevant_fraction": keyword_only_nonrelevant / max(1, keyword_only_added),
+            "results": added_count, "nonrelevant_results": added_nonrelevant,
+            "nonrelevant_fraction": added_nonrelevant / max(1, added_count),
+        }
+        modes["hybrid"]["keyword_only"] = {
+            "results": keyword_only_count, "nonrelevant_results": keyword_only_nonrelevant,
+            "nonrelevant_fraction": keyword_only_nonrelevant / max(1, keyword_only_count),
         }
 
         single_write_times = []
@@ -406,7 +433,7 @@ async def measure_size(size, fixture, args, directory):
         await store.close()
 
 
-def benchmark_environment():
+def benchmark_environment() -> Dict[str, str]:
     # Freeze the existing fusion settings; do not tune them to this fixture.
     settings = {
         "MEMORY_HYBRID_V2_VDB_WEIGHT_BM25": "0.35",
@@ -424,7 +451,7 @@ def benchmark_environment():
     return settings
 
 
-async def run_benchmark(args):
+async def run_benchmark(args: argparse.Namespace) -> Dict[str, Any]:
     settings = benchmark_environment()
     fixture = json.loads(args.fixture.read_text(encoding="utf-8"))
     minimum_size = len(fixture["cases"]) * 3 + 1
@@ -468,7 +495,7 @@ async def run_benchmark(args):
     return report
 
 
-def main():
+def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--sizes", nargs="+", type=int, default=[1000, 10000, 100000])
     parser.add_argument("--seed", type=int, default=42)

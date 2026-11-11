@@ -171,6 +171,34 @@ async def test_source_filters_run_before_top_k(store):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(("filters", "expected"), [
+    ({"exclude_sources": ["blocked"]}, {"allowed", "legacy"}),
+    ({"exclude_sources": ["allowed"]}, {"blocked", "legacy"}),
+    ({"include_sources": ["allowed"], "exclude_sources": ["blocked"]}, {"allowed"}),
+    ({"include_sources": ["allowed", "blocked"], "exclude_sources": ["allowed"]}, {"blocked"}),
+])
+async def test_legacy_missing_source_obeys_chroma_negative_filter(store, filters, expected):
+    allowed = make_node(node_id="allowed", source="allowed")
+    blocked = make_node(node_id="blocked", source="blocked")
+    await store.upsert_batch([allowed, blocked])
+    legacy = make_node(node_id="legacy")
+    metadata = store._payload_to_chroma_metadata(store._node_to_payload(legacy))
+    metadata.pop("source")
+    # Seed an old row through Chroma's public interface, then explicitly rebuild
+    # as required after offline mutations. Supplying a vector prevents model I/O.
+    store._collection.upsert(
+        ids=[store._node_id_to_point_id(legacy.node_id)],
+        metadatas=[metadata], embeddings=[legacy.embedding], documents=[legacy.content],
+    )
+    assert (await store.rebuild_lexical_index())["state"] == "ready"
+
+    dense = await store.search([1.0, 0.0, 0.0], user_id="u1", limit=10, **filters)
+    lexical = await store.keyword_search("ECONNRESET", user_id="u1", top_k=10, **filters)
+    assert ids(dense) == expected
+    assert ids(lexical) == expected
+
+
+@pytest.mark.asyncio
 async def test_content_tags_source_and_status_updates_are_current(store):
     target = make_node("ECONNRESET is present", tags=["legacytag"], source="old")
     await store.upsert(target)

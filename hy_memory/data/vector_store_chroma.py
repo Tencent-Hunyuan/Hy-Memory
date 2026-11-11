@@ -21,15 +21,11 @@ from ..models.memory import (
 )
 from ..config import MemoryConfig
 from ..utils.async_executor import run_in_executor_guarded
+from .chroma_lexical_index import PROJECTION_FIELDS
 from .vector_store_base import VectorStoreBase, passes_created_after
 
 # created_after 走 post-filter，先按倍数扩池再过滤，避免过滤后不够 limit
 _CREATED_AFTER_POOL_MULTIPLIER = 4
-
-_LEXICAL_PAYLOAD_FIELDS = {
-    "node_id", "content", "tags", "source", "user_id", "agent_id",
-    "session_id", "isolation_key", "layer", "status", "is_latest",
-}
 
 logger = logging.getLogger(__name__)
 
@@ -312,7 +308,7 @@ class ChromaVectorStore(VectorStoreBase):
                     kwargs["documents"] = [updates["content"]]
                 self._collection.update(**kwargs)
                 return True, [point_id]
-            if _LEXICAL_PAYLOAD_FIELDS.intersection(updates):
+            if PROJECTION_FIELDS.intersection(updates):
                 await _run_in_vdb_pool(self._mutate, _update)
             else:
                 await _run_in_vdb_pool(_update)

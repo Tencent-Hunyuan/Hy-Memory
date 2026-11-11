@@ -62,7 +62,11 @@ license before submission. No third-party source code is copied.
 
 The validation environment uses filelock 4.2.0, whose installed package metadata
 declares MIT. The lock resolves Python-compatible versions (3.19.1 for Python
-3.9 and 4.1.0 for Python 3.10); no filelock source is vendored into this project.
+3.9 and 4.1.0 for Python 3.10). Upstream licenses were checked at the locked tags:
+[3.19.1: Unlicense](https://github.com/tox-dev/filelock/blob/3.19.1/LICENSE),
+[4.1.0: MIT](https://github.com/tox-dev/filelock/blob/4.1.0/LICENSE), and
+[4.2.0: MIT](https://github.com/tox-dev/filelock/blob/4.2.0/LICENSE).
+No filelock source is vendored into this project.
 
 Execution results and exact operational instructions will be appended after the
 corresponding checks actually run.
@@ -219,12 +223,16 @@ for every query. `first_call_ms` measures the first invocation after loading and
 does not claim a flushed OS cache. Embedding vectors are precomputed and no model
 service is contacted. The report includes platform/package versions, seed and
 fixture digest, warm P50/P95, Recall@5/10, MRR@10, labeled false positives,
+the reader's actual keyword-only provenance and its labeled false positives,
 materialization/embedding-transfer counts, writes, audit/rebuild time and sidecar
 bytes. At 1k and 10k it also loads the same records into a separate collection
 with lexical indexing disabled and compares single/batch write costs. The report
 records the measurement order. Read-transfer counters include the actual
 reader's other read work. Use `--contention-note` to record concurrent workloads;
 latency budgets should ultimately be checked without unrelated resource contention.
+The separate `added_over_dense` set comparison includes ordinary dense candidates
+whose final rank changed. It must not be interpreted as the keyword-only channel's
+false-positive rate; use the recorded `vdb_keyword_only` provenance for that.
 
 Use `--sizes 1000 --warmup 1 --repeats 3 --write-samples 2` for a smoke run. The
 declared 10k/100k latency budgets above are acceptance targets, not measurements;

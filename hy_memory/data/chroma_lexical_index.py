@@ -15,7 +15,7 @@ import math
 import os
 from pathlib import Path
 import sqlite3
-from typing import Any, Callable, Dict, Iterable, List, Mapping, Optional, Tuple
+from typing import Any, Callable, Dict, Iterable, Iterator, List, Mapping, Optional, Tuple
 
 from filelock import FileLock, Timeout
 
@@ -32,6 +32,9 @@ PAGE_SIZE = 500
 _FILTER_COLUMNS = (
     "isolation_key", "user_id", "agent_id", "layer", "status", "is_latest", "source",
 )
+# The adapter uses this same set to decide whether a payload update can change
+# retrieval. All other payload fields are read fresh when hits are materialized.
+PROJECTION_FIELDS = frozenset({"content", "tags", "node_id", *_FILTER_COLUMNS})
 
 
 def _digest(value: Any) -> str:
@@ -110,7 +113,7 @@ class ChromaLexicalIndex:
         )
 
     @contextmanager
-    def _connection(self):
+    def _connection(self) -> Iterator[sqlite3.Connection]:
         connection = sqlite3.connect(str(self.path), timeout=self.lock_timeout)
         connection.row_factory = sqlite3.Row
         try:
@@ -410,7 +413,12 @@ class ChromaLexicalIndex:
                 if not selected:
                     raise ValueError("Empty lexical scope condition")
                 placeholders = ",".join("?" for _ in selected)
-                clauses.append(f"d.{column} {operator} ({placeholders})")
+                predicate = f"d.{column} {operator} ({placeholders})"
+                # Chroma's $nin includes rows without this metadata key. SQL's
+                # three-valued NOT IN alone would silently exclude legacy rows.
+                if kind == "not_in":
+                    predicate = f"(d.{column} IS NULL OR {predicate})"
+                clauses.append(predicate)
                 values.extend(selected)
         return (" AND " + " AND ".join(clauses) if clauses else ""), values
 
@@ -514,7 +522,9 @@ class ChromaLexicalIndex:
 
 
 @contextmanager
-def raw_collection_mutation(directory: str, collection_name: str, *, discard: bool = False):
+def raw_collection_mutation(
+    directory: str, collection_name: str, *, discard: bool = False,
+) -> Iterator[None]:
     """Coordinate SDK lifecycle code that writes a raw local Chroma collection.
 
     The lock covers the entire caller operation. A failed operation intentionally
