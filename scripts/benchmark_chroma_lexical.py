@@ -458,13 +458,15 @@ async def run_benchmark(args: argparse.Namespace) -> Dict[str, Any]:
     if any(size < minimum_size for size in args.sizes):
         raise ValueError(f"Each --sizes entry must be at least {minimum_size}")
     sqlite3.connect(":memory:").execute("CREATE VIRTUAL TABLE f USING fts5(t)")
+    fixture_checksum = hashlib.sha256(args.fixture.read_bytes()).hexdigest()
+    database_runtime_version = sqlite3.sqlite_version
     report: Dict[str, Any] = {
         "schema_version": 1, "recorded_at": datetime.now(timezone.utc).isoformat(),
         "scope": "synthetic mechanism benchmark; no production recall or embedding-model claim",
-        "fixture_sha256": hashlib.sha256(args.fixture.read_bytes()).hexdigest(),
+        "fixture_sha256": fixture_checksum,
         "seed": args.seed, "platform": platform.platform(), "machine": platform.machine(),
         "processor": platform.processor(), "python": platform.python_version(),
-        "sqlite": sqlite3.sqlite_version,
+        "sqlite": database_runtime_version,
         "packages": {name: importlib.metadata.version(name) for name in ("chromadb", "filelock", "numpy")},
         "protocol": {
             "embedding": "deterministic synthetic controls, 16 dimensions; no network",
