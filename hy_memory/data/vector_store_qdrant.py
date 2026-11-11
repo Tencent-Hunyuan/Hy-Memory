@@ -682,6 +682,7 @@ class QdrantVectorStore(VectorStoreBase):
         only_latest: bool = True,
         tags_match_any: Optional[List[str]] = None,
         created_after: Optional[float] = None,
+        independent_agent_filter: bool = False,
     ):
         """Build the exact payload filter shared by scalar and batch search."""
         from qdrant_client.models import (
@@ -696,6 +697,7 @@ class QdrantVectorStore(VectorStoreBase):
 
         must_conditions = []
         must_not_conditions = []
+        apply_agent_filter = independent_agent_filter
         if isolation_keys:
             must_conditions.append(
                 FieldCondition(key="isolation_key", match=MatchAny(any=isolation_keys))
@@ -713,10 +715,14 @@ class QdrantVectorStore(VectorStoreBase):
                     else MatchAny(any=effective_uids)
                 )
                 must_conditions.append(FieldCondition(key="user_id", match=match))
-                if agent_ids:
-                    must_conditions.append(
-                        FieldCondition(key="agent_id", match=MatchAny(any=agent_ids))
-                    )
+                apply_agent_filter = True
+
+        # Keyword search historically applies agent scope even without a user
+        # and alongside isolation keys. Dense search retains its own contract.
+        if apply_agent_filter and agent_ids:
+            must_conditions.append(
+                FieldCondition(key="agent_id", match=MatchAny(any=agent_ids))
+            )
 
         if layers:
             must_conditions.append(
@@ -1613,6 +1619,7 @@ class QdrantVectorStore(VectorStoreBase):
             layers=layers,
             status_filter=status_filter,
             only_latest=only_latest,
+            independent_agent_filter=True,
         )
 
         def _fetch_bm25(limit):
@@ -1708,6 +1715,7 @@ class QdrantVectorStore(VectorStoreBase):
                     layers=request.pop("layers", None),
                     status_filter=request.pop("status_filter", None),
                     only_latest=request.pop("only_latest", True),
+                    independent_agent_filter=True,
                 )
                 if request:
                     raise TypeError(

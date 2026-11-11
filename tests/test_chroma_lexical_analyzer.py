@@ -57,6 +57,13 @@ def test_document_and_query_share_ordinary_terms(content, query):
     (r"Edit C:\src\foo_bar.py", "C:/src/foo_bar.py"),
     ("Edit src/配置_loader.py", "src/配置_loader.py"),
     ("Edit 项目/模块.py", "模块.py"),
+    ("配置文件在src/foo.py中", "src/foo.py"),
+    ("配置文件在src/foo.py中", "foo.py"),
+    ("配置文件在src/配置/foo.py中", "src/配置/foo.py"),
+    ("配置文件在src/模块.py中", "src/模块.py"),
+    ("配置文件在foo.py中", "foo.py"),
+    ("编辑项目/模块.py中", "模块.py"),
+    (r"配置文件在C:\src\foo.py中", "C:/src/foo.py"),
     ("ＥＣＯＮＮＲＥＳＥＴ", "ECONNRESET"),
 ])
 def test_full_symbols_survive_tokenization(content, query):

@@ -242,6 +242,26 @@ def test_initialize_rebuilds_incompatible_sql_schema(tmp_path):
     assert ids(fresh, collection, "ECONNRESET") == ["node"]
 
 
+def test_initialize_rebuilds_old_analyzer_even_when_content_is_unchanged(tmp_path, monkeypatch):
+    from hy_memory.data import chroma_lexical_index as module
+    from hy_memory.data.chroma_lexical_analyzer import AnalyzedDocument, analyze_document
+
+    def old_analysis(content, tags):
+        analyzed = analyze_document(content, tags)
+        return AnalyzedDocument(analyzed.terms, "")
+
+    with monkeypatch.context() as old:
+        old.setattr(module, "ANALYZER_VERSION", "1")
+        old.setattr(module, "analyze_document", old_analysis)
+        index, collection = ready(tmp_path, {"p": metadata("配置文件在src/foo.py中")})
+
+    fresh = ChromaLexicalIndex(str(tmp_path), "memories", "collection-1")
+    assert fresh.audit(collection)["state"] == "ready"
+    hits = fresh.search(collection, "src/foo.py", 10, scope())
+    assert [hit["node_id"] for hit in hits] == ["node"]
+    assert hits[0]["score"] >= 0.9
+
+
 def test_initialize_repairs_missing_fts_rows_without_count_change_in_chroma(tmp_path):
     index, collection = ready(tmp_path, {"p": metadata()})
     with closing(sqlite3.connect(index.path)) as connection:

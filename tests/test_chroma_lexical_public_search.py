@@ -135,6 +135,16 @@ def test_public_lexical_search_keeps_source_user_session_and_shadow_scope(client
     assert _normal_ids(result) == ["visible"]
 
 
+@pytest.mark.parametrize("path", ["src/foo.py", "src/配置/foo.py", "项目/模块.py"])
+def test_public_hybrid_recalls_paths_touching_chinese(client, path):
+    content = f"配置文件在{path}中" if path.startswith("src/") else f"{path}中有配置"
+    _write(client, [_node("path-target", content)])
+    result = client.search(
+        path, scene="chat", reader="hybrid", user_ids=["u1"], agent_ids=["a1"],
+    )
+    assert _normal_ids(result) == ["path-target"]
+
+
 def test_public_lexical_search_includes_the_second_requested_user(client):
     _write(client, [
         _node("second-user", "ECONNRESET belongs to the second requested user", user_id="u2"),

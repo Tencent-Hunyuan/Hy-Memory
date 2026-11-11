@@ -131,6 +131,8 @@ async def test_keyword_search_batch_uses_one_qdrant_rpc(monkeypatch):
 @pytest.mark.parametrize(
     ("scope", "scope_key", "scope_values"),
     [
+        ({"agent_ids": ["a1"]}, "agent_id", ["a1"]),
+        ({"user_id": "u1", "agent_ids": ["a1"]}, "user_id", ["u1"]),
         ({"user_id": "ignored", "user_ids": ["u1", "u2"], "agent_ids": ["a1"]},
          "user_id", ["u1", "u2"]),
         ({"isolation_keys": ["u1:a1:s1", "u2:a2:s2"],
@@ -199,6 +201,6 @@ async def test_keyword_scalar_and_batch_keep_scope_and_encoded_query(
     assert conditions["status"].match.any == ["active", "superseded"]
     if scope_key == "isolation_key":
         assert "user_id" not in conditions
-        assert "agent_id" not in conditions
+        assert conditions["agent_id"].match.any == scope["agent_ids"]
     else:
         assert conditions["agent_id"].match.any == ["a1"]

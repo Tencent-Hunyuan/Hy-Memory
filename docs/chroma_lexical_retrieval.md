@@ -123,6 +123,12 @@ provide `query` remain supported. Historical `search_text` is not authoritative.
   become `c`, and `v1.2.3` differs from `v1/2/3` as a complete symbol.
 - Paths use forward slashes, preserve case, and also expose the basename. They
   are treated as text: no file access or filesystem resolution occurs.
+  Analyzer version 2 retains complete Unicode paths and adds outer CJK/Latin
+  boundary aliases, so `配置文件在src/模块.py中` exposes `src/模块.py`.
+  Interior Chinese directories remain intact. A wholly Chinese leading
+  component is kept literally because its boundary with Chinese prose is
+  ambiguous; whitespace or quotes make that boundary explicit. Initialization
+  rebuilds projections produced by the previous analyzer version.
 - Ordinary words and symbols are encoded before generating MATCH expressions.
   User input cannot supply FTS operators, column selectors or wildcards. Empty
   input, punctuation-only input and nonpositive top-k return no hits.
@@ -166,6 +172,9 @@ A content-only Chroma update reads the existing record's embedding while holding
 the lock and supplies it with the changed document. This preserves the vector
 and avoids invoking Chroma's default document embedding function. Ordinary
 lexical queries materialize metadata without requesting embeddings.
+Both `update_embedding` and embedding-only `update_payload` take this same lock,
+including from lexical-disabled local clients, without invalidating or updating
+the lexical projection.
 
 Reads that encounter the collection lock, dirty/building state, missing FTS5 or
 another index failure return no lexical hits. The dense channel continues.
@@ -342,3 +351,39 @@ pass. The dedicated final 100k run completed with exit 0 and ready state contain
 100,000 indexed records. A final-script 1k smoke with exact provenance reporting
 also completed with exit 0. No production retry/fallback was added to hide native
 Chroma write failures, and no unsupported root cause is assigned to them.
+
+### PR #432 regression fixes (2026-11-11)
+
+- Serialize content read/restore with both vector-only update entry points using
+  the existing collection lock. Real Chroma tests cover both interleavings,
+  separate clients and lexical enabled/disabled. An isolated-process mutation
+  bypassing only the vector lock makes all eight cases fail on the final vector
+  reverting to its old value; tracked implementation files were not modified.
+- Restore Qdrant keyword search's independent agent filter, including calls
+  without a user and calls with isolation keys. Scalar and remote batch RPC
+  filters agree. Dense search retains its prior scope behavior.
+- Add boundary aliases while preserving original Unicode path symbols, bump the
+  analyzer version, and verify automatic rebuilding of unchanged old documents.
+  Real public hybrid search recalls ASCII and Chinese-directory paths touching
+  Chinese prose, including `配置文件在src/foo.py中`.
+
+Targeted tests failed before implementation on concurrent vector updates,
+missing agent filters and Chinese-adjacent path symbols. Final verification
+after consolidating the lock protocol:
+
+```powershell
+.venv/Scripts/python.exe -m pytest tests/test_chroma_lexical_analyzer.py tests/test_chroma_lexical_index.py tests/test_chroma_keyword_search.py tests/test_chroma_lexical_recovery.py tests/test_chroma_lexical_public_search.py tests/test_qdrant_batch_search.py -q -o log_cli=false --tb=short --show-capture=no
+```
+
+Result: **149 passed**, Python 3.13.13 / Chroma 1.5.9. The initial red run used
+the recovery, Qdrant batch, analyzer and public-search files, selected with
+`-k 'serialize_across or scope_and_encoded or full_symbols or touching_chinese'`.
+Before the final lock-protocol consolidation, the broader 207-test run also
+passed, including payload/list filters, Qdrant atomic writes/local thread
+ownership, reembed, and reconcile scope/hybrid alignment. No complete SDK-suite
+rerun or new benchmark is claimed for this follow-up.
+
+`git diff --check` passed. Ruff reports the same four pre-existing findings as
+`0d7d7df` (one unused `asyncio` import and three ambiguous `l` names); comparing
+diagnostic codes and source lines found no introduced findings. Full Ruff is
+therefore not recorded as passing.

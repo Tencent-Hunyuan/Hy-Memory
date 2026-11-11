@@ -372,6 +372,7 @@ class ChromaLexicalIndex:
     def mutate(
         self, collection: Any, operation: Callable[[], Tuple[Any, Iterable[str]]],
         maintain: bool = True,
+        *, affects_projection: bool = True,
     ) -> Any:
         """Invalidate, execute one authoritative operation, then update its projection.
 
@@ -379,6 +380,10 @@ class ChromaLexicalIndex:
         known, projection failure only disables lexical retrieval.
         """
         with self._lock():
+            # Content writes read and restore the current vector. Vector-only
+            # updates share that critical section without touching the index.
+            if not affects_projection:
+                return operation()[0]
             ready = self._invalidate_locked()
             result, point_ids = operation()
             if not (maintain and ready and self._verified and self.path.exists()):

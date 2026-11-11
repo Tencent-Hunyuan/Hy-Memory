@@ -11,7 +11,7 @@ from typing import Iterable, List, Tuple
 import unicodedata
 
 
-ANALYZER_VERSION = "1"
+ANALYZER_VERSION = "2"
 
 _CJK = r"[一-鿿㐀-䶿豈-﫿\U00020000-\U0002FA1F]+"
 _TEXT_RUN = re.compile(_CJK + r"|[A-Za-z0-9]+")
@@ -20,9 +20,9 @@ _CAMEL_BOUNDARY = re.compile(
     r"(?<=[a-z0-9])(?=[A-Z])|(?<=[A-Z])(?=[A-Z][a-z])"
 )
 _PATH = re.compile(
-    r"(?<!\w)(?:(?:[A-Za-z]:)?[\\/])?"
+    r"(?<![A-Za-z0-9_])(?:(?:[A-Za-z]:)?[\\/])?"
     r"(?:[\w@+~.-]+[\\/])+[\w@+~.-]+"
-    r"|(?<!\w)[\w@+~-]+(?:\.[A-Za-z][A-Za-z0-9_+-]*)+(?!\w)"
+    r"|(?<![A-Za-z0-9_])[\w@+~-]+(?:\.[A-Za-z][A-Za-z0-9_+-]*)+(?![A-Za-z0-9_])"
 )
 _CODE_RUN = re.compile(
     r"[A-Za-z0-9_]+(?:[._+-][A-Za-z0-9_]+)*(?:\+\+|#)?"
@@ -87,10 +87,21 @@ def _symbols(text: str, *, document: bool) -> List[str]:
         if not path:
             continue
         covered.append(match.span())
-        symbols.append(_encode("p", path))
-        basename = path.rsplit("/", 1)[-1]
-        if document and basename != path:
-            symbols.append(_encode("p", basename))
+        paths = [path]
+        if document:
+            # Keep the complete Unicode path and add an alias at outer
+            # CJK/Latin boundaries: 配置文件在src/模块.py中 -> src/模块.py.
+            # Interior Chinese components remain intact. A wholly Chinese
+            # leading component is ambiguous and is deliberately preserved.
+            alias = re.sub(r"^" + _CJK + r"(?=[A-Za-z0-9_@+~-])", "", path)
+            alias = re.sub(r"(?<=[A-Za-z0-9_+-])" + _CJK + r"$", "", alias)
+            if alias != path:
+                paths.append(alias)
+        for candidate in paths:
+            symbols.append(_encode("p", candidate))
+            basename = candidate.rsplit("/", 1)[-1]
+            if document and basename != candidate:
+                symbols.append(_encode("p", basename))
 
     for match in _CODE_RUN.finditer(text):
         if any(start < match.end() and match.start() < end for start, end in covered):

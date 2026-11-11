@@ -41,6 +41,106 @@ async def _ids(store, query, top_k=10):
     return [hit["node_id"] for hit in await store.keyword_search(query, user_id="u1", top_k=top_k)]
 
 
+@pytest.mark.parametrize("vector_method", ["update_embedding", "update_payload"])
+@pytest.mark.parametrize("first_writer", ["content", "vector"])
+@pytest.mark.parametrize("enabled", [True, False])
+async def test_content_and_vector_updates_serialize_across_clients(
+    tmp_path, monkeypatch, vector_method, first_writer, enabled,
+):
+    content_store = await _open(tmp_path, enabled=enabled)
+    vector_store = await _open(tmp_path, enabled=False)
+    entered, release, competing_started, competing_entered = (
+        threading.Event() for _ in range(4)
+    )
+    release_content_read = threading.Event()
+    tasks = []
+    original_get = content_store._collection.get
+    original_update = vector_store._collection.update
+    new_vector = [0.0, 1.0, 0.0, 0.0]
+
+    def paused_read(**kwargs):
+        result = original_get(**kwargs)
+        if kwargs.get("include") == ["embeddings"]:
+            if first_writer == "vector":
+                competing_entered.set()
+                if not release_content_read.wait(10):
+                    raise TimeoutError("competing content read was not released")
+            if first_writer == "content":
+                entered.set()
+                if not release.wait(10):
+                    raise TimeoutError("content read was not released")
+        return result
+
+    def paused_vector_write(**kwargs):
+        if first_writer == "content":
+            competing_entered.set()
+        if first_writer == "vector":
+            entered.set()
+            if not release.wait(10):
+                raise TimeoutError("vector write was not released")
+        return original_update(**kwargs)
+
+    async def write_content():
+        return await content_store.update_payload("node", {"content": "NEWTOKEN"})
+
+    async def write_vector():
+        if vector_method == "update_embedding":
+            return await vector_store.update_embedding("node", new_vector)
+        return await vector_store.update_payload("node", {"embedding": new_vector})
+
+    try:
+        await content_store.upsert(_node())
+        monkeypatch.setattr(content_store._collection, "get", paused_read)
+        monkeypatch.setattr(vector_store._collection, "update", paused_vector_write)
+        first, second = (
+            (write_content, write_vector) if first_writer == "content"
+            else (write_vector, write_content)
+        )
+        tasks.append(asyncio.create_task(first()))
+        assert await asyncio.to_thread(entered.wait, 5)
+
+        # Observe executor submission, then give the competing worker time to
+        # reach the lock; all data operations still use the real Chroma client.
+        import hy_memory.data.vector_store_chroma as module
+        original_run = module._run_in_vdb_pool
+
+        async def competing_run(func, *args, **kwargs):
+            def started():
+                competing_started.set()
+                return func(*args, **kwargs)
+            return await original_run(started)
+
+        monkeypatch.setattr(module, "_run_in_vdb_pool", competing_run)
+        tasks.append(asyncio.create_task(second()))
+        assert await asyncio.to_thread(competing_started.wait, 5)
+        serialized = not await asyncio.to_thread(competing_entered.wait, 0.2)
+        if first_writer == "content" and not serialized:
+            # On the broken version, commit the vector before letting the
+            # content writer restore the stale value it has already read.
+            assert await tasks[1]
+        release.set()
+        if first_writer == "vector":
+            # The vector writer can also start before the content read. Keep
+            # that read paused until the new vector has committed, exposing
+            # the opposite lost-update interleaving on the broken version.
+            assert await tasks[0]
+        release_content_read.set()
+        assert all(await asyncio.gather(*tasks))
+        assert competing_entered.is_set()
+        result = await content_store.get_by_id("node")
+        assert result.content == "NEWTOKEN"
+        assert result.embedding == new_vector
+        assert serialized, "competing writer entered the collection critical section"
+        if enabled:
+            assert await _ids(content_store, "NEWTOKEN") == ["node"]
+    finally:
+        release.set()
+        release_content_read.set()
+        await asyncio.gather(*tasks, return_exceptions=True)
+        await content_store.close()
+        await vector_store.close()
+
+
 def _hold_lock(lock_path, acquired, release):
     with FileLock(lock_path, timeout=10):
         acquired.set()

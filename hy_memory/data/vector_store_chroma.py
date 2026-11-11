@@ -177,12 +177,16 @@ class ChromaVectorStore(VectorStoreBase):
         _LIVE_STORES.add(self)
         logger.debug(f"VectorStore initialized (Chroma), collection={self._collection_name}")
 
-    def _mutate(self, operation: Callable[[], Tuple[Any, List[str]]]) -> Any:
+    def _mutate(
+        self, operation: Callable[[], Tuple[Any, List[str]]],
+        *, affects_projection: bool = True,
+    ) -> Any:
         """Keep the complete lexical write protocol in one synchronous worker."""
         if self._lexical_index is None:
             return operation()[0]
         return self._lexical_index.mutate(
             self._collection, operation, maintain=self._lexical_enabled,
+            affects_projection=affects_projection,
         )
 
     # ================================================================
@@ -258,7 +262,8 @@ class ChromaVectorStore(VectorStoreBase):
                     ids=[point_id],
                     embeddings=[embedding],
                 )
-            await _run_in_vdb_pool(_update)
+                return True, []
+            await _run_in_vdb_pool(self._mutate, _update, affects_projection=False)
             return True
         except Exception as e:
             logger.warning(f"Failed to update embedding for {node_id}: {e}")
@@ -310,6 +315,8 @@ class ChromaVectorStore(VectorStoreBase):
                 return True, [point_id]
             if PROJECTION_FIELDS.intersection(updates):
                 await _run_in_vdb_pool(self._mutate, _update)
+            elif new_embedding is not None:
+                await _run_in_vdb_pool(self._mutate, _update, affects_projection=False)
             else:
                 await _run_in_vdb_pool(_update)
             logger.debug(
