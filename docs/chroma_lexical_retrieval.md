@@ -168,13 +168,21 @@ successful if only projection maintenance fails; the projection stays dirty and
 cannot answer queries. Failed or ambiguous primary writes are not replayed during
 recovery. Reinitialization reads the actual authoritative state instead.
 
-A content-only Chroma update reads the existing record's embedding while holding
+A local content-only Chroma update reads the existing record's embedding while holding
 the lock and supplies it with the changed document. This preserves the vector
 and avoids invoking Chroma's default document embedding function. Ordinary
 lexical queries materialize metadata without requesting embeddings.
 Both `update_embedding` and embedding-only `update_payload` take this same lock,
 including from lexical-disabled local clients, without invalidating or updating
 the lexical projection.
+
+For HttpClient, content-only updates use Chroma's underlying partial-update API
+with documents and metadata but no embeddings. This avoids both automatic
+document embedding in `Collection.update` and reading/restoring a vector that
+another client or process may have changed. Explicit content-plus-embedding
+updates still supply the requested vector through `Collection.update`. Remote
+writes do not use the local lexical index or a client-local substitute for a
+distributed lock.
 
 Reads that encounter the collection lock, dirty/building state, missing FTS5 or
 another index failure return no lexical hits. The dense channel continues.
@@ -387,3 +395,36 @@ rerun or new benchmark is claimed for this follow-up.
 `0d7d7df` (one unused `asyncio` import and three ambiguous `l` names); comparing
 diagnostic codes and source lines found no introduced findings. Full Ruff is
 therefore not recorded as passing.
+
+### HTTP content/vector lost-update follow-up
+
+The preceding collection-lock fix covered local PersistentClient only; it did
+not close B1 for HttpClient, which has no lexical index. Remote content-only
+writes now send a partial update without a vector, eliminating the stale-vector
+read/restore operation rather than attempting to lock other hosts locally.
+This uses the same Chroma ServerAPI `_update` primitive that `Collection.update`
+uses after preparing its request; the installed HTTP update schema accepts
+omitted/null embeddings.
+
+`tests/test_chroma_http_content_update.py` retains Chroma's actual Collection,
+FastAPI HTTP request preparation/serialization and real persistent data writes.
+Only network transport is replaced with forwarding to a real Chroma server API;
+no live HTTP server or distributed deployment is claimed. Both vector entry
+points, both interleavings, and shared/separate clients are covered. All eight
+concurrency cases failed on `db67103` with both writes successful but the final
+vector restored to its old value. A no-read/no-vector-request assertion also
+failed; the explicit content-plus-vector control passed. With the fix, all ten
+tests pass, including unchanged metadata/document roundtrip and no automatic
+embedding generation for content-only updates.
+
+Verification command:
+
+```powershell
+.venv/Scripts/python.exe -m pytest tests/test_chroma_http_content_update.py tests/test_chroma_lexical_analyzer.py tests/test_chroma_lexical_index.py tests/test_chroma_keyword_search.py tests/test_chroma_lexical_recovery.py tests/test_chroma_lexical_public_search.py tests/test_chroma_payload_roundtrip.py tests/test_chroma_list_by_user_filters.py tests/test_qdrant_batch_search.py tests/test_reembed.py -q -o log_cli=false --tb=short --show-capture=no
+```
+
+Result: **195 passed** in 53.01s, Python 3.13.13 / Chroma 1.5.9. No complete
+SDK-suite rerun is claimed. `git diff --check` and Ruff for the new HTTP test file
+passed. Ruff on the changed Chroma store still reports its three pre-existing
+findings (the unused `asyncio` import and two ambiguous `l` names); none occurs
+in the changed lines.

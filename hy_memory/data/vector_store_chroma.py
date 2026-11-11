@@ -298,7 +298,22 @@ class ChromaVectorStore(VectorStoreBase):
                 if new_embedding is not None:
                     kwargs["embeddings"] = [new_embedding]
                 if "content" in updates:  # content 变更同步全文 documents
+                    kwargs["documents"] = [updates["content"]]
                     if new_embedding is None:
+                        if self.config.vector_store.host:
+                            # Collection.update auto-embeds documents. The HTTP
+                            # update endpoint also accepts a partial document
+                            # update without embeddings: use it directly rather
+                            # than reading/restoring a vector another client may
+                            # have updated in the meantime. A local lock cannot
+                            # coordinate writers on other hosts.
+                            self._collection._client._update(
+                                collection_id=self._collection.id,
+                                tenant=self._collection.tenant,
+                                database=self._collection.database,
+                                **kwargs,
+                            )
+                            return True, [point_id]
                         # Chroma otherwise invokes its default embedding model
                         # for documents, despite this being a payload-only update.
                         current = self._collection.get(
@@ -310,7 +325,6 @@ class ChromaVectorStore(VectorStoreBase):
                         if embeddings is None or len(embeddings) == 0:
                             raise ValueError("Existing embedding unavailable for content update")
                         kwargs["embeddings"] = [list(embeddings[0])]
-                    kwargs["documents"] = [updates["content"]]
                 self._collection.update(**kwargs)
                 return True, [point_id]
             if PROJECTION_FIELDS.intersection(updates):
