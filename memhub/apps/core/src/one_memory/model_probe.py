@@ -338,6 +338,16 @@ class ModelProber:
                 headers=headers,
                 json=payload,
             )
+            if (
+                payload is not None
+                and "max_tokens" in payload
+                and url.rstrip("/").endswith("/chat/completions")
+                and _requires_completion_tokens(response)
+            ):
+                await self._check_operation()
+                retry_payload = dict(payload)
+                retry_payload["max_completion_tokens"] = retry_payload.pop("max_tokens")
+                response = await client.request(method, url, headers=headers, json=retry_payload)
         except (httpx.TimeoutException, httpx.NetworkError):
             if _operation.get() is not None:
                 from one_memory.model_probe_operations import ProbeOperationUnavailable
@@ -502,6 +512,21 @@ class ModelProber:
             ),
             False,
         )
+
+
+def _requires_completion_tokens(response: httpx.Response) -> bool:
+    if response.status_code != 400:
+        return False
+    try:
+        body = response.json()
+    except ValueError:
+        return False
+    error = body.get("error") if isinstance(body, dict) else None
+    return (
+        isinstance(error, dict)
+        and error.get("param") == "max_tokens"
+        and "max_completion_tokens" in str(error.get("message", ""))
+    )
 
 
 def measured_width(stages: tuple[ProbeStage, ...]) -> int | None:
