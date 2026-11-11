@@ -277,7 +277,7 @@ Hy Memory and MemHub are versioned and released independently.
 
 ## MemHub 1.0.6 — 2026-11-04
 
-Build 45, on `hy-memory==2.0.14`. Linux x64/arm64 Runtime and macOS arm64
+Build 46, on `hy-memory==2.0.15`. Linux x64/arm64 Runtime and macOS arm64
 App and Runtime.
 
 - MemHub App now exposes the complete memory-mode lifecycle. New installs
@@ -287,7 +287,7 @@ App and Runtime.
   schedule and manual evolve. The memory page shows original conversations in
   lite and advanced memories in pro/ultra. Existing installs remain pro unless
   the user changes them, and embedding maintenance blocks mode/evolve changes.
-- MemHub pins `hy-memory==2.0.14`. Lite search is plain RAG over raw: the
+- MemHub pins `hy-memory==2.0.15`. Lite search is plain RAG over raw: the
   App's lite search, CLI context search, `/api/v1/recall` and the Host Bridge
   (`MemHub_recall`, context search) return every vector hit above the floor,
   ranked by score, over active and shadow raws, so history pro already
