@@ -37,7 +37,7 @@ from collections.abc import Iterator, Sequence  # noqa: E402
 from pathlib import Path  # noqa: E402
 from typing import Any, TextIO  # noqa: E402
 
-from one_memory.config import load_settings  # noqa: E402
+from one_memory.config import Settings, load_settings  # noqa: E402
 from one_memory.runtime_client import RuntimeStatus, inspect_runtime  # noqa: E402
 
 # The startup dialog can only act on the name it is given: running out of disk
@@ -741,6 +741,15 @@ def _status_text(command: str, status: RuntimeStatus) -> str:
 #: authority (`EX_CONFIG`). The Runtime maps it to `sdk_migration_required`.
 SDK_MIGRATION_REQUIRED_EXIT = 78
 
+#: Exit status of a serving Core refused because its port is already bound
+#: (`EX_TEMPFAIL`): whoever holds the port must let go, or the port changes,
+#: before the Core can start. Distinguished from a crash, which exits with the
+#: interpreter's unhandled-error status.
+PORT_IN_USE_EXIT = 75
+
+#: Errnos that mean "another listener owns the address", across platforms.
+_PORT_IN_USE_ERRNOS = frozenset({errno.EADDRINUSE})
+
 
 def _refuse_unmigrated_home(data_dir: Path) -> None:
     """Exit before binding when an existing home has not reached SDK authority.
@@ -802,9 +811,88 @@ def _without_embedding_switch(settings: Any) -> Any:
     return copy(update={"embedding_switch_worker": False}) if callable(copy) else settings
 
 
-def serve(*, maintenance: bool = False) -> None:
+def _port_in_use_explanation(status: RuntimeStatus) -> tuple[str, str]:
+    """The exit code and human sentence for a bind that did not happen.
+
+    `inspect_runtime`'s receipt is the other Core's -- the failing Core has not
+    written its own yet (the receipt is published only after the bind, from the
+    server's lifespan). A receipt whose process still serves this port proves
+    the blocker is this home's own Runtime; anything else leaves the port to
+    some unrelated process.
+    """
+    if status.state == "running" and status.port is not None:
+        code = "core_port_in_use_by_runtime"
+        message = (
+            f"端口 127.0.0.1:{status.port} 已被本数据目录的 MemHub Core 占用"
+            f"（version={status.version or 'unknown'}）。"
+            "先停止它（如 memhub stop / 重启系统服务）或更换 ONE_MEMORY_PORT。"
+        )
+        return code, message
+    code = "core_port_in_use"
+    message = (
+        "端口被其他进程占用（不是本数据目录的 MemHub Core）。"
+        "找出占用 127.0.0.1 端口的进程，或更换 ONE_MEMORY_PORT。"
+    )
+    return code, message
+
+
+def _serve_forever(application: object, settings: Settings) -> None:
+    """Run the server, translating a lost bind race into an exit, not a crash.
+
+    A Core that cannot bind was refused, not broken: the raw `OSError: [Errno
+    98] Address already in use` traceback leaves the operator to guess which
+    process holds the port (and deleting the runtime state files, as #377's
+    reporter had to, is the wrong lever -- the blocker is a process, not a
+    stale receipt). The receipt left by the previous Core says who holds it.
+    """
     import uvicorn
 
+    try:
+        uvicorn.run(
+            application,
+            host=settings.host,
+            port=settings.port,
+            reload=False,
+            access_log=False,
+        )
+    except OSError as error:
+        _serve_forever_refused(
+            error,
+            settings_port=settings.port,
+            data_dir=settings.data_dir,
+            stderr=sys.stderr,
+        )
+
+
+def _serve_forever_refused(
+    error: OSError, *, settings_port: int, data_dir: Path, stderr: object
+) -> None:
+    """Name the process that holds the port, then exit as refused, not broken.
+
+    Split from `_serve_forever` so the refused path is drivable in tests
+    without a real listener; the message content and exit status are the
+    contract the Runtime and scripts read. An OSError that is not the
+    address-in-use refusal is not this path's to answer: rethrown as-is.
+    """
+    if getattr(error, "errno", None) not in _PORT_IN_USE_ERRNOS:
+        raise error
+    from one_memory.diagnostic_log import diagnostic_event
+
+    code, message = _port_in_use_explanation(inspect_runtime(data_dir))
+    diagnostic_event(
+        level="error",
+        component="core.lifecycle",
+        event="core.bind_refused",
+        outcome="refused",
+        instance_id=os.environ.get("ONE_MEMORY_INSTANCE_ID"),
+        details={"code": code, "port": settings_port},
+    )
+    print(code, file=stderr, flush=True)  # type: ignore[arg-type]
+    print(message, file=stderr, flush=True)  # type: ignore[arg-type]
+    raise SystemExit(PORT_IN_USE_EXIT) from error
+
+
+def serve(*, maintenance: bool = False) -> None:
     from one_memory.diagnostic_log import configure_diagnostics, diagnostic_event
     from one_memory.hy_runtime_config import (
         apply_diagnostic_log_level,
@@ -857,21 +945,9 @@ def serve(*, maintenance: bool = False) -> None:
     )
     if maintenance:
         with CoreRuntime(settings, publish_receipt=False):
-            uvicorn.run(
-                application,
-                host=settings.host,
-                port=settings.port,
-                reload=False,
-                access_log=False,
-            )
+            _serve_forever(application, settings)
     else:
-        uvicorn.run(
-            application,
-            host=settings.host,
-            port=settings.port,
-            reload=False,
-            access_log=False,
-        )
+        _serve_forever(application, settings)
 
 
 if __name__ == "__main__":
