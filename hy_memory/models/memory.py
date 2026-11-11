@@ -1191,7 +1191,6 @@ class MemoryMetadata:
             "related_ids": self.related_ids,
             "custom": self.custom,
             "tags": self.tags,
-            "tag_ners": list(self.tag_ners or []),
         }
 
     @classmethod
