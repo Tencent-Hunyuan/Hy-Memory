@@ -697,6 +697,7 @@ class IntentionNode(MemoryNode):
             "trigger_condition": self.trigger_condition,
             "trigger_time": int(self.trigger_time.timestamp()) if self.trigger_time else None,
             "trigger_event_pattern": self.trigger_event_pattern,
+            "trigger_event_embedding": self.trigger_event_embedding,
             "intention_content": self.intention_content,
             "priority": self.priority.value,
             "expiry": int(self.expiry.timestamp()) if self.expiry else None,
