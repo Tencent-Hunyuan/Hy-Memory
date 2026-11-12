@@ -219,6 +219,14 @@ Notes:
   graph server stays refused (on either vector store), reported as a plan
   blocker before anything pauses. A home on Qdrant is never reported as an
   "empty home" whose space can move without re-embedding.
+  The embedding-space registry is one per home, not one per store. A switch
+  on Qdrant retires the old space everywhere, so after `memhub settings
+  backends reset` the home reads the new space on Chroma too, which has no
+  Chroma collections: the Chroma-era memories stay in the old space's files
+  but are not shown. They are never deleted: a retired space that holds
+  records on the store configured now while the live space there is empty is
+  skipped by the retention sweep and refused by cleanup
+  (`embedding_space_only_copy`). The same holds the other way round.
 - **Backup and restore** include the memories since 1.0.7
   ([`backup-v2.md`](backup-v2.md)): the management database and every local
   SDK file, plus on Qdrant an SDK export of the memories with their vectors.

@@ -947,6 +947,34 @@ async def test_cleanup_drops_only_a_retired_space(tmp_path: Path) -> None:
     assert dropped.state == "dropped"
 
 
+async def test_a_retired_space_holding_the_only_records_of_this_store_is_kept(
+    tmp_path: Path,
+) -> None:
+    """One registry, several stores: a space retired by a switch on one is kept on another.
+
+    A switch on Qdrant retires the space whose Chroma collections still hold
+    the Chroma-era memories. Back on Chroma the live space has nothing there:
+    neither the sweep nor a cleanup drops the only copy.
+    """
+    home = Home(tmp_path)
+    old = seed_builtin(home)
+    service = home.service()
+    await run(service, await start(home, service, home.profile()))
+    live = home.spaces.require_live()
+    # This store's view: the new space's collections are elsewhere.
+    for name in list(home.backend.store.collections):
+        if name.startswith(live.collection_base):
+            del home.backend.store.collections[name]
+
+    later = datetime.now(UTC) + timedelta(days=15)
+    assert await service.sweep_retired(now=later) == []
+    with pytest.raises(EmbeddingSwitchError, match="embedding_space_only_copy"):
+        await service.drop_space(old.space_id)
+
+    assert home.spaces.get(old.space_id).state == "retired"
+    assert home.backend.store.space(old.collection_base, 512)
+
+
 def test_derived_space_is_the_profile_s_pre_registry_space() -> None:
     builtin = derived_space(builtin_retrieval_snapshot())
     assert builtin.profile_id is None

@@ -14,7 +14,9 @@ Hy Memory and MemHub are versioned and released independently.
     a server never see or drop each other's collections; the home's Chroma
     files from before the setting are never opened. A switch in ultra on a
     Neo4j/Memgraph graph stays refused (one fixed-width vector index per
-    database).
+    database). The space registry is one per home, so a retired space that
+    still holds the only records of the store configured now is never swept
+    or cleaned up (`embedding_space_only_copy`).
   - **Restore onto Qdrant.** A backup on Qdrant now exports every memory with
     `export_user_memories` (#424): ids, layers, statuses, evolution links,
     times and vectors, raw turns included. A restore onto the same home's

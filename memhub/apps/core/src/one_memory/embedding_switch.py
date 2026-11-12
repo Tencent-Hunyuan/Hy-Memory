@@ -1503,9 +1503,34 @@ class EmbeddingSwitchService:
             return []
         dropped: list[str] = []
         for space in await asyncio.to_thread(self.spaces.expired, now=now):
+            if await self._only_copy(space):
+                logger.warning(
+                    "embedding_retired_space_kept space_id=%s reason=%s",
+                    space.space_id,
+                    SPACE_ONLY_COPY,
+                )
+                continue
             await self.drop_space(space.space_id)
             dropped.append(space.space_id)
         return dropped
+
+    async def _only_copy(self, space: EmbeddingSpace) -> bool:
+        """Whether a retired space holds this store's records while the live one is empty.
+
+        The registry is one per home, the vector stores are several: a space
+        retired by a switch on Qdrant is, in the home's Chroma files, still
+        the space that holds the Chroma-era memories (and the reverse). On
+        the store configured now, a retired space with records beside an
+        empty live space was not retired here, and dropping it would delete
+        the only copy of what this store holds.
+        """
+        scanned = await self.backend.scan()
+        held = _find(scanned, space)
+        if held is None or not held.vectors:
+            return False
+        live = await asyncio.to_thread(self.spaces.live)
+        current = _find(scanned, live) if live is not None else None
+        return current is None or not current.vectors
 
     async def drop_space(self, space_id: str) -> EmbeddingSpace:
         """Delete a retired space's collections and graph now (the user's cleanup)."""
@@ -1519,6 +1544,8 @@ class EmbeddingSwitchService:
             # Qdrant only the configured server's collections are dropped:
             # the home's Chroma files of an earlier era are not touched.
             raise EmbeddingSwitchError(EMBEDDING_SWITCH_UNSUPPORTED)
+        if await self._only_copy(space):
+            raise EmbeddingSwitchError(SPACE_ONLY_COPY)
         await self.backend.drop(self._physical(space))
         live = await asyncio.to_thread(self.spaces.live)
         if (
@@ -1680,6 +1707,11 @@ def _failure_code(error: BaseException) -> str:
     if isinstance(error, EmbeddingSpaceError):
         return error.code
     return "embedding_service_failed"
+
+
+#: A retired space is the only one holding records on the store configured
+#: now (a switch on another store retired it): it is never dropped there.
+SPACE_ONLY_COPY = "embedding_space_only_copy"
 
 
 def default_reembed_backend(
