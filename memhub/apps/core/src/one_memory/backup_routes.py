@@ -19,7 +19,7 @@ import asyncio
 import shutil
 import time
 from collections.abc import AsyncIterator, Awaitable, Callable, Sequence
-from contextlib import asynccontextmanager
+from contextlib import AbstractAsyncContextManager, asynccontextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -38,6 +38,7 @@ from one_memory.memory_backup import (
     SDK_PREFIX,
     BackendIdentity,
     BackupError,
+    QdrantRestore,
     base_manifest,
     copy_files,
     count_layers,
@@ -51,7 +52,7 @@ from one_memory.memory_backup import (
     staging_for,
     write_export,
 )
-from one_memory.storage_backends import StorageBackends
+from one_memory.storage_backends import ResolvedStorage, StorageBackends
 
 #: How long a backup waits for an evolve / mode change to finish, and for the
 #: write drain to put its running job down, before it gives up.
@@ -84,6 +85,11 @@ class BackupHooks:
     schedule_graph_rebuild: Callable[[tuple[str, ...], bool], None]
     after_restore: Callable[[], None]
     runtime_build: str | None = None
+    #: The setting with its secrets (`StorageBackendStore.resolved`).
+    resolved_storage: Callable[[], ResolvedStorage | None] = lambda: None
+    #: A client on the live space's Qdrant collections over scratch local
+    #: files (`memory_backup.QdrantRestore`); None where none can be built.
+    restore_vector_client: Callable[[], AbstractAsyncContextManager[Any]] | None = None
 
 
 class BackupRequest(BaseModel):
@@ -137,6 +143,9 @@ class BackupRestoreResponse(BaseModel):
     duration_ms: int | None = None
     #: `management_database_only_no_memories` for an old backup.
     note: str | None = None
+    #: Onto Qdrant: the server's memories as they were before, kept beside
+    #: the protective copy.
+    previous_vectors_path: str | None = None
 
 
 def _hooks(request: Request) -> BackupHooks:
@@ -235,11 +244,13 @@ async def _create(hooks: BackupHooks, target_name: str) -> BackupResult:
             layer_counts, export = await asyncio.create_task(
                 _read_memories(hooks, backend, users, staging)
             )
-            vector_counts: dict[str, object] = {}
-            if backend.vector == "chroma":
-                from one_memory.hy_sdk_migration import vector_store_counts
+            from one_memory.hy_sdk_migration import vector_store_counts
 
-                vector_counts = dict(await vector_store_counts(data_dir))
+            vector_counts: dict[str, object] = dict(
+                await vector_store_counts(
+                    data_dir, hooks.resolved_storage() if backend.vector == "qdrant" else None
+                )
+            )
             planned = await asyncio.to_thread(plan_files, data_dir)
             release = await quiesced(hooks)
             copy_started = time.monotonic()
@@ -277,7 +288,9 @@ async def _create(hooks: BackupHooks, target_name: str) -> BackupResult:
         )
         counts: dict[str, object] = {
             "layers": layer_counts,
-            "vector_store": vector_counts if backend.vector == "chroma" else None,
+            # On Qdrant: under the home prefix, the Qdrant-only roles included;
+            # a restore refuses what the SDK cannot write back (backup-v2.md).
+            "vector_store": vector_counts,
             "graph": graph_counts,
             "export": export["counts"] if export is not None else None,
         }
@@ -372,6 +385,7 @@ async def restore(hooks: BackupHooks, source_name: str) -> BackupRestoreResponse
                 quiesce=lambda: quiesced(hooks),
                 count_layers_after=hooks.count_layers_after_restore,
                 schedule_graph_rebuild=hooks.schedule_graph_rebuild,
+                qdrant=await asyncio.to_thread(_qdrant_restore, hooks, current),
             )
         finally:
             hooks.after_restore()
@@ -401,6 +415,31 @@ async def restore(hooks: BackupHooks, source_name: str) -> BackupRestoreResponse
         verification=restored.verification.document(),
         graph_rebuild_scheduled=bool(document["graph_rebuild_scheduled"]),
         duration_ms=restored.duration_ms,
+        previous_vectors_path=(
+            str(restored.previous_vectors) if restored.previous_vectors is not None else None
+        ),
+    )
+
+
+def _qdrant_restore(hooks: BackupHooks, current: BackendIdentity) -> QdrantRestore | None:
+    """What writing memories back onto this home's Qdrant server needs; None elsewhere."""
+    if current.kind != "remote_vector" or hooks.restore_vector_client is None:
+        return None
+    storage = hooks.resolved_storage()
+    if storage is None:
+        return None
+    from one_memory.hy_sdk_migration import vector_store_counts
+
+    live = hooks.live_space()
+
+    async def vectors() -> dict[str, dict[str, dict[str, int]]]:
+        return await vector_store_counts(hooks.data_dir, storage)
+
+    return QdrantRestore(
+        client=hooks.restore_vector_client,
+        vectors=vectors,
+        current_users=tuple(hooks.known_users()),
+        current_space_id=live.space_id if live is not None else None,
     )
 
 
@@ -424,11 +463,14 @@ def backup_router(dependencies: Sequence[Depends]) -> APIRouter:
                 raise _refuse(error.code) from error
         backend = BackendIdentity.of(hooks.storage())
         memories: int | None = None
+        dims: int | None = None
         if backend.kind == "remote_vector":
             memories = await _memory_total(hooks)
+            live = await asyncio.to_thread(hooks.live_space)
+            dims = (live.dims or live.name_dims) if live is not None else None
         try:
             planned = await asyncio.to_thread(
-                estimate, hooks.data_dir, backend=backend, memories=memories
+                estimate, hooks.data_dir, backend=backend, memories=memories, dims=dims
             )
         except BackupError as error:
             raise _refuse(error.code) from error

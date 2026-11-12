@@ -50,7 +50,17 @@ const CONFIG_KEYS = [
   "max_concurrency",
   "context_window",
   "disable_thinking",
+  "output_token_parameter",
 ] as const;
+
+const OUTPUT_TOKEN_PARAMETERS = ["max_tokens", "max_completion_tokens"];
+
+function optionalOutputTokenParameter(value: unknown): boolean {
+  return (
+    value === undefined ||
+    (typeof value === "string" && OUTPUT_TOKEN_PARAMETERS.includes(value))
+  );
+}
 
 function text(value: unknown, max: number): value is string {
   return typeof value === "string" && value.length >= 1 && value.length <= max;
@@ -97,6 +107,7 @@ const PATCH_KEYS = [
   "max_concurrency",
   "context_window",
   "disable_thinking",
+  "output_token_parameter",
 ] as const;
 
 function optionalChainText(value: unknown, max: number): boolean {
@@ -202,6 +213,8 @@ export function buildModelProfileUpdateRequest(
     typeof value.disable_thinking !== "boolean"
   )
     throw new ModelProfileInputError("disable_thinking_invalid");
+  if (!optionalOutputTokenParameter(value.output_token_parameter))
+    throw new ModelProfileInputError("output_token_parameter_invalid");
   if (value.clear_api_key === true && value.api_key !== undefined)
     throw new ModelProfileInputError("api_key_and_clear_conflict");
   if (!optionalChainText(value.api_key, 16_384))
@@ -273,6 +286,8 @@ export function buildModelProfileCreateRequest(
     typeof config.disable_thinking !== "boolean"
   )
     throw new ModelProfileInputError("disable_thinking_invalid");
+  if (!optionalOutputTokenParameter(config.output_token_parameter))
+    throw new ModelProfileInputError("output_token_parameter_invalid");
   return {
     path: "/api/v1/model-profiles",
     body: {

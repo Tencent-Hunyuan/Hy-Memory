@@ -59,7 +59,10 @@ a = Analysis(
     # MemHub refuses the `faiss` storage backend, so its ~18 MB driver is never
     # shipped. The SDK imports it inside a function, which PyInstaller still
     # follows when a build machine happens to have it, so it is excluded by name.
-    excludes=['faiss'],
+    # So is psycopg: hy-memory 2.0.16's optional PostgreSQL business store
+    # (`hy-memory[postgres]`) imports it lazily, and MemHub always keeps the
+    # SDK's Coding/Working store in SQLite (`build_sdk_config`).
+    excludes=['faiss', 'psycopg', 'psycopg_binary', 'psycopg_c'],
     noarchive=False,
     optimize=0,
 )

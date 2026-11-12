@@ -319,8 +319,9 @@ class StorageCapability(BaseModel):
     code: str | None = None
 
 
-#: Embedding switch on a vector store the SDK cannot re-embed (Chroma only, as
-#: of hy-memory 2.0.15), or a remote graph in ultra (one fixed-width index).
+#: Embedding switch on a vector store the SDK cannot re-embed (it re-embeds
+#: Chroma and, since hy-memory 2.0.16, Qdrant), or a remote graph in ultra
+#: (one fixed-width vector index per database).
 EMBEDDING_SWITCH_UNSUPPORTED = "embedding_switch_backend_unsupported"
 #: `graph-width` export/rebuild copy or rename the Kuzu file; a server has none.
 GRAPH_EXPORT_UNSUPPORTED = "graph_export_backend_unsupported"
@@ -328,43 +329,52 @@ GRAPH_EXPORT_UNSUPPORTED = "graph_export_backend_unsupported"
 GRAPH_WIDTH_SKIPPED = "graph_width_check_not_kuzu"
 #: The startup open probe and quarantine (#413) guard a Kuzu file only.
 GRAPH_GUARD_SKIPPED = "graph_open_guard_not_kuzu"
-#: The startup stray-space scan and merge read the home's Chroma store.
+#: The startup stray-space scan and merge on a vector store the SDK cannot scan.
 SCAN_SKIPPED = "embedding_scan_skipped_custom_backend"
 MIGRATION_SKIPPED = "upgrade_migration_skipped_custom_backend"
-#: Restoring a backup's memories onto a Qdrant server (`memory_backup`).
-RESTORE_REMOTE_UNSUPPORTED = "backup_restore_remote_sdk_unsupported"
+#: The vector stores the SDK's re-embed module scans, copies and drops
+#: (hy-memory 2.0.16: Chroma and Qdrant). FAISS is refused as a setting.
+REEMBED_VECTOR_PROVIDERS: frozenset[str] = frozenset({"chroma", "qdrant"})
 
 
 def embedding_switch_refusal(settings: StorageBackends, *, mode: str) -> str | None:
     """Why an embedding switch cannot run on these backends now; None if it can.
 
-    The SDK's re-embed copies Chroma collections and Kuzu graphs only. A
-    Neo4j/Memgraph graph is opened only in ultra and keeps one vector index of
-    one width per database, so it blocks a switch only in ultra.
+    The SDK's re-embed copies Chroma and Qdrant collections (2.0.16) and Kuzu
+    graphs. A Neo4j/Memgraph graph is opened only in ultra and keeps one
+    vector index of one width per database, so two spaces cannot live side by
+    side in it: it blocks a switch in ultra, on either vector store.
     """
-    if settings.vector.provider != "chroma":
+    if settings.vector.provider not in REEMBED_VECTOR_PROVIDERS:
         return EMBEDDING_SWITCH_UNSUPPORTED
     if settings.graph.provider != "kuzu" and mode == "ultra":
         return EMBEDDING_SWITCH_UNSUPPORTED
     return None
 
 
+def embedding_scan_skip(settings: StorageBackends) -> str | None:
+    """Why the stray-space scan, merge and cleanup skip this vector store; None if they run.
+
+    They read the configured store through the SDK's scan: the home's Chroma
+    files, or this home's prefixed collections on a Qdrant server.
+    """
+    return None if settings.vector.provider in REEMBED_VECTOR_PROVIDERS else SCAN_SKIPPED
+
+
 def capabilities(settings: StorageBackends, *, mode: str) -> dict[str, StorageCapability]:
     """Per MemHub feature: works, skipped or refused on these backends."""
     kuzu = settings.graph.provider == "kuzu"
-    chroma = settings.vector.provider == "chroma"
     switch = embedding_switch_refusal(settings, mode=mode)
+    scan = embedding_scan_skip(settings)
     return {
         "embedding_switch": StorageCapability(state="refused" if switch else "works", code=switch),
         # A backup holds the memories on every backend: the local stores'
-        # files, and on Qdrant an export through the SDK. Restoring memories
-        # onto Qdrant needs an SDK write that keeps ids and vectors, which
-        # hy-memory 2.0.15 does not have (docs/contracts/backup-v2.md).
+        # files, and on Qdrant an SDK export with ids and vectors. A restore
+        # onto Qdrant writes them back (`import_user_memories`, 2.0.16); a
+        # home with Coding/Working experiences or retrieval clauses there is
+        # refused with a code naming the gap (docs/contracts/backup-v2.md).
         "backup": StorageCapability(state="works"),
-        "restore": StorageCapability(
-            state="works" if chroma else "refused",
-            code=None if chroma else RESTORE_REMOTE_UNSUPPORTED,
-        ),
+        "restore": StorageCapability(state="works"),
         "graph_export": StorageCapability(
             state="works" if kuzu else "refused",
             code=None if kuzu else GRAPH_EXPORT_UNSUPPORTED,
@@ -377,8 +387,8 @@ def capabilities(settings: StorageBackends, *, mode: str) -> dict[str, StorageCa
             code=None if kuzu else GRAPH_WIDTH_SKIPPED,
         ),
         "embedding_space_scan": StorageCapability(
-            state="works" if chroma else "skipped",
-            code=None if chroma else SCAN_SKIPPED,
+            state="skipped" if scan else "works",
+            code=scan,
         ),
         "graph_open_guard": StorageCapability(
             state="works" if kuzu else "skipped",

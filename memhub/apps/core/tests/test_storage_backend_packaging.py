@@ -100,6 +100,19 @@ def test_a_refused_backend_is_neither_pinned_nor_shipped() -> None:
     assert "faiss" in _excluded()
 
 
+def test_the_sdk_postgres_business_store_driver_is_not_shipped() -> None:
+    # hy-memory 2.0.16 adds `hy-memory[postgres]` (psycopg) for an optional
+    # PostgreSQL Coding/Working store. MemHub keeps that store in SQLite, so
+    # the driver is neither pinned, locked, collected nor frozen in.
+    pins = _pinned()
+    assert not any(name.startswith("psycopg") for name in pins)
+    assert "hy-memory[postgres]" not in (CORE / "pyproject.toml").read_text(encoding="utf-8")
+    lock = (CORE / "uv.lock").read_text(encoding="utf-8")
+    assert 'name = "psycopg' not in lock
+    assert not any(name.startswith("psycopg") for name in _collected())
+    assert {"psycopg", "psycopg_binary", "psycopg_c"} <= set(_excluded())
+
+
 def test_the_sdk_modules_ship_once_inside_the_archive() -> None:
     # `.py` copies of the SDK beside the frozen modules are never imported.
     text = SPEC.read_text(encoding="utf-8")

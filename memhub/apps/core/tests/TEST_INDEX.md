@@ -217,6 +217,7 @@
 | `test_obs03_health_probe.py` | `contract` | OBS-03: '/health' answered with the web app instead of a health payload. |
 | `test_observation_gate.py` | `contract` | A7-02: the gate that stops "nothing changed" from being certified blind. |
 | `test_onboarding_profile.py` | `integration` | R-09：首次安装引导把画像录下来，不问用户一句话。 |
+| `test_output_token_parameter.py` | `contract` | A profile's output-token field reaches every generation request (#287, #427). |
 | `test_oversized_file_guard.py` | `contract` | One pass over a source file is bounded by a byte budget, not skipped. |
 | `test_parent_watchdog.py` | `integration` | A Core that outlives its launcher makes the next launch impossible. |
 | `test_pinned_sdk_raw_search.py` | `integration` | MemHub's raw search against the hy-memory wheel it pins, not the repo source. |
@@ -311,6 +312,7 @@
 | `test_storage_backend_neo4j_live.py` | `contract` | A real Neo4j/Memgraph server, when one is named: probe, then an ultra SDK client. |
 | `test_storage_backend_packaging.py` | `contract` | The frozen Core ships every driver a selectable storage backend needs. |
 | `test_storage_backend_qdrant.py` | `contract` | MemHub on a Qdrant vector store, end to end, against the pinned SDK wheel. |
+| `test_storage_backend_qdrant_switch.py` | `contract` | An embedding switch on a Qdrant vector store, end to end, against the pinned SDK. |
 | `test_storage_backends.py` | `contract` | The `storage_backends` setting: what it accepts, where its secrets go, what it builds. |
 | `test_storage_ingest_journal.py` | `contract` | 覆盖 legacy put and reopen never initialize journal、initialized put records final origins create revision and noop、attribution propagation journals old rows as maintenance only 等 11 个场景。 |
 | `test_store_binding.py` | `contract` | A2: which store is in force, and honest reporting of it. |
@@ -335,4 +337,4 @@
 | `test_workspace_recall.py` | `contract` | Workspace memories were unreachable from every host; these pin the way in. |
 | `test_write_queue_lease_renewal.py` | `contract` | Rule 8: a lease must outlive the work it covers, and be renewed while it runs. |
 
-共 330 个测试文件。
+共 332 个测试文件。

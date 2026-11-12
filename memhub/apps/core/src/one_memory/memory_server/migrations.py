@@ -1713,7 +1713,8 @@ CREATE TABLE IF NOT EXISTS model_profiles (
     revision INTEGER NOT NULL,
     is_active INTEGER NOT NULL DEFAULT 0,
     created_at TEXT NOT NULL,
-    updated_at TEXT NOT NULL
+    updated_at TEXT NOT NULL,
+    output_token_parameter TEXT NOT NULL DEFAULT 'max_tokens'
 );
 CREATE UNIQUE INDEX IF NOT EXISTS one_active_model_profile
 ON model_profiles(is_active) WHERE is_active = 1;
@@ -1733,6 +1734,7 @@ CREATE TABLE IF NOT EXISTS model_profile_versions (
     disable_thinking INTEGER NOT NULL DEFAULT 0,
     secret_ref TEXT,
     created_at TEXT NOT NULL,
+    output_token_parameter TEXT NOT NULL DEFAULT 'max_tokens',
     PRIMARY KEY (profile_id, revision),
     FOREIGN KEY (profile_id) REFERENCES model_profiles(profile_id) ON DELETE CASCADE
 );
@@ -1762,6 +1764,7 @@ CREATE TABLE IF NOT EXISTS model_profiles (
     is_active TINYINT(1) NOT NULL DEFAULT 0,
     created_at DATETIME(6) NOT NULL,
     updated_at DATETIME(6) NOT NULL,
+    output_token_parameter VARCHAR(32) NOT NULL DEFAULT 'max_tokens',
     #: Emulates SQLite's partial index `WHERE is_active = 1`.
     #:
     #: MySQL has no partial indexes, and a plain UNIQUE on `is_active` would be
@@ -1791,6 +1794,7 @@ CREATE TABLE IF NOT EXISTS model_profile_versions (
     disable_thinking TINYINT(1) NOT NULL DEFAULT 0,
     secret_ref VARCHAR(512) NULL,
     created_at DATETIME(6) NOT NULL,
+    output_token_parameter VARCHAR(32) NOT NULL DEFAULT 'max_tokens',
     PRIMARY KEY (profile_id, revision),
     CONSTRAINT fk_profile_versions_profile FOREIGN KEY (profile_id)
         REFERENCES model_profiles(profile_id) ON DELETE CASCADE

@@ -14,7 +14,7 @@ from __future__ import annotations
 import asyncio
 import json
 import sqlite3
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from contextlib import closing, contextmanager
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
@@ -31,6 +31,7 @@ from hy_memory import (
 
 from one_memory.database_access import main_database
 from one_memory.hy_runtime_config import HY_MEMORY_NAMESPACE
+from one_memory.storage_backends import ResolvedStorage
 
 # v2 reads the backfill's governed_memory_evidence links; v1 missed them.
 _METADATA_REPAIR_VERSION = 2
@@ -82,15 +83,42 @@ def restore_data_plane(
     )
 
 
-async def vector_store_counts(data_dir: Path) -> dict[str, dict[str, dict[str, int]]]:
-    """Every record of the home's Chroma store, per space, role and `user_id`.
+async def vector_store_counts(
+    data_dir: Path, storage: ResolvedStorage | None = None
+) -> dict[str, dict[str, dict[str, int]]]:
+    """Every record of the home's vector store, per space, role and `user_id`.
 
     The backup's store-level count (`memory_backup`): taken while writes are
     paused and checked again after a restore. Read-only, through the SDK's own
     scan (the same one the startup stray-space scan uses), so it runs beside
     live SDK clients exactly as the embedding switch's scan does. A space is
     keyed `<collection base>|<width>` (`auto` for an unsuffixed space).
+
+    With a Qdrant `storage`, the server's collections under this home's
+    prefix (keyed without it), the Qdrant-only roles included: a restore
+    reads them to refuse what the SDK cannot write back.
     """
+    if storage is not None and storage.vector_provider == "qdrant":
+        backend = SdkReembedBackend(data_dir, storage=lambda: storage)
+        qdrant = backend._qdrant()
+        assert qdrant is not None
+        with backend._clients_closed():
+            found = await hy_memory.scan_vector_spaces(
+                provider="qdrant",
+                host=qdrant.vector_host,
+                port=qdrant.vector_port,
+                api_key=qdrant.vector_api_key,
+                prefix=f"{qdrant.vector_prefix}_",
+                per_user=True,
+            )
+        return {
+            f"{backend._unprefixed(qdrant, str(item.base_name))}|"
+            f"{item.dims if item.dims else 'auto'}": {
+                str(role): {str(user): int(count) for user, count in entry.per_user.items()}
+                for role, entry in item.roles.items()
+            }
+            for item in found
+        }
     backend = SdkReembedBackend(data_dir)
     if not (backend.persist_directory / "chroma.sqlite3").is_file():
         return {}
@@ -544,7 +572,7 @@ def _ensure_coding_schema(path: Path) -> None:
         CodingMemoryStore,
     )
 
-    # Relies on the pinned SDK's internals (hy-memory==2.0.15 is pinned exactly).
+    # Relies on the pinned SDK's internals (hy-memory==2.0.16 is pinned exactly).
     store = CodingMemoryStore.__new__(CodingMemoryStore)
     store._db_path = str(path)
     store._conn = None
@@ -574,6 +602,10 @@ _REEMBED_API = (
     "drop_graph",
     "ReembedCancelled",
 )
+#: What a Qdrant re-embed adds (hy-memory 2.0.16, `VectorSpace(provider="qdrant")`).
+_QDRANT_REEMBED_API = ("close_vector_clients",)
+#: The roles only a Qdrant space has (`hy_memory.reembed.QDRANT_EXTRA_ROLES`).
+_QDRANT_EXTRA_ROLES = ("tag_index", "retrieval_clauses")
 
 
 class SdkReembedBackend:
@@ -583,20 +615,49 @@ class SdkReembedBackend:
     SDK's own settings, so they share its client system. The graph functions
     refuse a graph a live client holds open; the switch closes them first.
 
-    Chroma and Kuzu only, as the SDK's re-embed is (hy-memory 2.0.15). With
-    another store configured (`storage_backends`) the switch never gets here:
-    `EmbeddingSwitchService.storage_refusal` refuses it and `chroma_is_live`
-    keeps the startup scan and every cleanup off the Chroma files.
+    The vector store is the one this home's clients are configured with
+    (`storage`, read at every call): the home's Chroma directory, or a Qdrant
+    server (hy-memory 2.0.16). On Qdrant every physical name carries the
+    home's collection prefix: a scan lists only collections under it, the
+    names passed to the SDK are prefixed, and a drop refuses any name outside
+    it, so two homes on one server never see or drop each other's
+    collections. The SDK's two Qdrant-only roles (the tag index and the
+    retrieval-clause index beside a memory collection) are part of each
+    space. The graph half stays Kuzu only; a Neo4j/Memgraph graph in ultra is
+    refused before the switch gets here (`EmbeddingSwitchService.storage_refusal`).
     """
 
-    def __init__(self, data_dir: Path) -> None:
+    def __init__(
+        self,
+        data_dir: Path,
+        *,
+        storage: Callable[[], ResolvedStorage | None] | None = None,
+    ) -> None:
         self.data_dir = data_dir
         self.root = data_dir.resolve() / "hy-memory" / HY_MEMORY_NAMESPACE
         self.persist_directory = self.root / "vector"
         self._chroma_opened = False
+        self._storage = storage or (lambda: None)
+
+    def _qdrant(self) -> ResolvedStorage | None:
+        """The Qdrant server this home's vectors live on; None on Chroma."""
+        storage = self._storage()
+        if storage is None or storage.vector_provider != "qdrant":
+            return None
+        if not storage.vector_host or not storage.vector_prefix:
+            # MemHub only configures a prefixed Qdrant server
+            # (`storage_backends`); anything else is no store to touch.
+            from one_memory.embedding_backend import ReembedUnavailableError
+
+            raise ReembedUnavailableError("embedding_switch_backend_unsupported")
+        return storage
 
     def unavailable_reason(self) -> str | None:
-        missing = [name for name in _REEMBED_API if not hasattr(hy_memory, name)]
+        wanted = _REEMBED_API
+        storage = self._storage()
+        if storage is not None and storage.vector_provider == "qdrant":
+            wanted = (*_REEMBED_API, *_QDRANT_REEMBED_API)
+        missing = [name for name in wanted if not hasattr(hy_memory, name)]
         return "sdk_reembed_unavailable" if missing else None
 
     def _sdk(self) -> Any:
@@ -616,6 +677,10 @@ class SdkReembedBackend:
         """
         if self._chroma_opened or not self.persist_directory.is_dir():
             return
+        if self._qdrant() is not None:
+            # On Qdrant the home's Chroma files belong to the store that was
+            # left; nothing here opens them.
+            return
         import chromadb
 
         from one_memory.hy_sdk_runtime import first_store_open
@@ -625,28 +690,93 @@ class SdkReembedBackend:
         self._chroma_opened = True
 
     def _vector_space(self, space: Any) -> Any:
-        return self._sdk().VectorSpace(
-            base_name=space.collection_base,
+        sdk = self._sdk()
+        qdrant = self._qdrant()
+        if qdrant is None:
+            return sdk.VectorSpace(
+                base_name=space.collection_base,
+                dims=space.dims,
+                persist_directory=str(self.persist_directory),
+                model=space.model,
+                collections=space.names(),
+            )
+        # Core names a space without the home prefix (one registry for every
+        # store); the server's collections carry it.
+        names = {
+            role: qdrant.collection_name(name)
+            for role, name in space.names().items()
+            if role not in _QDRANT_EXTRA_ROLES
+        }
+        if "memory" in names:
+            names.update(self._qdrant_extra_names(names["memory"]))
+        return sdk.VectorSpace(
+            base_name=qdrant.collection_name(space.collection_base),
             dims=space.dims,
-            persist_directory=str(self.persist_directory),
+            host=qdrant.vector_host,
+            port=qdrant.vector_port,
+            api_key=qdrant.vector_api_key,
             model=space.model,
-            collections=space.names(),
+            collections=names,
+            provider="qdrant",
         )
+
+    def _qdrant_extra_names(self, memory: str) -> dict[str, str]:
+        """The SDK's own names for the Qdrant-only roles beside ``memory``."""
+        derived = self._sdk().VectorSpace(base_name=memory, dims=None, provider="qdrant").names()
+        return {role: str(derived[role]) for role in _QDRANT_EXTRA_ROLES if role in derived}
+
+    @staticmethod
+    def _unprefixed(qdrant: ResolvedStorage | None, name: str) -> str:
+        if qdrant is None:
+            return name
+        prefix = f"{qdrant.vector_prefix}_"
+        return name[len(prefix) :] if name.startswith(prefix) else name
+
+    @contextmanager
+    def _clients_closed(self) -> Iterator[None]:
+        """Close the Qdrant clients re-embed opened once a call is done.
+
+        The next call opens them with the credentials configured then; a
+        cached client would keep an API key the person has since replaced.
+        """
+        try:
+            yield
+        finally:
+            if self._qdrant() is not None:
+                self._sdk().close_vector_clients()
 
     async def scan(self, *, per_user: bool = False) -> tuple[Any, ...]:
         from one_memory.embedding_backend import ScannedSpace
 
-        if not self.persist_directory.is_dir():
-            return ()
-        await asyncio.to_thread(self._open_chroma_once)
-        found = await self._sdk().scan_vector_spaces(str(self.persist_directory), per_user=per_user)
+        qdrant = self._qdrant()
+        if qdrant is None:
+            if not self.persist_directory.is_dir():
+                return ()
+            await asyncio.to_thread(self._open_chroma_once)
+            found = await self._sdk().scan_vector_spaces(
+                str(self.persist_directory), per_user=per_user
+            )
+        else:
+            with self._clients_closed():
+                found = await self._sdk().scan_vector_spaces(
+                    provider="qdrant",
+                    host=qdrant.vector_host,
+                    port=qdrant.vector_port,
+                    api_key=qdrant.vector_api_key,
+                    # Only this home's collections, never another home's.
+                    prefix=f"{qdrant.vector_prefix}_",
+                    per_user=per_user,
+                )
         return tuple(
             ScannedSpace(
-                collection_base=str(item.base_name),
+                collection_base=self._unprefixed(qdrant, str(item.base_name)),
                 name_dims=item.dims,
                 width=item.width,
                 counts={role: int(entry.count) for role, entry in item.roles.items()},
-                collections={role: str(entry.name) for role, entry in item.roles.items()},
+                collections={
+                    role: self._unprefixed(qdrant, str(entry.name))
+                    for role, entry in item.roles.items()
+                },
                 per_user=dict(item.per_user) if per_user else {},
             )
             for item in found
@@ -654,9 +784,10 @@ class SdkReembedBackend:
 
     async def diff(self, source: Any, target: Any) -> dict[str, int]:
         await asyncio.to_thread(self._open_chroma_once)
-        result = await self._sdk().diff_spaces(
-            self._vector_space(source), self._vector_space(target)
-        )
+        with self._clients_closed():
+            result = await self._sdk().diff_spaces(
+                self._vector_space(source), self._vector_space(target)
+            )
         return {role: len(ids) for role, ids in result.missing.items()}
 
     async def reembed(
@@ -687,7 +818,7 @@ class SdkReembedBackend:
                 )
             )
 
-        with self._translated():
+        with self._clients_closed(), self._translated():
             await sdk.reembed_vector_space(
                 self._vector_space(source),
                 self._vector_space(target),
@@ -704,7 +835,7 @@ class SdkReembedBackend:
         from one_memory.embedding_backend import VectorCheck
 
         await asyncio.to_thread(self._open_chroma_once)
-        with self._translated():
+        with self._clients_closed(), self._translated():
             result = await self._sdk().verify_reembed(
                 self._vector_space(source),
                 self._vector_space(target),
@@ -769,7 +900,16 @@ class SdkReembedBackend:
 
     async def drop(self, space: Any) -> None:
         await asyncio.to_thread(self._open_chroma_once)
-        await self._sdk().drop_vector_space(self._vector_space(space))
+        qdrant = self._qdrant()
+        if qdrant is None:
+            await self._sdk().drop_vector_space(self._vector_space(space))
+            return
+        with self._clients_closed():
+            # The SDK drops nothing if one name is outside the home's prefix:
+            # a shared server holds other homes' collections.
+            await self._sdk().drop_vector_space(
+                self._vector_space(space), require_prefix=f"{qdrant.vector_prefix}_"
+            )
 
     async def drop_graph(self, path: Path) -> None:
         await self._sdk().drop_graph(path)

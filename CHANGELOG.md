@@ -4,6 +4,52 @@ Hy Memory and MemHub are versioned and released independently.
 
 ## Unreleased
 
+- MemHub: pinned to `hy-memory==2.0.16` and uses what it adds.
+  - **Embedding switch on Qdrant.** The SDK now re-embeds Qdrant collections
+    (#422), so `embedding_switch_backend_unsupported` is lifted on Qdrant and
+    the startup stray-space scan, merge, retention sweep and space cleanup run
+    there too. The re-embed is handed the configured server (host, port, API
+    key) and every name carries this home's collection prefix: a scan lists
+    only `<prefix>_*`, and a drop refuses any name outside it, so homes sharing
+    a server never see or drop each other's collections; the home's Chroma
+    files from before the setting are never opened. A switch in ultra on a
+    Neo4j/Memgraph graph stays refused (one fixed-width vector index per
+    database). The space registry is one per home, so a retired space that
+    still holds the only records of the store configured now is never swept
+    or cleaned up (`embedding_space_only_copy`).
+  - **Restore onto Qdrant.** A backup on Qdrant now exports every memory with
+    `export_user_memories` (#424): ids, layers, statuses, evolution links,
+    times and vectors, raw turns included. A restore onto the same home's
+    namespace writes them back with `import_user_memories` after the local
+    files are swapped, keeps the server's previous memories in
+    `backups/pre-restore-*.memhub-previous-vectors.jsonl`, and on any failure
+    writes those back before the files roll back.
+    `backup_restore_remote_sdk_unsupported` is gone. What 2.0.16 still cannot
+    carry is refused before anything changes, with a code naming the gap:
+    Coding/Working experience vectors
+    (`backup_restore_qdrant_experiences_unsupported`) and the retrieval-clause
+    index (`backup_restore_qdrant_retrieval_clauses_unsupported`); also a
+    pre-2.0.16 export without vectors (`backup_restore_export_without_vectors`),
+    a backup of another embedding space (`backup_restore_qdrant_space_changed`)
+    and the offline `one-memory restore`, which has no SDK client
+    (`backup_restore_vector_client_unavailable`).
+  - **Output token parameter** (#421): a model profile names the field its
+    provider takes for the output budget, `max_tokens` (default) or
+    `max_completion_tokens`. The SDK config, the model probe and both Q&A paths
+    send the same field; a probe refused for the field fails with
+    `output_token_parameter_rejected` instead of passing on a retry the SDK
+    would not make. Supersedes #427; refs #287.
+  - A Coding/Working edit whose new text cannot be embedded (#399) answers
+    503 `memory_update_embedding_failed` (the stored memory is unchanged). A
+    chat edit whose graph node could not be updated (#439) still succeeds and
+    says so in `X-Memory-Graph-Sync: failed`. An embedding response with a
+    malformed index mapping (#437) fails its write once and does not pause
+    the provider.
+  - Build: 2.0.16's `hy-memory[postgres]` extra (`psycopg`) is not installed
+    and is excluded from the frozen Core; MemHub keeps the SDK's Coding/Working
+    store in SQLite (`business_store` is always set to `sqlite`, so
+    `MEMORY_BUSINESS_STORE` has no effect). The SBOM and notices are
+    regenerated from the installed tree (only `hy-memory` changes).
 - MemHub: backups now include the memories. A backup (`memhub backup create`,
   `POST /api/v1/backup`) used to hold only MemHub's management database; the
   memories and raw turns in the SDK stores under `hy-memory/` were never in

@@ -74,7 +74,11 @@ from one_memory.model_profiles import (
     ProviderKind,
 )
 from one_memory.secrets import SecretStore, SecretStoreUnavailableError
-from one_memory.storage_backends import EMBEDDING_SWITCH_UNSUPPORTED, SCAN_SKIPPED
+from one_memory.storage_backends import (
+    EMBEDDING_SWITCH_UNSUPPORTED,
+    SCAN_SKIPPED,
+    ResolvedStorage,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -350,6 +354,7 @@ class EmbeddingSwitchService:
         storage_refusal: Callable[[], str | None] = lambda: None,
         chroma_is_live: Callable[[], bool] = lambda: True,
         kuzu_is_live: Callable[[], bool] = lambda: True,
+        scan_skip: Callable[[], str | None] | None = None,
     ) -> None:
         self.database_path = database_path
         self.data_dir = data_dir
@@ -372,6 +377,11 @@ class EmbeddingSwitchService:
         #: Then nothing here opens the home's Chroma files: they hold the
         #: memories of the store that was left, and stay exactly as they were.
         self.chroma_is_live = chroma_is_live
+        #: Why the configured vector store cannot be scanned, merged into or
+        #: cleaned up (`storage_backends.embedding_scan_skip`); None when it
+        #: can. Chroma and Qdrant (hy-memory 2.0.16) both can. Without the
+        #: hook, a store that is not the home's Chroma is skipped.
+        self.scan_skip = scan_skip or (lambda: None if self.chroma_is_live() else SCAN_SKIPPED)
         #: False while a Neo4j/Memgraph graph is configured. Then a switch
         #: (allowed outside ultra) neither re-embeds, verifies nor drops a Kuzu
         #: graph: those files are the graph of the store that was left.
@@ -921,14 +931,15 @@ class EmbeddingSwitchService:
     async def scan_and_merge(self) -> str | None:
         """The startup scan. Returns the merge job it started, if any.
 
-        Skipped on a custom storage backend: the scan reads the home's Chroma
-        store, which then holds only the memories of the backend that was left.
-        Merging those into nothing, or retiring them, would rewrite data the
-        person did not ask to move. `scan_state` is `done` and `scan_error`
-        names the skip.
+        The scan reads the configured vector store: the home's Chroma files, or
+        this home's collections on a Qdrant server (under its prefix). A store
+        the backend cannot scan is skipped (`scan_skip`): `scan_state` is
+        `done` and `scan_error` names the skip. The Chroma files of a store
+        that was left are never scanned, merged or retired.
         """
-        if not self.chroma_is_live():
-            self.scan_state, self.scan_error = "done", SCAN_SKIPPED
+        skip = self.scan_skip()
+        if skip is not None:
+            self.scan_state, self.scan_error = "done", skip
             return None
         reason = self.backend.unavailable_reason()
         if reason is not None:
@@ -1488,13 +1499,38 @@ class EmbeddingSwitchService:
 
     async def sweep_retired(self, *, now: datetime | None = None) -> list[str]:
         """Drop every retired space past its keep-until date. Never the live one."""
-        if not self.chroma_is_live() or self.backend.unavailable_reason() is not None:
+        if self.scan_skip() is not None or self.backend.unavailable_reason() is not None:
             return []
         dropped: list[str] = []
         for space in await asyncio.to_thread(self.spaces.expired, now=now):
+            if await self._only_copy(space):
+                logger.warning(
+                    "embedding_retired_space_kept space_id=%s reason=%s",
+                    space.space_id,
+                    SPACE_ONLY_COPY,
+                )
+                continue
             await self.drop_space(space.space_id)
             dropped.append(space.space_id)
         return dropped
+
+    async def _only_copy(self, space: EmbeddingSpace) -> bool:
+        """Whether a retired space holds this store's records while the live one is empty.
+
+        The registry is one per home, the vector stores are several: a space
+        retired by a switch on Qdrant is, in the home's Chroma files, still
+        the space that holds the Chroma-era memories (and the reverse). On
+        the store configured now, a retired space with records beside an
+        empty live space was not retired here, and dropping it would delete
+        the only copy of what this store holds.
+        """
+        scanned = await self.backend.scan()
+        held = _find(scanned, space)
+        if held is None or not held.vectors:
+            return False
+        live = await asyncio.to_thread(self.spaces.live)
+        current = _find(scanned, live) if live is not None else None
+        return current is None or not current.vectors
 
     async def drop_space(self, space_id: str) -> EmbeddingSpace:
         """Delete a retired space's collections and graph now (the user's cleanup)."""
@@ -1503,10 +1539,13 @@ class EmbeddingSwitchService:
             raise EmbeddingSwitchError("embedding_space_not_found")
         if space.state != "retired":
             raise EmbeddingSwitchError("embedding_space_not_retired")
-        if not self.chroma_is_live():
-            # A retired space lives in the Chroma store this home used before;
-            # on another vector store that store is left exactly as it was.
+        if self.scan_skip() is not None:
+            # A store the backend cannot reach is left exactly as it was. On
+            # Qdrant only the configured server's collections are dropped:
+            # the home's Chroma files of an earlier era are not touched.
             raise EmbeddingSwitchError(EMBEDDING_SWITCH_UNSUPPORTED)
+        if await self._only_copy(space):
+            raise EmbeddingSwitchError(SPACE_ONLY_COPY)
         await self.backend.drop(self._physical(space))
         live = await asyncio.to_thread(self.spaces.live)
         if (
@@ -1670,11 +1709,22 @@ def _failure_code(error: BaseException) -> str:
     return "embedding_service_failed"
 
 
-def default_reembed_backend(data_dir: Path) -> ReembedBackend:
-    """The SDK-backed re-embed functions for this home (tests replace this)."""
+#: A retired space is the only one holding records on the store configured
+#: now (a switch on another store retired it): it is never dropped there.
+SPACE_ONLY_COPY = "embedding_space_only_copy"
+
+
+def default_reembed_backend(
+    data_dir: Path, *, storage: Callable[[], ResolvedStorage | None] | None = None
+) -> ReembedBackend:
+    """The SDK-backed re-embed functions for this home (tests replace this).
+
+    `storage` is the configured backend pair with its secrets, read at every
+    call: None (or a Chroma setting) is the home's Chroma directory.
+    """
     from one_memory.hy_sdk_migration import SdkReembedBackend
 
-    return SdkReembedBackend(data_dir)
+    return SdkReembedBackend(data_dir, storage=storage)
 
 
 def _owned_elsewhere(row: sqlite3.Row, pid: int) -> bool:

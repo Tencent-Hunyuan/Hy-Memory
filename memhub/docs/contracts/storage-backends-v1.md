@@ -191,37 +191,49 @@ mode. `works` / `skipped` (nothing to do there, nothing touched) / `refused`
 | Feature | Kuzu + Chroma | Neo4j/Memgraph graph | Qdrant vectors |
 |---|---|---|---|
 | Write, read, search, recall, lite raw RAG, delete, library counts, multi-user isolation | works | works (SDK) | works (SDK) |
-| Embedding switch (plan, pause, re-embed, verify, commit) | works | pro/lite: works; **ultra: refused** `embedding_switch_backend_unsupported` | **refused** `embedding_switch_backend_unsupported` |
+| Embedding switch (plan, pause, re-embed, verify, commit) | works | pro/lite: works; **ultra: refused** `embedding_switch_backend_unsupported` | works (SDK re-embed, 2.0.16); with a Neo4j/Memgraph graph in ultra **refused** as in the column before |
 | Embedding-space registry and collection naming | works | works | works; names carry the home prefix |
-| Startup stray-space scan and merge, retention sweep, space cleanup | works | works | **skipped** `embedding_scan_skipped_custom_backend`; cleanup refused |
+| Startup stray-space scan and merge, retention sweep, space cleanup | works | works | works on this home's prefixed collections only; the Chroma files of an earlier era are never touched |
 | Graph open probe and quarantine (#413) | works | **skipped** `graph_open_guard_not_kuzu` | works |
 | Graph width check | works | **skipped** (no mismatch reported) | works |
 | `graph-width` export / rebuild | works | **refused** `graph_export_backend_unsupported` | works |
 | Graph backfill and evolve | works | works (SDK; backfill starts when the graph moves) | works |
 | Memory map (graph view) | works | works (same Cypher) | works |
-| Backup create (memories included, `backup-v2.md`) | works | works (local files; the server graph is derived) | works (local files + SDK export) |
-| Restore of a backup's memories | works | works; the graph is rebuilt | **refused** `backup_restore_remote_sdk_unsupported` |
+| Backup create (memories included, `backup-v2.md`) | works | works (local files; the server graph is derived) | works (local files + SDK export with vectors) |
+| Restore of a backup's memories | works | works; the graph is rebuilt | works (SDK import with ids and vectors); **refused** with Coding/Working experiences or retrieval clauses on Qdrant (`backup-v2.md` §5) |
 | Upgrade migrations (`sdk-migrate`, `sdk-migration-status`) | work | **skipped** `upgrade_migration_skipped_custom_backend` | **skipped** |
 
 Notes:
 
-- **Embedding switch.** The SDK's re-embed (hy-memory 2.0.15) copies Chroma
-  collections and Kuzu graphs only. A Neo4j/Memgraph database keeps one vector
-  index of one width and cannot hold two spaces side by side. The refusal is
-  reported as a plan blocker before anything pauses. A home on Qdrant is never
-  reported as an "empty home" whose space can move without re-embedding. To
-  change the embedding model, `memhub settings backends reset` (memories stay
-  on Qdrant), switch the model on Chroma, then set Qdrant again: the new
-  space's Qdrant collections start empty. Follow-up: SDK re-embed for Qdrant
-  (Tencent-Hunyuan/Hy-Memory#422, not yet released). Once MemHub pins a release
-  containing it, `SdkReembedBackend` can pass the Qdrant location and this
-  home's prefix, and the refusal on Qdrant can be lifted. The refusal for a
-  Neo4j/Memgraph graph in ultra stays.
+- **Embedding switch.** The SDK's re-embed copies Chroma and, since
+  hy-memory 2.0.16 (Tencent-Hunyuan/Hy-Memory#422), Qdrant collections, and
+  Kuzu graphs. On Qdrant, `SdkReembedBackend` passes the configured server
+  (host, port, API key) and names every collection with this home's prefix:
+  the scan lists only collections under `<prefix>_`, and a drop refuses any
+  name outside it (`require_prefix`), so homes that share a server never see
+  or drop each other's spaces. The two Qdrant-only roles beside a memory
+  collection (`_tag_index`, `__retrieval_clauses`) are re-embedded with it.
+  The SDK's Qdrant clients are closed after every call, so a replaced API key
+  is never reused. A Neo4j/Memgraph database keeps one vector index of one
+  width and cannot hold two spaces side by side, so a switch in ultra on a
+  graph server stays refused (on either vector store), reported as a plan
+  blocker before anything pauses. A home on Qdrant is never reported as an
+  "empty home" whose space can move without re-embedding.
+  The embedding-space registry is one per home, not one per store. A switch
+  on Qdrant retires the old space everywhere, so after `memhub settings
+  backends reset` the home reads the new space on Chroma too, which has no
+  Chroma collections: the Chroma-era memories stay in the old space's files
+  but are not shown. They are never deleted: a retired space that holds
+  records on the store configured now while the live space there is empty is
+  skipped by the retention sweep and refused by cleanup
+  (`embedding_space_only_copy`). The same holds the other way round.
 - **Backup and restore** include the memories since 1.0.7
   ([`backup-v2.md`](backup-v2.md)): the management database and every local
-  SDK file, plus on Qdrant an export of the memories through the SDK. A
-  restore onto Qdrant is refused until the SDK can write memories back with
-  their ids and vectors; a restore across backends is refused
+  SDK file, plus on Qdrant an SDK export of the memories with their vectors.
+  A restore onto Qdrant writes them back with their ids, statuses, links,
+  times and vectors (`import_user_memories`), and refuses, with a code naming
+  the gap, what 2.0.16 cannot carry: Coding/Working experience vectors and
+  the retrieval-clause index. A restore across backends is refused
   (`backup_restore_backend_mismatch`). On a Neo4j/Memgraph graph the restore
   rebuilds the server's graph from the restored facts. Server-side snapshots
   (Neo4j `neo4j-admin database dump`, Qdrant snapshots) remain the way to back

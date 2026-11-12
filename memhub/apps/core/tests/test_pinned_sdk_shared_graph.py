@@ -4,11 +4,12 @@ Core holds the read handle's client and the write coordinator's client at the
 same time, both on the live space's graph. Up to hy-memory 2.0.14 each opened
 its own `kuzu.Database` on that file: Kuzu's file lock is per process, so the
 second open was not refused, and the two databases' checkpoints overwrote
-each other (nodes lost on reopen). 2.0.15 keeps one `kuzu.Database` per file
-per process, shared by reference count, and bounds its buffer pool and
-threads. This drives the real wheel in a child interpreter started with `-I`
-(the suite's pythonpath would otherwise import the repo's `hy_memory/`), over
-a temp data dir and a local OpenAI-compatible embedding endpoint.
+each other (nodes lost on reopen). Since 2.0.15 the SDK keeps one
+`kuzu.Database` per file per process, shared by reference count, and bounds
+its buffer pool and threads; this runs against the pinned release (2.0.16).
+This drives the real wheel in a child interpreter started with `-I` (the
+suite's pythonpath would otherwise import the repo's `hy_memory/`), over a
+temp data dir and a local OpenAI-compatible embedding endpoint.
 """
 
 from __future__ import annotations

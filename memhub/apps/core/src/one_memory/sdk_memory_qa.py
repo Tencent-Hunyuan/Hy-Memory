@@ -30,6 +30,7 @@ from one_memory.model_profiles import (
     ModelProfileStore,
     ProviderKind,
     attach_disable_thinking,
+    output_token_field,
 )
 from one_memory.sdk_search_options import SdkSearchFilters, SearchLane
 from one_memory.secrets import SecretStore, SecretStoreUnavailableError
@@ -483,7 +484,7 @@ def _sdk_answer_request(
         "messages": messages,
         "stream": stream,
         "temperature": 0.1,
-        "max_tokens": 768,
+        output_token_field(profile): 768,
     }
     if profile.capabilities.structured_output:
         payload["response_format"] = {

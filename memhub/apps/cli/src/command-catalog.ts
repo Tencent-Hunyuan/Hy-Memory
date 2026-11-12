@@ -369,7 +369,7 @@ export const COMMANDS: readonly CommandDescriptor[] = [
       {
         flag: "--config-file <path>",
         summary:
-          "有界 JSON 模型配置，不能含 api_key；edit 的补丁必须带 expected_revision。",
+          '有界 JSON 模型配置，不能含 api_key；edit 的补丁必须带 expected_revision。服务拒绝 max_tokens（检测结果 output_token_parameter_rejected）时设 "output_token_parameter": "max_completion_tokens"。',
       },
       {
         flag: "--api-key-file <path>",
