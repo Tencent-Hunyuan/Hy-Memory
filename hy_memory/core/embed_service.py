@@ -232,6 +232,42 @@ def _embeddings_api_url(base_url: str) -> str:
     return f"{base}/embeddings"
 
 
+class EmbeddingIndexMappingError(ValueError):
+    """The response's ``index`` fields do not map one-to-one onto the inputs.
+
+    A provider that returns this once will return it again for the same
+    request, so it is not retried.
+    """
+
+
+def _order_by_response_index(data: List[Any], expected: int) -> List[Any]:
+    """Return response items in input order.
+
+    OpenAI-compatible servers that omit ``index`` on every item are taken in
+    response order. Once any item carries an index, the indices must be exactly
+    ``0..expected-1``: no duplicates, gaps, out-of-range, non-int or bool values.
+    """
+    items = list(data)
+    indices = [getattr(item, "index", None) for item in items]
+    if all(index is None for index in indices):
+        logger.debug(
+            "[embed] response items carry no index; keeping response order "
+            f"for {len(items)} item(s)"
+        )
+        return items
+    if not all(type(index) is int for index in indices) or sorted(indices) != list(
+        range(expected)
+    ):
+        raise EmbeddingIndexMappingError(
+            "Embedding index mismatch: expected indices 0.."
+            f"{expected - 1} once each, got {indices!r}"
+        )
+    ordered: List[Any] = [None] * expected
+    for index, item in zip(indices, items):
+        ordered[index] = item
+    return ordered
+
+
 @dataclass
 class EmbedServiceConfig:
     """
@@ -974,22 +1010,24 @@ class EmbedService:
                     k: v for k, v in raw.headers.items()
                     if k.lower() not in _SENSITIVE_HEADER_KEYS
                 }
-                # 按 index 排序后再取向量：OpenAI embedding 协议规定每个 item 带
+                # 按 index 还原输入顺序：OpenAI embedding 协议规定每个 item 带
                 # index（对应 input 数组下标），但**不保证 data 数组本身有序**。
                 # 批量请求（一次发多条）下若直接按 data 顺序取，可能把向量配错文本。
-                # 单条请求时排序是 no-op，无额外开销。
-                _data = sorted(
-                    response.data,
-                    key=lambda it: getattr(it, "index", 0) or 0,
-                )
-                vectors = [item.embedding for item in _data]
-                if len(vectors) != len(texts) or any(not vector for vector in vectors):
+                # 部分 OpenAI 兼容服务完全不带 index，此时沿用响应顺序。
+                _data = list(response.data)
+                if len(_data) != len(texts) or any(
+                    not getattr(item, "embedding", None) for item in _data
+                ):
                     raise ValueError(
                         "No embedding data received"
-                        if not vectors else
+                        if not _data else
                         f"Embedding count mismatch: expected={len(texts)} "
-                        f"got={len(vectors)}"
+                        f"got={len(_data)}"
                     )
+                # Sorting alone cannot detect duplicate, missing or out-of-range
+                # indices. Require a complete input mapping before caching vectors.
+                _data = _order_by_response_index(_data, len(texts))
+                vectors = [item.embedding for item in _data]
                 dims = [len(v) for v in vectors]
                 expected_dims = self._embed_config.embedding_dims
                 if expected_dims:
@@ -1046,7 +1084,10 @@ class EmbedService:
                 # 判断是否可重试：HTTP 状态码 或 显式异常类型 或 消息关键字。
                 # 状态码优先——它是三者里唯一不受 message 措辞影响的判据。
                 _status = getattr(e, "status_code", None)
-                if isinstance(_status, int):
+                if isinstance(e, EmbeddingIndexMappingError):
+                    # 确定性的协议错误：同一请求再发一次仍是同样的 index 映射。
+                    _retryable = False
+                elif isinstance(_status, int):
                     _retryable = _status >= 500 or _status in _RETRYABLE_STATUS
                 else:
                     _retryable = isinstance(e, _RETRYABLE) or any(
