@@ -395,10 +395,13 @@ class MemoryReconciler:
         return [], None
 
     async def _prepare_legacy_candidates(
-        self, *, new_memories, search_queries, new_memory_embeddings,
-        embed_service, vector_store, user_id, agent_id, layers, source,
-        graph_store, cache, request_id, session_id,
-    ):
+        self, *, new_memories: List[str], search_queries: List[str],
+        new_memory_embeddings: Optional[Dict[str, List[float]]],
+        embed_service: Any, vector_store: Any, user_id: str, agent_id: str,
+        layers: List[Any], source: str, graph_store: Any, cache: Any,
+        request_id: str, session_id: str,
+    ) -> Tuple[Dict[str, Any], Dict[str, List[Tuple[str, float]]], Dict[str, List[float]]]:
+        """Prepare legacy candidates without changing their scoring or dedup lifecycle."""
         from ..models.memory import MemoryLayer, MemoryStatus, MemoryNode
         import asyncio
         import time as _time
@@ -790,8 +793,7 @@ class MemoryReconciler:
         if not new_memories:
             return ReconcileResult(ops=[], success=True)
 
-        from ..models.memory import MemoryLayer, MemoryStatus, MemoryNode
-        import asyncio
+        from ..models.memory import MemoryLayer
 
         if layers is None:
             layers = [MemoryLayer.L2_FACT, MemoryLayer.L4_IDENTITY]

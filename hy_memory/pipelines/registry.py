@@ -136,10 +136,6 @@ class ComponentFactory:
         if effective_name in self._readers:
             return self._readers[effective_name]
 
-        # 向后兼容：无指定时走旧的 _reader 单例
-        if not reader_name and self._reader is not None:
-            return self._reader
-
         reader_kwargs = {
             "config": self.config,
             "embed_service": self._get_shared_embed_service(),

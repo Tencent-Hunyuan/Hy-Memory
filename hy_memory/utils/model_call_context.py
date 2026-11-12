@@ -1,5 +1,7 @@
 """Context propagated to host-provided HTTP transports for cost accounting."""
 
+from __future__ import annotations
+
 from collections.abc import Iterator
 from contextlib import contextmanager
 from contextvars import ContextVar, Token

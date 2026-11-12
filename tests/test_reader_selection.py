@@ -35,6 +35,7 @@ def test_reader_difference_is_keyword_recall_only():
     assert HybridReadPipeline.ENABLE_KEYWORD_RECALL is True
     runtime_metadata = {
         "__module__", "__doc__", "__abstractmethods__", "_abc_impl",
+        "__firstlineno__", "__static_attributes__",  # Python 3.13 class metadata
     }
     assert set(LegacyReadPipeline.__dict__) - runtime_metadata == {
         "VERSION", "ENABLE_KEYWORD_RECALL",

@@ -4051,8 +4051,8 @@ class HyMemoryClient:
         reader = resolve_reader_name(reader)
         is_native = reader == "native"
         if is_native:
-            from .data.qdrant_native import validate_threshold
-            validate_threshold(native_threshold, native_mode)
+            from .retrieval import validate_native_threshold
+            validate_native_threshold(native_threshold, native_mode)
             if native_mode not in ("dense", "keyword", "hybrid"):
                 raise NativeRetrievalError("invalid_request", "unknown native mode")
             if min_score is not _SEARCH_UNSET and min_score is not None:
@@ -4154,6 +4154,24 @@ class HyMemoryClient:
                 raise NativeRetrievalError("unsupported", "native reader supports pro/ultra chat L2/L3/L4 only")
             if any(not isinstance(u, str) or not u.strip() for u in effective_user_ids):
                 raise NativeRetrievalError("invalid_request", "native user IDs must be nonempty strings")
+            from .data.vector_store_base import NativeQuery, validate_native_scope
+            validate_native_scope(NativeQuery(
+                texts=[target_query], embeddings=[], user_ids=effective_user_ids,
+                layers=normalized_native_layers or list(VDB_RECALL_LAYERS),
+                mode=native_mode, limit=max(30, 3 * limit),
+            ))
+            if not isinstance(target_query, str):
+                raise NativeRetrievalError("invalid_request", "native query must be a string")
+            if not target_query.strip() or limit == 0:
+                return {
+                    "request_id": request_id,
+                    "memories": {"schema": [], "proactive": [], "normal": []},
+                    "native": {"skipped": True, "mode": native_mode},
+                    "rewrite": {"used": False, "original_query": target_query,
+                                "effective_query": target_query, "created_after": None,
+                                "scene": "normal"},
+                    "elapsed_ms": round((time.perf_counter() - t0) * 1000, 2),
+                }
         if statuses is not None:
             from .models.memory import MemoryLayer
 

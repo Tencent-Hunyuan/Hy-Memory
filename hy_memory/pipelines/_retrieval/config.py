@@ -9,6 +9,8 @@ Read pipeline 相关环境变量与常量集中入口。
 
 import os
 
+from ...models.memory import MemoryLayer
+
 
 # ========================================================================
 # Reader 分发
@@ -20,7 +22,6 @@ READER_NATIVE = "native"
 
 ALL_READERS = (READER_LEGACY, READER_HYBRID, READER_NATIVE)
 
-from ...models.memory import MemoryLayer
 
 VDB_RECALL_LAYERS = [MemoryLayer.L2_FACT, MemoryLayer.L3_SUMMARY, MemoryLayer.L4_IDENTITY]
 

@@ -33,6 +33,8 @@ import asyncio
 from typing import Optional, List, Dict, Any
 import logging
 import uuid
+import math
+import sys
 from dataclasses import dataclass, field
 
 from ..models.memory import (
@@ -60,6 +62,61 @@ class NativeQuery:
     exclude_sources: List[str] = field(default_factory=list)
 
 
+def validate_native_scope(request: NativeQuery) -> None:
+    """Validate real scope/options even when a query is skipped."""
+    if sys.version_info < (3, 10):
+        raise NativeRetrievalError(
+            "unsupported", "native retrieval requires Python >=3.10"
+        )
+    if request.mode not in ("dense", "keyword", "hybrid"):
+        raise NativeRetrievalError("invalid_request", "unknown native mode")
+    if not request.user_ids or any(
+        not isinstance(u, str) or not u.strip() for u in request.user_ids
+    ):
+        raise NativeRetrievalError(
+            "invalid_request", "native retrieval requires nonempty user IDs"
+        )
+    if not request.layers or any(
+        layer.value not in ("l2_fact", "l3_summary", "l4_identity")
+        for layer in request.layers
+    ):
+        raise NativeRetrievalError(
+            "invalid_request", "native retrieval supports L2/L3/L4 only"
+        )
+    if type(request.limit) is not int or not 1 <= request.limit <= 300:
+        raise NativeRetrievalError(
+            "invalid_request", "native pool limit must be 1..300"
+        )
+
+
+def validate_native_query(request: NativeQuery) -> None:
+    """Reject incomplete plans before issuing any RPC."""
+    validate_native_scope(request)
+    if (
+        not request.texts
+        or len(request.texts) > 20
+        or any(not isinstance(t, str) or not t.strip() for t in request.texts)
+    ):
+        raise NativeRetrievalError(
+            "invalid_request", "native queries must contain 1..20 nonblank texts"
+        )
+    if request.mode != "keyword":
+        if len(request.embeddings) != len(request.texts):
+            raise NativeRetrievalError(
+                "integrity", "embedding count does not match query count"
+            )
+        for emb in request.embeddings:
+            if not emb or any(
+                isinstance(v, bool)
+                or not isinstance(v, (int, float))
+                or not math.isfinite(v)
+                for v in emb
+            ):
+                raise NativeRetrievalError(
+                    "invalid_request", "embeddings must be finite nonempty vectors"
+                )
+
+
 # ================================================================
 # 时间过滤：事件时间（memory_at）优先，缺失时回退写入时间（gmt_created）
 # ================================================================
@@ -74,6 +131,7 @@ class NativeQuery:
 # memory_at 有值，但 L0_BASIC_INFO（`agent/tools/basic_profile.py`）等旁路写入
 # 以及 owner 字段引入前的历史数据可能为空；回退保证这些节点的行为与改动前一致，
 # 不会因为换了字段而被静默过滤掉。
+
 
 def node_effective_time(payload: Dict[str, Any]) -> Optional[float]:
     """取 payload 的有效时间戳：memory_at 优先，回退 gmt_created；都没有返回 None。

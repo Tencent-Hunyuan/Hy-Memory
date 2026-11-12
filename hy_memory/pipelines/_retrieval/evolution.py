@@ -14,7 +14,10 @@
 """
 
 from datetime import datetime
-from typing import Any, Dict, List, Optional, Sequence, Set
+from typing import Any, Dict, List, Optional, Sequence, Set, TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from ...data.vector_store_base import NativeQuery, VectorStoreBase
 import asyncio
 import logging
 
@@ -23,58 +26,21 @@ from ...models.memory import MemoryNode
 logger = logging.getLogger(__name__)
 
 
-async def resolve_native_hits(vector_store, hits, request, *, created_after=None):
-    """Resolve complete directed evolution components, preserving backend order.
-
-    Reciprocal supersedes/superseded_by declarations describe the same edge.
-    User/source/layer visibility is checked on every fetched node; agent and
-    session scope apply only to the original retrieval seeds.
-    """
+def _native_evolution_edges(known: Dict[str, MemoryNode]) -> Dict[str, Set[str]]:
+    """Validate partial declarations before requesting another evolution frontier."""
     from ...retrieval import NativeRetrievalError
-    from ...models.memory import MemoryStatus
-    from ...utils.source_filter import source_allowed
-
-    def check_scope(node):
-        if node.user_id not in request.user_ids or node.layer not in request.layers or not source_allowed(node.source, request.include_sources, request.exclude_sources):
-            raise NativeRetrievalError("scope", "evolution component crosses the visible scope")
-
-    known = {}
-    for hit in hits:
-        node = hit.get("node")
-        if node is None or hit.get("node_id") != node.node_id:
-            raise NativeRetrievalError("integrity", "missing or mismatched native node")
-        check_scope(node)
-        known[node.node_id] = node
-    frontier = list(known.values())
-    while frontier:
-        missing = list(dict.fromkeys(nid for n in frontier for nid in _linked_ids(n) if nid not in known))
-        if len(known) + len(missing) > 1024:
-            raise NativeRetrievalError("budget", "native evolution exceeds 1024 nodes")
-        if not missing:
-            break
-        fetched = await vector_store.native_get_by_ids(missing)
-        if len(fetched) != len(missing) or {n.node_id for n in fetched} != set(missing):
-            raise NativeRetrievalError("integrity", "incomplete evolution batch")
-        for node in fetched:
-            check_scope(node)
-            known[node.node_id] = node
-        frontier = fetched
 
     outgoing = {nid: set() for nid in known}
-    adjacency = {nid: set() for nid in known}
     for nid, node in known.items():
         for newer in node.superseded_by or []:
             outgoing[nid].add(newer)
+            outgoing.setdefault(newer, set())
         for older in node.supersedes or []:
-            outgoing[older].add(nid)
-    for older, newer_ids in outgoing.items():
-        for newer in newer_ids:
-            adjacency[older].add(newer)
-            adjacency[newer].add(older)
+            outgoing.setdefault(older, set()).add(nid)
 
     visiting, depths = set(), {}
 
-    def depth(nid):
+    def depth(nid: str) -> int:
         if nid in visiting:
             raise NativeRetrievalError("cycle", "directed evolution cycle")
         if nid in depths:
@@ -89,8 +55,74 @@ async def resolve_native_hits(vector_store, hits, request, *, created_after=None
         depths[nid] = value
         return value
 
-    for nid in known:
+    for nid in outgoing:
         depth(nid)
+
+    return outgoing
+
+
+async def resolve_native_hits(
+    vector_store: "VectorStoreBase",
+    hits: List[Dict[str, Any]],
+    request: "NativeQuery",
+    *,
+    created_after: Optional[float] = None,
+) -> List[Dict[str, Any]]:
+    """Resolve complete directed evolution components, preserving backend order.
+
+    Reciprocal supersedes/superseded_by declarations describe the same edge.
+    User/source/layer visibility is checked on every fetched node; agent and
+    session scope apply only to the original retrieval seeds.
+    """
+    from ...retrieval import NativeRetrievalError
+    from ...models.memory import MemoryStatus
+    from ...utils.source_filter import source_allowed
+
+    def check_scope(node: MemoryNode) -> None:
+        if (
+            node.user_id not in request.user_ids
+            or node.layer not in request.layers
+            or not source_allowed(
+                node.source, request.include_sources, request.exclude_sources
+            )
+        ):
+            raise NativeRetrievalError(
+                "scope", "evolution component crosses the visible scope"
+            )
+
+    known = {}
+    for hit in hits:
+        node = hit.get("node")
+        if node is None or hit.get("node_id") != node.node_id:
+            raise NativeRetrievalError("integrity", "missing or mismatched native node")
+        check_scope(node)
+        known[node.node_id] = node
+    frontier = list(known.values())
+    while frontier:
+        _native_evolution_edges(known)
+        missing = list(
+            dict.fromkeys(
+                nid for n in frontier for nid in _linked_ids(n) if nid not in known
+            )
+        )
+        if len(known) + len(missing) > 1024:
+            raise NativeRetrievalError("budget", "native evolution exceeds 1024 nodes")
+        if not missing:
+            break
+        fetched = await vector_store.native_get_by_ids(missing)
+        if len(fetched) != len(missing) or {n.node_id for n in fetched} != set(missing):
+            raise NativeRetrievalError("integrity", "incomplete evolution batch")
+        for node in fetched:
+            check_scope(node)
+            known[node.node_id] = node
+        frontier = fetched
+
+    outgoing = _native_evolution_edges(known)
+    adjacency = {nid: set() for nid in known}
+    for older, newer_ids in outgoing.items():
+        for newer in newer_ids:
+            adjacency[older].add(newer)
+            adjacency[newer].add(older)
 
     components = {}
     for nid in known:
@@ -105,7 +137,9 @@ async def resolve_native_hits(vector_store, hits, request, *, created_after=None
             stack.extend(adjacency[current] - members)
         sinks = [known[mid] for mid in members if not outgoing[mid]]
         if len(sinks) != 1 or not sinks[0].is_latest:
-            raise NativeRetrievalError("integrity", "evolution has no unique confirmed head")
+            raise NativeRetrievalError(
+                "integrity", "evolution has no unique confirmed head"
+            )
         head = sinks[0]
         for mid in members:
             components[mid] = (head, members)
@@ -119,13 +153,30 @@ async def resolve_native_hits(vector_store, hits, request, *, created_after=None
         if head.status != MemoryStatus.ACTIVE:
             continue
         when = head.memory_at or head.gmt_created
-        if created_after is not None and when is not None and when.timestamp() < created_after:
+        if (
+            created_after is not None
+            and when is not None
+            and when.timestamp() < created_after
+        ):
             continue
-        visible = [known[mid] for mid in sorted(members) if mid != head.node_id and known[mid].status in (MemoryStatus.ACTIVE, MemoryStatus.SUPERSEDED)]
-        output.append({**hit, "node": head, "node_id": head.node_id,
-                       "matched_id": hit.get("matched_id", hit["node_id"]),
-                       "evolution_chain": [_node_to_chain_item(n) for n in [head] + visible] if len(members) > 1 else [],
-                       "is_evolved": len(members) > 1})
+        visible = [
+            known[mid]
+            for mid in sorted(members)
+            if mid != head.node_id
+            and known[mid].status in (MemoryStatus.ACTIVE, MemoryStatus.SUPERSEDED)
+        ]
+        output.append(
+            {
+                **hit,
+                "node": head,
+                "node_id": head.node_id,
+                "matched_id": hit.get("matched_id", hit["node_id"]),
+                "evolution_chain": [_node_to_chain_item(n) for n in [head] + visible]
+                if len(members) > 1
+                else [],
+                "is_evolved": len(members) > 1,
+            }
+        )
     return output
 
 

@@ -30,7 +30,8 @@ from ..models.memory import (
 )
 from ..config import MemoryConfig
 from ..utils.async_executor import run_in_executor_guarded
-from .vector_store_base import VectorStoreBase
+from .vector_store_base import NativeQuery, VectorStoreBase, validate_native_query
+from ..retrieval import NATIVE_CONFIG_ID, native_score_kind
 from .vector_store_chroma import _vdb_executor
 
 logger = logging.getLogger(__name__)
@@ -146,16 +147,19 @@ class QdrantVectorStore(VectorStoreBase):
     _supports_retrieval_clauses = True
     _supports_narrow_episode_queries = True
 
-    async def _native_call(self, callback):
+    async def _native_call(self, callback: Callable[[], Any]) -> Any:
         from ..retrieval import NativeRetrievalError
+
         try:
             return await _run_in_vdb_pool(callback)
         except NativeRetrievalError:
             raise
         except Exception as exc:
-            raise NativeRetrievalError("backend", "Qdrant native operation failed") from exc
+            raise NativeRetrievalError(
+                "backend", "Qdrant native operation failed"
+            ) from exc
 
-    async def prepare_native_retrieval(self):
+    async def prepare_native_retrieval(self) -> Dict[str, Any]:
         """Prepare native indexes on existing payloads, without re-upserting data."""
         from . import qdrant_native as native
 
@@ -163,43 +167,76 @@ class QdrantVectorStore(VectorStoreBase):
             native.check_version(self._client, self._is_local)
             native.check_schema(self._client, self._collection_name, prepare=True)
             native.probe(self._client, self._collection_name)
-            return {"config_id": native.CONFIG_ID, "server_version": native.VERSION}
+            return {"config_id": NATIVE_CONFIG_ID, "server_version": native.VERSION}
+
         return await self._native_call(prepare)
 
-    async def native_query(self, request):
+    async def native_query(self, request: NativeQuery) -> List[Dict[str, Any]]:
+        """Execute one native query plan and return backend-ranked raw scores."""
         from . import qdrant_native as native
-        native.validate_query(request)
+
+        validate_native_query(request)
 
         def query():
             native.check_version(self._client, self._is_local)
             native.check_schema(self._client, self._collection_name)
             response = self._client.query_points(
-                self._collection_name, **native.query_tree(request),
-                with_payload=True, with_vectors=False,
+                self._collection_name,
+                **native.query_tree(request),
+                with_payload=True,
+                with_vectors=False,
             )
-            return self._native_hits(response.points, native.score_kind(request.mode))
+            return self._native_hits(response.points, native_score_kind(request.mode))
+
         return await self._native_call(query)
 
-    def _native_hits(self, points, kind):
+    def _native_hits(self, points: List[Any], kind: str) -> List[Dict[str, Any]]:
         import math
         from ..retrieval import NativeRetrievalError
-        from .qdrant_native import CONFIG_ID
+
         hits = []
         seen = set()
         for point in points:
             node = self._payload_to_node(point.payload)
-            if not node.node_id or str(point.id) != str(self._node_id_to_point_id(node.node_id)) or node.node_id in seen:
-                raise NativeRetrievalError("integrity", "native response IDs do not match payloads")
+            if (
+                not node.node_id
+                or not self._native_id_matches(point.id, node.node_id)
+                or node.node_id in seen
+            ):
+                raise NativeRetrievalError(
+                    "integrity", "native response IDs do not match payloads"
+                )
             if not math.isfinite(point.score):
                 raise NativeRetrievalError("integrity", "nonfinite native score")
             seen.add(node.node_id)
-            hits.append(dict(node=node, node_id=node.node_id, matched_id=node.node_id,
-                             score=float(point.score), score_kind=kind, config_id=CONFIG_ID))
+            hits.append(
+                dict(
+                    node=node,
+                    node_id=node.node_id,
+                    matched_id=node.node_id,
+                    score=float(point.score),
+                    score_kind=kind,
+                    config_id=NATIVE_CONFIG_ID,
+                )
+            )
         return hits
 
-    async def native_get_by_ids(self, node_ids):
+    def _native_id_matches(self, point_id: Any, node_id: str) -> bool:
+        """Qdrant canonicalizes valid UUID strings, including IDs stored as hex."""
+        import uuid
+
+        try:
+            return uuid.UUID(str(point_id)) == uuid.UUID(
+                str(self._node_id_to_point_id(node_id))
+            )
+        except (ValueError, TypeError, AttributeError):
+            return False
+
+    async def native_get_by_ids(self, node_ids: List[str]) -> List[MemoryNode]:
+        """Fetch all required IDs in request order, failing on missing/mismatched IDs."""
         from ..retrieval import NativeRetrievalError
         from . import qdrant_native as native
+
         ids = list(dict.fromkeys(node_ids))
         if not ids:
             return []
@@ -207,24 +244,39 @@ class QdrantVectorStore(VectorStoreBase):
         def fetch():
             native.check_version(self._client, self._is_local)
             points = self._client.retrieve(
-                self._collection_name, ids=[self._node_id_to_point_id(nid) for nid in ids],
-                with_payload=True, with_vectors=False,
+                self._collection_name,
+                ids=[self._node_id_to_point_id(nid) for nid in ids],
+                with_payload=True,
+                with_vectors=False,
             )
             nodes = {}
             for point in points:
                 node = self._payload_to_node(point.payload)
-                if node.node_id not in ids or node.node_id in nodes or str(point.id) != str(self._node_id_to_point_id(node.node_id)):
-                    raise NativeRetrievalError("integrity", "strict ID response mismatch")
+                if (
+                    node.node_id not in ids
+                    or node.node_id in nodes
+                    or not self._native_id_matches(point.id, node.node_id)
+                ):
+                    raise NativeRetrievalError(
+                        "integrity", "strict ID response mismatch"
+                    )
                 nodes[node.node_id] = node
             if set(nodes) != set(ids):
-                raise NativeRetrievalError("integrity", "required evolution node is missing")
+                raise NativeRetrievalError(
+                    "integrity", "required evolution node is missing"
+                )
             return [nodes[nid] for nid in ids]
+
         return await self._native_call(fetch)
 
-    async def native_cosine(self, embedding, node_ids, request):
+    async def native_cosine(
+        self, embedding: List[float], node_ids: List[str], request: NativeQuery
+    ) -> List[Dict[str, Any]]:
+        """Get complete cosine evidence restricted to resolved candidate IDs."""
         from . import qdrant_native as native
         from qdrant_client import models as m
         from ..retrieval import NativeRetrievalError
+
         ids = list(dict.fromkeys(node_ids))
         if not ids:
             return []
@@ -232,18 +284,26 @@ class QdrantVectorStore(VectorStoreBase):
         def query():
             native.check_version(self._client, self._is_local)
             info = self._client.get_collection(self._collection_name)
-            if info.config.params.vectors.distance != m.Distance.COSINE:
-                raise NativeRetrievalError("unsupported", "cosine evidence requires a cosine collection")
+            native.check_vectors(info)
             filt = native.scope_filter(request, seed=False)
-            filt.must.append(m.HasIdCondition(has_id=[self._node_id_to_point_id(nid) for nid in ids]))
+            filt.must.append(
+                m.HasIdCondition(has_id=[self._node_id_to_point_id(nid) for nid in ids])
+            )
             response = self._client.query_points(
-                self._collection_name, query=embedding, query_filter=filt,
-                limit=len(ids), with_payload=True, with_vectors=False,
+                self._collection_name,
+                query=embedding,
+                query_filter=filt,
+                limit=len(ids),
+                with_payload=True,
+                with_vectors=False,
             )
             hits = self._native_hits(response.points, "cosine")
             if {hit["node_id"] for hit in hits} != set(ids):
-                raise NativeRetrievalError("integrity", "cosine evidence response is incomplete")
+                raise NativeRetrievalError(
+                    "integrity", "cosine evidence response is incomplete"
+                )
             return hits
+
         return await self._native_call(query)
 
     def __init__(self, config: MemoryConfig):

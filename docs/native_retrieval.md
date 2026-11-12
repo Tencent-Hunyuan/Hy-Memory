@@ -39,7 +39,7 @@ prepared = client.prepare_native_retrieval()
 # Async: prepared = await client.async_prepare_native_retrieval()
 ```
 
-Preparation builds scored TEXT indexes on `content` and `tags[]` (word
+Preparation builds scored TEXT indexes on `content` and `tags[]` (multilingual
 tokenizer, lowercase, default BM25), plus a KEYWORD index on `tags`. It waits
 for completed operations and checks schema and a read-only text/RRF probe.
 Existing payloads are indexed without being re-upserted. It never drops an
