@@ -40,7 +40,8 @@ class ChainRepository(Protocol):
     def close(self) -> None: ...
     def upsert_thread(self, branch: str, file: str, symbol: str, lo: int, hi: int,
                       by_symbol: bool = False, pkey: str = "") -> int: ...
-    def add_round(self, tid: int, said: str, patch: str, at: Optional[float] = None) -> None: ...
+    def add_round(self, tid: int, said: str, patch: str, at: Optional[float] = None,
+                  same_round: bool = False) -> None: ...
     def set_body(self, tid: int, body: str) -> None: ...
     def replace_symbols(self, rows: Sequence[Tuple[str, str, int, str]]) -> None: ...
     def round_texts(self, tid: int) -> List[tuple]: ...
@@ -126,7 +127,7 @@ class RelationalChainRepository:
             " VALUES(?,?,?,?,?,?,?,0,?)",
             (self.owner, branch, file, symbol, pkey, lo, hi, time.time()))
 
-    def add_round(self, tid, said, patch, at=None):
+    def add_round(self, tid, said, patch, at=None, same_round=False):
         """seq = 该 thread 已有 round 数 + 1。纯计数, 不做任何 diff 比对。
 
         at = 这一轮**真实发生**的时间(不是灌库时间)。事后灌库时 time.time() 全挤在几秒内,
@@ -138,12 +139,17 @@ class RelationalChainRepository:
         后果: "第N版"的语义被污染, 注入块里出现一排内容不同、说明词完全相同的版本,
         既挤预算又让 agent 数不清"最开始那版"到底是哪版。
         做法: 同 thread + 同 said 已存在时, 把新 hunk **追加进那一版的 patch**, 不新增 seq。
+
+        same_round = 调用方声明"这个 hunk 与上一版属于同一轮"。**只有同一轮**才合并 ——
+        两轮都说"继续"时 said 相同, 但那是两次独立的修改, 必须各记一版。
         """
         if self.branch_for_thread(tid) is None:
             raise ValueError("Version thread does not belong to this owner")
-        row = self._execute(
-            "SELECT id, seq, patch, adds FROM round WHERE thread_id=? AND said=? ORDER BY seq DESC LIMIT 1",
-            (tid, said)).fetchone()
+        row = None
+        if same_round:
+            row = self._execute(
+                "SELECT id, seq, patch, adds FROM round WHERE thread_id=? AND said=? ORDER BY seq DESC LIMIT 1",
+                (tid, said)).fetchone()
         new_adds = [ln[1:] for ln in patch.split("\n")
                     if ln.startswith("+") and not ln.startswith("+++") and ln[1:].strip()]
         if row:
