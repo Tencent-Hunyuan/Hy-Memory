@@ -271,7 +271,14 @@ async def test_T12_backend_failure_is_never_empty_success(error):
 
     with pytest.raises(NativeRetrievalError) as failure:
         await store._native_call(fail)
-    assert failure.value.reason == "backend" and failure.value.__cause__ is error
+    assert failure.value.reason == "backend"
+    # Python 3.12's asyncio Future conversion reconstructs TimeoutError when
+    # transferring it from the executor; its identity is not an SDK contract.
+    # Preserve the diagnostic exception type and arguments on every runtime.
+    cause = failure.value.__cause__
+    assert cause is not None
+    assert type(cause) is type(error)
+    assert cause.args == error.args
 
 
 async def test_hop_budget_stops_reads_early():
