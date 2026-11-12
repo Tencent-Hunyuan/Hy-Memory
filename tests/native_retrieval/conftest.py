@@ -29,6 +29,9 @@ class FixedEmbed:
     async def embed_batch(self, texts, **kwargs):
         return [await self.embed(text) for text in texts]
 
+    async def embed_with_meta(self, text, **kwargs):
+        return await self.embed(text), {"mock": True}
+
 
 class CaptureLLM:
     def __init__(self, ops=None):

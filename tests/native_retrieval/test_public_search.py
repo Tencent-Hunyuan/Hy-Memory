@@ -235,3 +235,37 @@ async def test_T07_real_server_incomplete_cycle_and_multi_ancestor(server_store)
     await store.upsert_batch([head] + ancestors)
     result = await client.async_search("multiancestormarker", **opts)
     assert [m["memory_id"] for m in result["memories"]["normal"]] == [head.node_id]
+
+
+async def test_T17_T18_concurrent_native_and_legacy_real_server(
+    server_store, monkeypatch
+):
+    import os
+
+    store = server_store
+    alice = node("alicemarker", embedding=[0.0, 1.0])
+    bob = node("bobmarker", user_id="bob")
+    await store.upsert_batch([alice, bob])
+    client = public_client(store)
+    monkeypatch.setattr(client, "_spawn_search_dedup", lambda *a, **k: None)
+    before = dict(os.environ)
+    native, legacy = await asyncio.gather(
+        client.async_search(
+            "alicemarker",
+            reader="native",
+            native_mode="keyword",
+            user_ids=["alice"],
+            limit=1,
+        ),
+        client.async_search(
+            "bobmarker",
+            reader="legacy",
+            user_ids=["bob"],
+            limit=1,
+            schema_limit=0,
+            rerank=False,
+        ),
+    )
+    assert [m["memory_id"] for m in native["memories"]["normal"]] == [alice.node_id]
+    assert [m["memory_id"] for m in legacy["memories"]["normal"]] == [bob.node_id]
+    assert dict(os.environ) == before
