@@ -161,10 +161,12 @@ async def resolve_native_hits(
             continue
         visible = [
             known[mid]
-            for mid in sorted(members)
+            for mid in members
             if mid != head.node_id
             and known[mid].status in (MemoryStatus.ACTIVE, MemoryStatus.SUPERSEDED)
         ]
+        # Keep the validated head first; order history like the existing readers.
+        visible.sort(key=_time_key, reverse=True)
         output.append(
             {
                 **hit,

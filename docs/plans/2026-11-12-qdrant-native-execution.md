@@ -272,3 +272,59 @@ No unrelated product change or weakened assertion was used to force it green.
 Diagnostic/reproduction reports remain in the dedicated runner under
 `/tmp/hy-memory-pr447-reports/lifecycle-*`, `sync-*` and `combined`.
 No raw diagnostic log or private application data was published.
+
+## PR #447 B1/B2 regressions (2026-11-12)
+
+Starting head: `6f18457`. Both reported failures were reproduced before the
+production fixes, using synthetic users and temporary storage:
+
+- B1: `ReadRequest("query", "alice")` returned both alice and bob through the
+  real legacy reader and Chroma. The full historical positional constructor
+  also failed because native fields shifted its arguments. Native options
+  now follow every existing field, preserving all twenty legacy positions.
+- B2: public native search returned `z-head, a-oldest, b-middle` for a
+  three-node chain. History now uses the existing `_time_key` descending
+  ordering (`memory_at`, falling back to `gmt_created`), with the validated
+  head retained first. Public-path tests cover populated, missing and mixed
+  `memory_at` values and retain matched ID and raw-score assertions.
+
+The focused red command was:
+
+```powershell
+$testPython = Join-Path $env:TEMP 'hy-memory-native-py313\Scripts\python.exe'
+& $testPython -m pytest tests/test_reader_selection.py tests/native_retrieval/test_errors.py -q -o log_cli=false -k 'positional or orders_history'
+```
+
+It produced **5 failed** before the fixes, including the exact cross-user
+result and incorrect timeline above. After fixing the constructor, the
+full-signature test fixture was corrected to include the source filter's
+existing normalized `mixed` exclusion; no source-filter behavior changed.
+
+Final checks on the B1/B2 working tree:
+
+- Windows/Python 3.13.13: the focused regression command listed earlier in
+  this record, plus `tests/test_list_evolution_chain.py` and all nonintegration
+  `tests/native_retrieval` cases: **273 passed, 4 skipped, 26 deselected** in
+  15.74 seconds. The four skips are unconfigured Neo4j cases.
+- Real dedicated Qdrant Server 1.20.0, client 1.20.0, Python 3.13.13, FastEmbed
+  absent: `pytest tests/native_retrieval -m integration -q -o log_cli=false`:
+  **26 passed, 44 deselected**, no skips, in 62.37 seconds. The disposable
+  Server used only fixture-owned synthetic collections.
+- Linux/Python 3.12.15: `pytest tests/test_reader_selection.py
+  tests/native_retrieval/test_errors.py -q -o log_cli=false
+  -o cache_dir=/tmp/hy-memory-pr447-b1b2-cache`: **51 passed** in 5.92 seconds,
+  with checkout source mounted read-only and `PYTHONPATH` selecting it.
+  The initial Core test environment lacked pytest-asyncio and could not run
+  async cases (20 passed, 31 failed). Installing pytest-asyncio 1.4.0 into a
+  separate temporary plugin directory resolved that environment failure;
+  no project dependency or lock file changed.
+- Real Python 3.9.12, existing minimal test environment: full legacy positional
+  binding plus existing native-version rejection and legacy default/zero
+  contracts: **3 passed, 48 deselected**. This remains a minimal compatibility
+  check, not a complete Python 3.9 extras certification.
+- Ruff on both changed production modules and both changed test modules,
+  compileall on both production modules, and `git diff --check`: passed.
+
+The original red tests provide the targeted regression-injection evidence.
+No MemHub production code, dependency, retrieval index or score behavior
+changed. Previous CI results remain historical until the new head is checked.

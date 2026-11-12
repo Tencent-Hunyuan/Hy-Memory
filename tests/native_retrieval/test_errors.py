@@ -1,5 +1,6 @@
 import asyncio
 import os
+from datetime import datetime
 from types import SimpleNamespace
 
 import pytest
@@ -210,6 +211,42 @@ async def test_T07_reciprocal_and_multi_ancestor_are_not_cycles():
     )
     assert len(result) == 1 and result[0]["node_id"] == head.node_id
     assert result[0]["score"] == 0.123456789 and result[0]["matched_id"] == a.node_id
+
+
+@pytest.mark.parametrize("time_field", ["memory_at", "gmt_created", "mixed"])
+async def test_public_native_evolution_chain_orders_history_by_time(time_field):
+    oldest, middle, head = [
+        node(node_id=nid, **{
+            "gmt_created": datetime(2026, 11, day),
+            "memory_at": datetime(2026, 11, day)
+            if time_field == "memory_at" or (time_field == "mixed" and day == 2)
+            else None,
+        })
+        for nid, day in [("a-oldest", 1), ("b-middle", 2), ("z-head", 3)]
+    ]
+    for old, newer in [(oldest, middle), (middle, head)]:
+        old.superseded_by = [newer.node_id]
+        old.is_latest = False
+        old.status = MemoryStatus.SUPERSEDED
+        newer.supersedes = [old.node_id]
+
+    class Store(StrictStore):
+        config = MemoryConfig()
+        _client = True
+
+        async def native_query(self, request):
+            return [{**hit(oldest), "score_kind": "rrf", "config_id": CONFIG_ID}]
+
+    result = await public_client(Store([oldest, middle, head])).async_search(
+        "query", reader="native", native_mode="keyword", user_ids=["alice"]
+    )
+    memories = result["memories"]["normal"]
+    assert [m["memory_id"] for m in memories] == [head.node_id]
+    assert [n["node_id"] for n in memories[0]["evolution_chain"]] == [
+        head.node_id, middle.node_id, oldest.node_id,
+    ]
+    assert memories[0]["matched_id"] == oldest.node_id
+    assert memories[0]["score"] == 0.123456789
 
 
 @pytest.mark.parametrize(
