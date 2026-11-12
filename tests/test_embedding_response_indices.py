@@ -2,13 +2,14 @@
 
 import asyncio
 import json
+import logging
 
 import httpx
 import openai
 import pytest
 
 from hy_memory import MemoryConfig
-from hy_memory.core.embed_service import EmbedService
+from hy_memory.core.embed_service import EmbedService, EmbeddingIndexMappingError
 
 
 @pytest.mark.parametrize(
@@ -190,3 +191,81 @@ async def test_invalid_queued_batch_fails_all_waiters_without_caching(monkeypatc
             )
             assert not service._cache
             assert len(calls) == 1
+
+
+def _respond_with(indices, calls):
+    def respond(request):
+        calls.append(json.loads(request.content)["input"])
+        return httpx.Response(
+            200,
+            json={
+                "object": "list",
+                "model": "test-model",
+                "data": [
+                    {
+                        "object": "embedding",
+                        "embedding": [float(i), 1.0],
+                        **({"index": index} if index is not None else {}),
+                    }
+                    for i, index in enumerate(indices)
+                ],
+                "usage": {"prompt_tokens": 2, "total_tokens": 2},
+            },
+        )
+
+    return respond
+
+
+async def test_missing_indices_keep_response_order(monkeypatch, caplog):
+    calls = []
+    respond = _respond_with([None, None], calls)
+    async with httpx.AsyncClient(transport=httpx.MockTransport(respond)) as http:
+        async with openai.AsyncOpenAI(
+            api_key="synthetic-test-key",
+            base_url="https://provider.invalid/v1",
+            http_client=http,
+        ) as client:
+            config = MemoryConfig()
+            config.embedder.embedding_dims = 2
+            service = EmbedService(config)
+            monkeypatch.setattr(service, "_get_client", lambda *_: client)
+            with caplog.at_level(logging.DEBUG, logger="hy_memory.core.embed_service"):
+                assert await service.embed_batch(["first", "second"]) == [
+                    [0.0, 1.0],
+                    [1.0, 1.0],
+                ]
+            assert "no index" in caplog.text
+            assert len(calls) == 1
+
+
+@pytest.mark.parametrize(
+    "indices",
+    [
+        pytest.param([0, None], id="partial"),
+        pytest.param([None, 0], id="partial-first-missing"),
+        pytest.param([1, 1], id="duplicate"),
+        pytest.param([0, 5], id="out-of-range"),
+        pytest.param([True, 0], id="bool"),
+        pytest.param(["0", 1], id="non-int"),
+    ],
+)
+async def test_malformed_index_mapping_is_not_retried(monkeypatch, indices):
+    calls = []
+    respond = _respond_with(indices, calls)
+    async with httpx.AsyncClient(transport=httpx.MockTransport(respond)) as http:
+        async with openai.AsyncOpenAI(
+            api_key="synthetic-test-key",
+            base_url="https://provider.invalid/v1",
+            http_client=http,
+        ) as client:
+            config = MemoryConfig()
+            config.embedder.embedding_dims = 2
+            config.embedder.max_retries = 6
+            config.embedder.retry_delay = 0
+            service = EmbedService(config)
+            monkeypatch.setattr(service, "_get_client", lambda *_: client)
+            with pytest.raises(EmbeddingIndexMappingError):
+                await service.embed_batch(["first", "second"])
+            assert len(calls) == 1
+            assert service._last_embed_meta["retryable"] is False
+            assert not service._cache
