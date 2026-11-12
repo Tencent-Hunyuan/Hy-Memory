@@ -245,49 +245,206 @@ def test_a_cross_backend_restore_is_refused_before_staging(tmp_path) -> None:
     assert not list((home / "hy-memory").glob(".governed-v2.backup-restore-*"))
 
 
-def test_a_qdrant_backup_is_refused_until_the_sdk_can_write_it_back(tmp_path) -> None:
-    home = _home(tmp_path)
+QDRANT_EXPORT = {
+    "path": "export/memories.jsonl",
+    "format": "jsonl",
+    "node_format": "hy-memory-node-v1",
+    "embeddings_included": True,
+    "sha256": "0" * 64,
+}
+LIVE = {"space_id": "space-live"}
+
+
+def _qdrant_backup(home: Path, **counts: object) -> BackendIdentity:
     qdrant = BackendIdentity(vector="qdrant", vector_prefix="mh12345678")
-    _backup(home, backend=qdrant.document())
+    _backup(
+        home,
+        backend=qdrant.document(),
+        export=QDRANT_EXPORT,
+        embedding_space=LIVE,
+        counts={"layers": None, "vector_store": {}, "graph": None, **counts},
+    )
+    return qdrant
+
+
+def test_a_qdrant_backup_onto_another_namespace_is_refused(tmp_path) -> None:
+    home = _home(tmp_path)
+    _qdrant_backup(home)
     source = locate(home, "backups/one.memhub-backup")
-    with pytest.raises(BackupError, match="backup_restore_remote_sdk_unsupported"):
-        memory_backup.prepare_restore(home, source, current=qdrant)
+    other = BackendIdentity(vector="qdrant", vector_prefix="mh87654321")
+    with pytest.raises(BackupError, match="backup_restore_backend_mismatch"):
+        memory_backup.prepare_restore(home, source, current=other, current_space_id="space-live")
 
 
-def test_write_export_pages_every_layer_and_status(tmp_path) -> None:
+@pytest.mark.parametrize(
+    ("manifest", "space", "current", "code"),
+    [
+        # Written before 2.0.16: list items without vectors or node ids.
+        (
+            {"export": {**QDRANT_EXPORT, "embeddings_included": False}},
+            "space-live",
+            None,
+            "backup_restore_export_without_vectors",
+        ),
+        (
+            {"export": {k: v for k, v in QDRANT_EXPORT.items() if k != "node_format"}},
+            "space-live",
+            None,
+            "backup_restore_export_without_vectors",
+        ),
+        # The embedding space changed since: other collections, other vectors.
+        ({}, "space-new", None, "backup_restore_qdrant_space_changed"),
+        ({}, None, None, "backup_restore_qdrant_space_changed"),
+        # Coding/Working experiences: no SDK export or import of their vectors.
+        (
+            {"counts": {"layers": {"local": {"scene:coding": 2}}}},
+            "space-live",
+            None,
+            "backup_restore_qdrant_experiences_unsupported",
+        ),
+        (
+            {"counts": {"vector_store": {"memhub_x|512": {"working_facts": {"local": 1}}}}},
+            "space-live",
+            None,
+            "backup_restore_qdrant_experiences_unsupported",
+        ),
+        # ... on the server now, too: their SQLite rows would not match.
+        (
+            {},
+            "space-live",
+            {"memhub_x|512": {"coding_keys_cv": {"local": 3}}},
+            "backup_restore_qdrant_experiences_unsupported",
+        ),
+        # The retrieval-clause index is neither exported nor rebuilt.
+        (
+            {"counts": {"vector_store": {"memhub_x|512": {"retrieval_clauses": {"local": 4}}}}},
+            "space-live",
+            None,
+            "backup_restore_qdrant_retrieval_clauses_unsupported",
+        ),
+        (
+            {},
+            "space-live",
+            {"memhub_x|512": {"retrieval_clauses": {"local": 1}}},
+            "backup_restore_qdrant_retrieval_clauses_unsupported",
+        ),
+    ],
+)
+def test_a_qdrant_restore_refuses_what_the_sdk_cannot_write_back(
+    tmp_path, manifest, space, current, code
+) -> None:
+    base: dict[str, object] = {
+        "export": QDRANT_EXPORT,
+        "embedding_space": LIVE,
+        "counts": {
+            "layers": {"local": {"l2_fact": 3, "scene:coding": 0}},
+            "vector_store": {"memhub_x|512": {"memory": {"local": 3}, "tag_index": {"local": 2}}},
+        },
+    }
+    document = {**base, **manifest}
+    if "counts" in manifest:
+        document["counts"] = {**base["counts"], **manifest["counts"]}  # type: ignore[dict-item]
+    assert (
+        memory_backup.qdrant_restore_refusal(
+            document, current_space_id=space, current_vectors=current
+        )
+        == code
+    )
+
+
+def test_a_qdrant_restore_of_memories_alone_is_allowed(tmp_path) -> None:
+    manifest = {
+        "export": QDRANT_EXPORT,
+        "embedding_space": LIVE,
+        # The tag index is not written back, and MemHub's retrieval does not read it.
+        "counts": {
+            "layers": {"local": {"l1_raw": 4, "l2_fact": 3, "scene:coding": 0, "scene:working": 0}},
+            "vector_store": {"memhub_x|512": {"memory": {"local": 7}, "tag_index": {"local": 2}}},
+        },
+    }
+    current = {"memhub_x|512": {"memory": {"local": 9}, "entities": {"local": 1}}}
+    assert (
+        memory_backup.qdrant_restore_refusal(
+            manifest, current_space_id="space-live", current_vectors=current
+        )
+        is None
+    )
+
+
+def test_an_offline_restore_onto_qdrant_says_it_needs_a_client(tmp_path) -> None:
+    home = _home(tmp_path)
+    qdrant = _qdrant_backup(home)
+    source = locate(home, "backups/one.memhub-backup")
+    with pytest.raises(BackupError, match="backup_restore_vector_client_unavailable"):
+        asyncio.run(memory_backup.run_restore(home, source, current=qdrant))
+    assert not list((home / "hy-memory").glob(".governed-v2.backup-restore-*"))
+
+
+def test_write_export_keeps_every_node_with_its_vector(tmp_path) -> None:
     pages: list[dict[str, object]] = []
+    nodes = [
+        {"node_id": f"r{n}", "user_id": "local", "layer": "l1_raw", "embedding": [0.5, 0.5]}
+        for n in range(3)
+    ] + [
+        {
+            "node_id": "f1",
+            "user_id": "local",
+            "layer": "l2_fact",
+            "status": "superseded",
+            "superseded_by": "f2",
+            "embedding": [1.0, 0.0],
+        }
+    ]
 
     class Client:
+        def export_user_memories(self, user_id, *, include_embeddings):
+            assert (user_id, include_embeddings) == ("local", True)
+            return {
+                "success": True,
+                "nodes": nodes,
+                "embedding_dims": 2,
+                "embedding_model": "m",
+            }
+
         def list_memories(self, **kwargs):
             pages.append(kwargs)
-            if kwargs.get("scene"):
-                return {"experiences": []}
-            if kwargs["layers"] == ["l1_raw"] and kwargs["offset"] == 0:
-                items = [{"memory_id": f"r{n}", "content": f"turn {n}"} for n in range(500)]
-            elif kwargs["layers"] == ["l1_raw"] and kwargs["offset"] == 500:
-                items = [{"memory_id": "r500", "content": "turn 500"}]
-            else:
-                items = []
-            return {"vdb": {"memories": items, "total": 501}}
+            if kwargs["scene"] == "coding" and kwargs["offset"] == 0:
+                return {"experiences": [{"memory_id": "c1", "content": "use uv"}]}
+            return {"experiences": []}
 
     target = tmp_path / "export" / "memories.jsonl"
     export = memory_backup.write_export(Client(), ["local"], target)
     assert export["counts"] == {
         "local": {
             "l0_basic_info": 0,
-            "l1_raw": 501,
-            "l2_fact": 0,
+            "l1_raw": 3,
+            "l2_fact": 1,
             "l3_summary": 0,
             "l4_identity": 0,
-            "scene:coding": 0,
+            "scene:coding": 1,
             "scene:working": 0,
         }
     }
-    assert export["embeddings_included"] is False
-    assert len(target.read_text().splitlines()) == 501
+    assert export["embeddings_included"] is True
+    assert export["node_format"] == "hy-memory-node-v1"
+    assert (export["embedding_dims"], export["embedding_model"]) == (2, "m")
+    assert len(target.read_text().splitlines()) == 5
     assert target.stat().st_mode & 0o777 == 0o600
     assert all(page["statuses"] == list(memory_backup.ALL_STATUSES) for page in pages)
     assert export["sha256"] == hashlib.sha256(target.read_bytes()).hexdigest()
+    # Read back: the node lines only, per user, exactly as exported.
+    assert memory_backup.read_export(target, str(export["sha256"])) == {"local": nodes}
+    with pytest.raises(BackupError, match="backup_restore_verify_failed"):
+        memory_backup.read_export(target, "0" * 64)
+
+
+def test_write_export_refuses_an_sdk_without_the_export(tmp_path) -> None:
+    class Client:
+        def export_user_memories(self, user_id, *, include_embeddings):
+            return {"success": False, "error_message": "nope"}
+
+    with pytest.raises(BackupError, match="backup_sdk_unavailable"):
+        memory_backup.write_export(Client(), ["local"], tmp_path / "export" / "m.jsonl")
 
 
 def test_old_backup_note_names_the_missing_memories() -> None:

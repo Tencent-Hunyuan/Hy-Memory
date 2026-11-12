@@ -4003,7 +4003,11 @@ async function applyBackupRestore(
       "检查来源是否为 <数据目录>/backups/ 中的受管备份后重试。",
     restored.code === "backup_restore_contract_unavailable" ||
       restored.code === "backup_restore_remote_sdk_unsupported" ||
-      restored.code === "backup_restore_backend_mismatch"
+      restored.code === "backup_restore_backend_mismatch" ||
+      restored.code === "backup_restore_qdrant_experiences_unsupported" ||
+      restored.code === "backup_restore_qdrant_retrieval_clauses_unsupported" ||
+      restored.code === "backup_restore_export_without_vectors" ||
+      restored.code === "backup_restore_qdrant_space_changed"
       ? EXIT_PLAN_BLOCKED
       : EXIT_FAILED,
   );
@@ -4016,7 +4020,19 @@ const RESTORE_NEXT_STEP: Readonly<Record<string, string>> = {
   backup_restore_backend_mismatch:
     "这份备份来自另一种存储后端（本机 Kuzu + Chroma 与服务器不能互相恢复）。先用 memhub settings backends 切回备份时的后端，再恢复。",
   backup_restore_remote_sdk_unsupported:
-    "记忆在 Qdrant 服务器上：当前 SDK 不能按原 id 写回，暂不支持恢复记忆。备份里的 export/memories.jsonl 已保存全部记忆；服务器侧请用 Qdrant 快照。",
+    "这个 Runtime 的 SDK 不能把 Qdrant 上的记忆按原 id 写回；升级到 hy-memory 2.0.16 及以上的 Runtime 后再恢复。",
+  backup_restore_qdrant_experiences_unsupported:
+    "备份或 Qdrant 服务器上有 Coding/Working 经验：当前 SDK 不能按原 id 导出或写回它们的向量，未做任何改动。服务器侧请用 Qdrant 快照。",
+  backup_restore_qdrant_retrieval_clauses_unsupported:
+    "备份或 Qdrant 服务器上有检索子句索引：当前 SDK 不能导出或重建它，未做任何改动。服务器侧请用 Qdrant 快照。",
+  backup_restore_export_without_vectors:
+    "这份 Qdrant 备份是 hy-memory 2.0.16 之前做的，不含向量和原 id，不能写回服务器。请用较新的备份，或用 Qdrant 快照。",
+  backup_restore_qdrant_space_changed:
+    "备份之后更换过向量模型：备份里的向量属于另一个向量空间，未做任何改动。请换一份更换模型之后的备份。",
+  backup_restore_vector_client_unavailable:
+    "写回 Qdrant 需要能连接的 SDK 客户端（模型配置与 Qdrant 服务器）；请检查后用 memhub backup restore 重试。",
+  backup_restore_import_failed:
+    "SDK 写回 Qdrant 失败，服务器上的记忆和本机数据都已回滚到恢复之前。",
   backup_restore_counts_mismatch:
     "恢复后的记忆条数与备份记录不一致，已整体回滚到恢复前的数据。备份可能不完整，请换一份备份。",
   backup_restore_verify_failed:

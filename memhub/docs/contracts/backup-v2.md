@@ -51,17 +51,22 @@ the copy). A symlink anywhere in the SDK tree refuses the backup
 
 ### The export (Qdrant)
 
-One JSON line per memory: `{"user_id", "layer" | "scene", "memory"}`, where
-`memory` is the SDK's own `list_memories` item. It is read through the SDK's
-public API, paged per user and per layer (`l0_basic_info`, `l1_raw`,
-`l2_fact`, `l3_summary`, `l4_identity`), every status (`active`,
-`superseded`, `negated`, `conflicted`, `shadow`, `archived`), raw turns
-included; Coding/Working experiences per scene. It is streamed to disk.
-hy-memory 2.0.15 has no public read that returns a memory's vector, so
-`export.embeddings_included` is `false`; the manifest records the space's
-model and width so a future restore can re-embed. Users are the ones Core
-knows (`local`, every user with a grant or a queued write): the SDK has no
-"list users".
+Two kinds of JSON line, streamed to disk:
+
+- `{"user_id", "node"}`: one memory of the vector store, exactly as the SDK's
+  `export_user_memories` returns it (hy-memory 2.0.16): `MemoryNode.to_dict()`
+  with its id, layer, status (`active`, `superseded`, `negated`, `conflicted`,
+  `shadow`, `archived`), evolution links (`supersedes`, `superseded_by`,
+  ...), times and vector, every layer, raw turns included.
+  `export.embeddings_included` is `true`, `export.node_format` is
+  `hy-memory-node-v1`, and `export.embedding_dims` / `embedding_model` name
+  the space. A restore writes these lines back.
+- `{"user_id", "scene", "memory"}`: a Coding/Working experience as
+  `list_memories(scene=...)` lists it. The SDK has no export of their
+  vectors, so these are kept for reading only (section 6).
+
+Users are the ones Core knows (`local`, every user with a grant or a queued
+write): the SDK has no "list users".
 
 ## 3. Consistency
 
@@ -78,7 +83,7 @@ On the running Core, `POST /api/v1/backup`:
    export;
 3. closes every SDK client and holds the stores offline (`hold_stores_offline`,
    as the switch's graph re-embed does). Closing the SDK client is Kuzu's
-   CHECKPOINT (hy-memory 2.0.15 checkpoints on close); Chroma's files are
+   CHECKPOINT (hy-memory checkpoints on close); Chroma's files are
    copied while no client exists. SQLite files go through SQLite's backup API
    and are checked with `quick_check`; the rest is streamed with a SHA-256;
 4. releases the stores and resumes writes on every exit path, failure
@@ -101,7 +106,7 @@ directory; a failed backup leaves no directory behind.
   "format": "memhub-backup",
   "schema_version": 2,
   "created_at": "...", "runtime_build": "1.0.7",
-  "sdk_version": "2.0.15", "sdk_namespace": "governed-v2",
+  "sdk_version": "2.0.16", "sdk_namespace": "governed-v2",
   "memories_included": true,
   "backend": {"kind": "local", "vector": "chroma", "graph": "kuzu", "vector_prefix": null},
   "memory_mode": "ultra",
@@ -129,9 +134,11 @@ directory; a failed backup leaves no directory behind.
   status (`list_memories` totals) and of each experience scene
   (`memory_stats`). `null` when no SDK client could be built (the files are
   still copied).
-- `counts.vector_store`: every Chroma record per space, role and `user_id`,
-  from the SDK's own space scan (the one the startup stray-space scan uses).
-  `null` on Qdrant.
+- `counts.vector_store`: every record of the vector store per space, role and
+  `user_id`, from the SDK's own space scan (the one the startup stray-space
+  scan uses). On Qdrant: this home's collections under its prefix (keyed
+  without it), the Qdrant-only roles `tag_index` and `retrieval_clauses`
+  included.
 - `counts.graph`: Memory nodes per user and layer in the copied Kuzu graph,
   read by the graph-open probe child in read-only mode. `null` if the copy
   could not be read.
@@ -201,6 +208,48 @@ The answer:
 `one-memory restore` (it builds no model client) and `sdk_client_unavailable`
 when no client could be built; the store and graph counts are still checked.
 
+### Onto Qdrant
+
+The local files are staged, swapped and checked as above. The memories on
+the server are written back through the SDK's public API (hy-memory 2.0.16,
+Tencent-Hunyuan/Hy-Memory#424), by a client on the live space's Qdrant
+collections whose own local files are a scratch directory (removed after):
+
+1. before anything changes, the refusals below are checked, the export's
+   SHA-256 is verified, and the server's current memories of every user
+   (the backup's and the ones the home knows now) are exported to
+   `backups/pre-restore-<UTC>.memhub-previous-vectors.jsonl` (0600,
+   `previous_vectors_path` in the answer);
+2. after the file swap, each such user's memories are deleted (`delete_all`)
+   and the backup's `node` lines are imported with `import_user_memories`
+   (ids, layers, statuses, evolution links, times and vectors; it requires
+   an empty user and rolls its own partial write back);
+3. the layer counts of the restored home are compared as on any backend. Any
+   failure writes the exported memories back onto the server, then rolls the
+   files back. If writing them back fails too, the answer is
+   `backup_restore_rollback_failed` and the previous memories are kept in
+   that file.
+
+What 2.0.16's export/import does not carry, and what MemHub therefore does:
+
+| Data on Qdrant | Restored? |
+|---|---|
+| Memories of every layer and status, raw turns included, with their vectors | yes |
+| Coding/Working experiences (`coding_keys*`, `working_facts*` collections) | **refused** `backup_restore_qdrant_experiences_unsupported`: no SDK call exports or imports their vectors with their ids, and the restored SQLite rows would point at vectors that are not there. Checked on the backup and on the server now. |
+| Retrieval-clause index (`<memory>__retrieval_clauses`) | **refused** `backup_restore_qdrant_retrieval_clauses_unsupported` when the backup or the server holds any: neither exported nor rebuilt by `import_user_memories`. MemHub does not enable retrieval clauses, so a MemHub home has none. |
+| Tag index (`<memory>_tag_index`), entity store (`<memory>_entities`) | not restored: derived indexes the SDK rebuilds as memories are written; MemHub's retrieval does not read them (both SDK features stay at their default, off). |
+| The graph | as on any backend: a Kuzu file is restored with the local files; a graph server is rebuilt (`clear_first`). |
+
+Also refused onto Qdrant: a backup taken before 2.0.16, whose export holds no
+vectors or node ids (`backup_restore_export_without_vectors`); a backup of
+another embedding space than the live one (`backup_restore_qdrant_space_changed`:
+its vectors belong to another space's collections); another home's
+namespace (`backup_restore_backend_mismatch`); and the offline `one-memory
+restore`, which has no SDK client to write with
+(`backup_restore_vector_client_unavailable`: use `memhub backup restore`,
+which drives a maintenance Core). `backup_restore_import_failed`: the SDK
+refused the import or wrote fewer memories than the backup holds.
+
 The stray-space scan and merge, the retention sweep and the graph probe also
 run at the next start, as on every start.
 
@@ -222,22 +271,12 @@ changes.
 
 - **Local backup onto a server backend (or the reverse): refused, not
   converted.** Converting means writing each memory into the other store
-  with its id and its vector; hy-memory 2.0.15 has no public API that does
-  that (`add_extracted` re-reconciles and makes new ids, `clone_user` only
-  copies within one store), and MemHub never writes the SDK's stores itself
-  (ARCHITECTURE: memory I/O only through the SDK). A local backup keeps its
-  local files: `memhub settings backends reset` returns the home to Kuzu +
-  Chroma, and the backup then restores.
-- **Qdrant backup onto Qdrant: refused** (`backup_restore_remote_sdk_unsupported`)
-  until MemHub pins an SDK with an import API that keeps ids and vectors. The
-  backup itself works and holds the export; Qdrant's own snapshots back up the
-  server. SDK follow-up: Tencent-Hunyuan/Hy-Memory#424 adds
-  `HyMemoryClient.export_user_memories` / `import_user_memories` (ids,
-  statuses, evolution pointers, times and vectors; re-embeds a node without
-  its vector). Once a release with it is pinned, the export switches to it
-  (vectors included) and the restore imports instead of refusing. Still to
-  cover in the SDK before that: the Coding/Working experience vectors and
-  Qdrant's retrieval-clause side index.
+  with its id and its vector, a job of its own; MemHub never writes the SDK's
+  stores itself (ARCHITECTURE: memory I/O only through the SDK). A local
+  backup keeps its local files: `memhub settings backends reset` returns the
+  home to Kuzu + Chroma, and the backup then restores.
+- **Qdrant backup onto Qdrant: restored** onto the same home namespace
+  (section 5, "Onto Qdrant"), with the refusals listed there.
 - **Neo4j/Memgraph graph with Chroma vectors**: restores the local files like
   a local backup; the server's graph is not replaced. A rebuild of every
   user's fact projection is scheduled with `clear_first` (the SDK's
@@ -246,12 +285,14 @@ changes.
   regenerated by the nightly evolve, not restored.
 
 `capabilities.restore` in `GET /api/v1/settings/storage-backends` reports
-`refused` with this code on Qdrant.
+`works` on every backend; the Qdrant refusals depend on what a backup and the
+server hold, and are answered by the restore itself.
 
 ## 7. Size
 
 `GET /api/v1/backup/estimate[?target=<path>]` answers `bytes` (local files
-plus, on Qdrant, ~1.5 KB per exported memory), `files`, `local_bytes`,
+plus, on Qdrant, ~1.5 KB per exported memory and ~21 bytes per vector
+dimension), `files`, `local_bytes`,
 `export_bytes`, `free_bytes`, `backend` and, with `target`, the directory a
 backup would be written to (the same refusals as the backup). A backup with
 less free space than 105% of the estimate is refused
@@ -268,8 +309,8 @@ export` (a diagnostics bundle without any memory) and `graph-width --decision
 export_first` (a copy of the Kuzu graph file before a width rebuild). A
 backup is the way to keep and move memories: it is complete, verified and
 restorable. The Qdrant export inside a backup is a portable JSONL of the
-memories, kept for a restore once the SDK can write it back and readable by
-other tools now.
+memories with their vectors, written back by a restore and readable by other
+tools.
 
 ## 9. Codes
 
@@ -285,7 +326,11 @@ Restore (422 unless noted): `backup_restore_runtime_running` (409),
 `backup_restore_source_outside_home`, `backup_restore_source_invalid`,
 `backup_restore_source_too_new`, `backup_restore_manifest_invalid`,
 `backup_restore_verify_failed`, `backup_restore_backend_mismatch`,
-`backup_restore_remote_sdk_unsupported`, `backup_restore_counts_mismatch`,
+`backup_restore_counts_mismatch`, Qdrant only:
+`backup_restore_qdrant_experiences_unsupported`,
+`backup_restore_qdrant_retrieval_clauses_unsupported`,
+`backup_restore_export_without_vectors`, `backup_restore_qdrant_space_changed`,
+`backup_restore_vector_client_unavailable`, `backup_restore_import_failed`;
 `backup_restore_disk_space_insufficient`, `backup_restore_stage_failed`,
 `backup_restore_pending`, `backup_restore_replace_failed`,
 `backup_restore_rollback_failed`, `backup_restore_protective_backup_failed`

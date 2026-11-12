@@ -40,7 +40,7 @@ def builtin_base() -> str:
 def backend(monkeypatch) -> FakeReembedBackend:
     fake = FakeReembedBackend()
     monkeypatch.setattr(
-        "one_memory.embedding_switch.default_reembed_backend", lambda _data_dir: fake
+        "one_memory.embedding_switch.default_reembed_backend", lambda _data_dir, **_kw: fake
     )
     return fake
 

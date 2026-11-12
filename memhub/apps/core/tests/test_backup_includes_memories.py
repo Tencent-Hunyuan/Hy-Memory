@@ -21,7 +21,12 @@ by the real `MemoryGraphBackfill`. The local child then:
   rebuilt on the next start.
 
 The remote child uses `qdrant_client`'s local engine as the Qdrant server
-(as `test_storage_backend_qdrant` does) for the export and the refusals.
+(as `test_storage_backend_qdrant` does): a backup exports every memory with
+its id, status, evolution link, times and vector (`export_user_memories`,
+hy-memory 2.0.16); the server's memories are then changed (one user wiped,
+a turn added), the backup restored onto the same server, and every memory is
+back exactly as it was, vectors included, and nothing written since remains.
+The cross-backend refusals are checked there too.
 """
 
 from __future__ import annotations
@@ -515,6 +520,50 @@ _REMOTE = _COMMON + textwrap.dedent(
     qdrant_client.QdrantClient = SharedServer
     QDRANT = {"vector": {"provider": "qdrant", "host": "qdrant.internal", "port": 6334}}
 
+    from hy_memory.models.memory import MemoryLayer, MemoryNode, MemoryStatus
+
+
+    async def put_nodes(app, nodes):
+        # The SDK's own store: what a pro extraction leaves behind.
+        async with app.state.sdk_write_coordinator.use_client() as client:
+            client._loop_thread.run(client._vector_store.upsert_batch(nodes))
+
+
+    async def server_state(app):
+        # Every memory on the server, as the SDK exports it: id, links, times, vector.
+
+        async def read():
+            client = await app.state.sdk_client_handle.client()
+            out = {}
+            for user in USERS:
+                exported = client.export_user_memories(user)
+                assert exported["success"], exported
+                out[user] = sorted(
+                    (
+                        node["node_id"],
+                        node["layer"],
+                        node["status"],
+                        node.get("supersedes"),
+                        node.get("superseded_by"),
+                        node.get("gmt_created"),
+                        node["content"],
+                        [round(value, 6) for value in node["embedding"]],
+                    )
+                    for node in exported["nodes"]
+                )
+            return out
+
+        return await asyncio.create_task(read())
+
+
+    async def search_raw(http, user, query):
+        response = await http.post(
+            "/api/v2/context/search",
+            json={"kinds": ["raw"], "limit": 5, "query": query, "user_id": user},
+        )
+        assert response.status_code == 200, response.text
+        return [item["content"] for item in response.json()["items"]]
+
 
     async def chroma_era(app, http):
         await mode(http, "lite")
@@ -538,7 +587,22 @@ _REMOTE = _COMMON + textwrap.dedent(
                     await raw_write(http, user, f"{user} qdrant turn {number} about cats", number)
                 )
         await wait_writes(http, written)
+        await mode(http, "pro")
+        old = MemoryNode(
+            user_id="local", agent_id="default_agent", session_id="s-local",
+            layer=MemoryLayer.L2_FACT, content="local lived in Paris",
+            embedding=vector("local lived in Paris"), status=MemoryStatus.SUPERSEDED,
+        )
+        new = MemoryNode(
+            user_id="local", agent_id="default_agent", session_id="s-local",
+            layer=MemoryLayer.L2_FACT, content="local lives in Lyon",
+            embedding=vector("local lives in Lyon"), supersedes=old.node_id,
+        )
+        old.superseded_by = new.node_id
+        await put_nodes(app, [old, new])
+        await mode(http, "lite")
         result["before"] = await snapshot(app)
+        result["server_before"] = await server_state(app)
         estimate = await http.get("/api/v1/backup/estimate")
         result["estimate"] = [estimate.status_code, estimate.json()]
         response = await http.post("/api/v1/backup", json={"target": "backups/qdrant"})
@@ -547,10 +611,33 @@ _REMOTE = _COMMON + textwrap.dedent(
         result["manifest"] = manifest("qdrant.memhub-backup")
         lines = (backup / "export" / "memories.jsonl").read_text().splitlines()
         result["export_lines"] = [json.loads(line) for line in lines]
+
+        # The server changes after the backup: one user wiped, one turn added.
+        async def wipe():
+            async with app.state.sdk_write_coordinator.use_client() as client:
+                return client.delete_all(user_id="local")
+
+        await asyncio.create_task(wipe())
+        await wait_writes(http, [await raw_write(http, "alice", "alice after backup dogs", 9)])
+        result["server_changed"] = await server_state(app)
         response = await http.post(
             "/api/v1/backup/restore", json={"source": "backups/qdrant.memhub-backup"}
         )
         result["restore_qdrant"] = [response.status_code, response.json()]
+        result["server_after"] = await server_state(app)
+        result["search_after"] = await search_raw(http, "local", "qdrant turn about cats")
+        previous = response.json().get("previous_vectors_path")
+        result["previous_vectors"] = (
+            [json.loads(line) for line in Path(previous).read_text().splitlines()]
+            if previous
+            else None
+        )
+        result["previous_vectors_mode"] = (
+            oct(Path(previous).stat().st_mode & 0o777) if previous else None
+        )
+        result["scratch_left"] = sorted(
+            path.name for path in (data / "hy-memory").glob(".restore-vectors-*")
+        )
         response = await http.post(
             "/api/v1/backup/restore", json={"source": "backups/chroma-era.memhub-backup"}
         )
@@ -666,7 +753,7 @@ def test_the_manifest_records_backend_space_sdk_users_and_counts(local) -> None:
         "graph": "kuzu",
         "vector_prefix": None,
     }
-    assert manifest["sdk_version"] == "2.0.15"
+    assert manifest["sdk_version"] == "2.0.16"
     assert manifest["embedding_space"]["state"] == "live"
     assert manifest["embedding_space"]["collection_base"].startswith("memhub_")
     assert manifest["users"] == ["local", "alice"]
@@ -769,32 +856,55 @@ def test_a_corrupt_graph_in_a_backup_is_quarantined_and_rebuilt(local) -> None:
     assert local["graph_rebuilt"] == local["graph_before"]
 
 
-def test_a_qdrant_backup_exports_the_memories_through_the_sdk(remote) -> None:
+def test_a_qdrant_backup_exports_the_memories_with_their_vectors(remote) -> None:
     status, body = remote["backup"]
     assert status == 200, body
     assert body["backend"]["kind"] == "remote_vector"
     manifest = remote["manifest"]
     assert manifest["contents"]["export"] == "export/memories.jsonl"
-    assert manifest["export"]["embeddings_included"] is False
-    assert manifest["counts"]["vector_store"] is None
+    export = manifest["export"]
+    assert export["embeddings_included"] is True
+    assert export["node_format"] == "hy-memory-node-v1"
+    assert export["embedding_dims"] == 512
+    # The server's collections under this home's prefix, keyed without it.
+    store = manifest["counts"]["vector_store"]
+    [space] = store.values()
+    assert space["memory"] == {"local": 5, "alice": 3}
     exported = manifest["counts"]["export"]
     before = _layer_counts(remote["before"])
     for user in ("local", "alice"):
         assert exported[user]["l1_raw"] == before[f"{user}/l1_raw"] == 3
-    lines = remote["export_lines"]
-    assert len(lines) == 6
-    assert {line["user_id"] for line in lines} == {"local", "alice"}
-    assert all(line["layer"] == "l1_raw" for line in lines)
-    assert all("qdrant turn" in line["memory"]["content"] for line in lines)
+    assert exported["local"]["l2_fact"] == 2
+    nodes = [line["node"] for line in remote["export_lines"] if "node" in line]
+    assert len(nodes) == 8
+    assert all(len(node["embedding"]) == 512 for node in nodes)
+    superseded = next(node for node in nodes if node["status"] == "superseded")
+    assert superseded["content"] == "local lived in Paris" and superseded["superseded_by"]
     assert remote["estimate"][1]["export_bytes"] > 0
 
 
-def test_restoring_memories_onto_qdrant_is_refused_until_the_sdk_can(remote) -> None:
-    assert remote["restore_qdrant"] == [422, {"detail": "backup_restore_remote_sdk_unsupported"}]
-    assert remote["capabilities"]["restore"] == {
-        "state": "refused",
-        "code": "backup_restore_remote_sdk_unsupported",
-    }
+def test_a_qdrant_backup_restores_onto_the_server_exactly(remote) -> None:
+    status, body = remote["restore_qdrant"]
+    assert status == 200, body
+    assert body["memories_included"] is True
+    assert body["verification"]["vector_store"] == "verified"
+    assert body["verification"]["layers"] == "verified"
+    assert body["verification"]["mismatches"] == []
+    # The server had changed after the backup ...
+    assert remote["server_changed"]["local"] == []
+    assert len(remote["server_changed"]["alice"]) == 4
+    assert remote["server_changed"] != remote["server_before"]
+    # ... and holds exactly the backup's memories again: ids, statuses,
+    # evolution links, times and vectors; the turn written since is gone.
+    assert remote["server_after"] == remote["server_before"]
+    assert not any("after backup" in item[6] for item in remote["server_after"]["alice"])
+    assert any("cats" in hit for hit in remote["search_after"])
+    # The server's memories as they were before the restore are kept, owner-only.
+    previous = remote["previous_vectors"]
+    assert any("after backup" in line["node"]["content"] for line in previous)
+    assert remote["previous_vectors_mode"] == "0o600"
+    assert remote["scratch_left"] == []
+    assert remote["capabilities"]["restore"] == {"state": "works", "code": None}
     assert remote["capabilities"]["backup"]["state"] == "works"
 
 
@@ -808,6 +918,8 @@ def test_a_backup_never_restores_across_backends(remote) -> None:
         422,
         {"detail": "backup_restore_backend_mismatch"},
     ]
+    # The refused restores changed nothing (the one restore before them
+    # brought back the state the snapshot was taken in).
     assert remote["after_refusals"] == remote["before"]
 
 

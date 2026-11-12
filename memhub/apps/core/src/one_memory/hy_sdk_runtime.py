@@ -66,6 +66,25 @@ BUILTIN_RETRIEVAL_PROFILE_ID = "builtin-retrieval"
 _LOCAL_ONNX_PLACEHOLDER_URL = "http://127.0.0.1/local-onnx"
 DEFAULT_RELEVANCE_FLOOR = 0.35
 
+#: `PUT /api/v2/memories/{id}`: the new text of a Coding/Working memory could
+#: not be embedded; the SDK kept the stored memory unchanged (hy-memory #399).
+MEMORY_UPDATE_EMBEDDING_FAILED = "memory_update_embedding_failed"
+#: Response header of the same route when the SDK updated a chat memory in the
+#: vector store but not its graph node (`graph_sync_failed`, hy-memory #439).
+GRAPH_SYNC_HEADER = "X-Memory-Graph-Sync"
+
+
+def sdk_edit_embedding_failed(error: BaseException) -> bool:
+    """Whether an SDK edit was refused because its new text could not be embedded.
+
+    hy-memory 2.0.16 raises `CodingWriteError("EMBEDDING_FAILED")` from a
+    Coding/Working `update` instead of storing the edit without a vector.
+    """
+    from hy_memory.coding.types import CodingWriteError  # type: ignore[import-untyped]
+
+    return isinstance(error, CodingWriteError) and error.error_code == "EMBEDDING_FAILED"
+
+
 #: The SDK's memory modes. A mode never changes a collection name: the space
 #: names the collections, the mode only which stores the client opens.
 MemoryMode = Literal["lite", "pro", "ultra"]
@@ -524,6 +543,10 @@ def build_sdk_config(
             },
             "history": {"db_path": str(root / "history.sqlite3")},
             "coding": {"db_path": str(root / "coding.sqlite3")},
+            # hy-memory 2.0.16 can keep the Coding/Working store in PostgreSQL
+            # (`MEMORY_BUSINESS_STORE`). MemHub's store is the SQLite file above,
+            # which backups and migrations copy: never left to the environment.
+            "business_store": {"backend": "sqlite", "postgres_dsn": None},
         }
     )
     return apply_sdk_language(apply_sdk_features(config, features), language)
