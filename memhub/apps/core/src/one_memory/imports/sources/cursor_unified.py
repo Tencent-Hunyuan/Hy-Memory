@@ -625,7 +625,9 @@ def _cursor_data_directory(relative_path: Path) -> bool:
     parts = relative_path.parts
     if not parts:
         return False
-    if parts[0] in {"chats", "acp-sessions"}:
+    # A grant on one exact project (`~/.cursor/projects/<slug>`) holds its
+    # native transcripts directly under the root.
+    if parts[0] in {"chats", "acp-sessions", "agent-transcripts"}:
         return True
     if parts[0] == "projects":
         return len(parts) <= 2 or parts[2] == "agent-transcripts"

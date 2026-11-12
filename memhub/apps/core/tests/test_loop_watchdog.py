@@ -107,3 +107,37 @@ def test_stall_captures_a_safe_stack_for_every_thread() -> None:
     assert all(line.startswith("thread|") for line in captured)
     assert all("source-reader-test" not in line and "MainThread" not in line for line in captured)
     assert all("/Users/" not in line and "\n" not in line for line in captured)
+
+
+def test_the_blocked_loop_leads_the_stacks_when_many_threads_are_alive() -> None:
+    """Only 16 thread stacks are kept; the loop's own must not be the one cut.
+
+    Core runs well over 16 threads (store pools, log writers, graph workers),
+    and ordering by thread id alone dropped the loop's stack on Linux.
+    """
+    stop = threading.Event()
+    workers = [threading.Thread(target=stop.wait, name=f"busy-{index}") for index in range(24)]
+    for worker in workers:
+        worker.start()
+    watchdog = LoopWatchdog(stall_seconds=0.2, heartbeat_seconds=0.05)
+
+    def i_hold_the_loop() -> None:
+        time.sleep(0.6)
+
+    async def blocked() -> None:
+        watchdog.beat()
+        i_hold_the_loop()
+
+    try:
+        watchdog.start()
+        asyncio.run(blocked())
+        watchdog.stop()
+    finally:
+        stop.set()
+        for worker in workers:
+            worker.join(timeout=1)
+
+    assert watchdog.stall_stacks
+    captured = watchdog.stall_stacks[0]
+    assert len(captured) == 16
+    assert "i_hold_the_loop" in captured[0]
