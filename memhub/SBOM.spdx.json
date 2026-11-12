@@ -3,9 +3,9 @@
   "dataLicense": "CC0-1.0",
   "SPDXID": "SPDXRef-DOCUMENT",
   "name": "one-memory",
-  "documentNamespace": "https://one-memory.local/spdx/2026-11-10T13:55:40Z",
+  "documentNamespace": "https://one-memory.local/spdx/2026-11-12T06:30:57Z",
   "creationInfo": {
-    "created": "2026-11-10T13:55:40Z",
+    "created": "2026-11-12T06:30:57Z",
     "creators": [
       "Tool: one-memory-generate-sbom"
     ]
@@ -2471,7 +2471,7 @@
     {
       "SPDXID": "SPDXRef-Package-hy-memory",
       "name": "hy-memory",
-      "versionInfo": "2.0.15",
+      "versionInfo": "2.0.16",
       "downloadLocation": "NOASSERTION",
       "filesAnalyzed": false,
       "licenseConcluded": "Apache-2.0",
