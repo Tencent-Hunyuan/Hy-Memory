@@ -30,10 +30,11 @@ from one_memory.model_profiles import (
     ModelProfileStore,
     ProviderKind,
     attach_disable_thinking,
+    output_token_field,
 )
 from one_memory.sdk_search_options import SdkSearchFilters, SearchLane
 from one_memory.secrets import SecretStore, SecretStoreUnavailableError
-from one_memory.user_scope import owns
+from one_memory.user_scope import DEFAULT_USER_ID, owns
 
 _NO_GROUNDING = "现有记忆不足以回答这个问题。"
 _GROUNDING_LIMIT = 6
@@ -62,6 +63,8 @@ class SdkMemoryAnswer(BaseModel):
     answer: str
     memories: tuple[SdkAskMemory, ...]
     mode: Literal["generated", "extractive", "empty"]
+    #: Whose memories answered: the request's `user_id`, else `local`.
+    user_id: str = DEFAULT_USER_ID
 
 
 class _PromptMemory:
@@ -481,7 +484,7 @@ def _sdk_answer_request(
         "messages": messages,
         "stream": stream,
         "temperature": 0.1,
-        "max_tokens": 768,
+        output_token_field(profile): 768,
     }
     if profile.capabilities.structured_output:
         payload["response_format"] = {

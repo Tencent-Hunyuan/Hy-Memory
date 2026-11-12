@@ -1,12 +1,13 @@
 import type { ChildProcess, SpawnOptions } from "node:child_process";
 import { spawn } from "node:child_process";
-import { access } from "node:fs/promises";
+import { access, readFile } from "node:fs/promises";
 import path from "node:path";
 import type { HealthResponse } from "@one-memory/contracts";
 import axios from "axios";
 import { processIsAlive } from "./core-supervisor.js";
 import {
   discoverRuntimeAttachment,
+  type RuntimeAttachment,
   RuntimeDiscoveryError,
 } from "./discovery.js";
 import { readSdkMigrationBlock } from "./sdk-migration-log.js";
@@ -109,7 +110,7 @@ export async function ensureRuntimeProcess(
 
 export async function waitForRuntimeProcess(
   options: WaitForRuntimeOptions,
-): Promise<void> {
+): Promise<RuntimeAttachment> {
   const attempts = options.attempts ?? 120;
   const delayMs = options.delayMs ?? 250;
   const waitStarted = Date.now();
@@ -121,7 +122,7 @@ export async function waitForRuntimeProcess(
         probeIdentity: options.probeIdentity ?? defaultProbeIdentity,
         requireServiceReceipt: true,
       });
-      if (attachment !== null) return;
+      if (attachment !== null) return attachment;
     } catch (error) {
       if (
         !(error instanceof RuntimeDiscoveryError) ||
@@ -161,8 +162,117 @@ export async function stopRuntimeProcess(
   if (attachment.servicePid === null) {
     throw new RuntimeDiscoveryError("runtime_service_receipt_invalid");
   }
+  await terminateVerifiedRuntime(options, attachment.servicePid);
+  return "stopped";
+}
+
+export interface StopAllRuntimesOptions extends StopRuntimeOptions {
+  /** How long a Runtime caught starting or stopping may take to become
+   * verifiable before the stop gives up on it. */
+  settleMs?: number;
+  /** Upper bound on Runtimes stopped in one call. The lease admits one at a
+   * time, so more than a few means something keeps starting new ones. */
+  maxRuntimes?: number;
+}
+
+export interface StopAllRuntimesResult {
+  /** Verified Runtime processes this call stopped. */
+  stopped: number[];
+  /** A live pid the Runtime lease names that could not be verified as a
+   * MemHub Runtime of this data dir. Never signalled: a recycled pid belongs
+   * to someone else. */
+  unverified: number[];
+}
+
+/** Stop every Runtime serving `dataDir`, whoever started it.
+ *
+ * The Runtime lease (`runtime-service.lock`) admits one Runtime per data dir,
+ * so "every" is the current leaseholder plus any successor that takes the
+ * lease while this runs: the App's own transient child, a `memhub start`, a
+ * leftover from an earlier session. Each is found through its receipt and
+ * signalled only once the authenticated identity endpoint has proved that the
+ * receipt's pid is the Runtime serving this data dir. A live lease owner that
+ * cannot be proved that way is reported, never signalled.
+ */
+export async function stopAllRuntimeProcesses(
+  options: StopAllRuntimesOptions,
+): Promise<StopAllRuntimesResult> {
+  const alive = options.processIsAlive ?? processIsAlive;
+  const stopped: number[] = [];
+  const settleDeadline = Date.now() + (options.settleMs ?? 2_000);
+  const maxRuntimes = options.maxRuntimes ?? 3;
+  while (stopped.length < maxRuntimes) {
+    let attachment: RuntimeAttachment | null;
+    try {
+      attachment = await discoverRuntimeAttachment({
+        dataDir: options.dataDir,
+        processIsAlive: alive,
+        probeIdentity: options.probeIdentity ?? defaultProbeIdentity,
+        requireServiceReceipt: true,
+      });
+    } catch (error) {
+      if (settling(error) && Date.now() < settleDeadline) {
+        await delay(100);
+        continue;
+      }
+      throw error;
+    }
+    if (attachment === null) break;
+    if (attachment.servicePid === null) {
+      throw new RuntimeDiscoveryError("runtime_service_receipt_invalid");
+    }
+    await terminateVerifiedRuntime(options, attachment.servicePid);
+    stopped.push(attachment.servicePid);
+  }
+  const leasePid = await readRuntimeLeaseOwnerPid(options.dataDir);
+  const unverified =
+    leasePid !== null &&
+    leasePid !== process.pid &&
+    !stopped.includes(leasePid) &&
+    alive(leasePid)
+      ? [leasePid]
+      : [];
+  return { stopped, unverified };
+}
+
+/** The pid the Runtime lease names, or null without a readable lease. */
+export async function readRuntimeLeaseOwnerPid(
+  dataDir: string,
+): Promise<number | null> {
+  try {
+    const owner = JSON.parse(
+      await readFile(
+        path.join(dataDir, "runtime-service.lock", "owner.json"),
+        "utf8",
+      ),
+    ) as { pid?: unknown };
+    return typeof owner.pid === "number" &&
+      Number.isInteger(owner.pid) &&
+      owner.pid > 1
+      ? owner.pid
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+/** A Runtime between states: starting, stopping, or swapping receipts. */
+function settling(error: unknown): boolean {
+  return (
+    error instanceof RuntimeDiscoveryError &&
+    (error.code === "runtime_service_not_ready" ||
+      error.code === "runtime_service_receipt_invalid" ||
+      error.code === "runtime_identity_unavailable")
+  );
+}
+
+async function terminateVerifiedRuntime(
+  options: StopRuntimeOptions,
+  pid: number,
+): Promise<void> {
+  const alive = options.processIsAlive ?? processIsAlive;
   const signal = options.signalProcess ?? process.kill;
-  signal(attachment.servicePid, "SIGTERM");
+  signal(pid, "SIGTERM");
   const timeoutMs = options.timeoutMs ?? 15_000;
   const deadline = Date.now() + timeoutMs;
   // The process exiting is the authoritative stop signal. The receipt files
@@ -171,10 +281,10 @@ export async function stopRuntimeProcess(
   const receiptGraceMs = Math.min(RECEIPT_CLEANUP_GRACE_MS, timeoutMs);
   let exitedAt: number | null = null;
   while (Date.now() < deadline) {
-    if (!alive(attachment.servicePid)) {
+    if (!alive(pid)) {
       exitedAt ??= Date.now();
-      if (await receiptsAreGone(options.dataDir)) return "stopped";
-      if (Date.now() - exitedAt >= receiptGraceMs) return "stopped";
+      if (await receiptsAreGone(options.dataDir)) return;
+      if (Date.now() - exitedAt >= receiptGraceMs) return;
     } else {
       exitedAt = null;
     }

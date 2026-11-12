@@ -1,4 +1,5 @@
 import type {
+  HomeProjectionV1,
   LiveSyncHealth,
   MemoryProcessingSummary,
   ModelProfile,
@@ -12,10 +13,12 @@ import { sdkMigrationLogPath } from "@one-memory/runtime-control";
 import type { CoreReader, ReadOutcome } from "./core-client.js";
 import {
   type SdkHomeSummary,
+  validateHomeProjection,
   validateHomeSummary,
   validateLiveSync,
   validateModelProfiles,
   validateProcessing,
+  validateRawTotal,
   validateSources,
 } from "./core-responses.js";
 import { describeEmbeddingSwitchSummary } from "./embedding-switch-flow.js";
@@ -84,12 +87,68 @@ export interface PipelineSummary {
     }
   >;
   graph_build: string | null;
+  /** The ultra graph store (`graph_store.state`); null from an older Core. */
+  graph_store: string | null;
+  /** Graphs quarantined after they kept taking Core down while opening. */
+  graph_quarantine_count: number;
   /** SDK features (`memory_features`) whose value differs from the default. */
-  features: Record<string, boolean>;
+  features: Record<string, boolean | number>;
   /** The App's display language; null = never chosen or "follow the system". */
   ui_language: string | null;
   /** The SDK prompt language: `auto` (zh/en detection) or the code passed. */
   sdk_language: string;
+  /** The graph and vector stores (`pipeline.storage_backends`); null from an
+   * older Core without the setting. */
+  storage_backends: StorageBackendsSummary | null;
+}
+
+export interface StorageBackendsSummary {
+  graph: string;
+  vector: string;
+  is_default: boolean;
+  label: string;
+  health: "ok" | "local" | "failed" | "unknown";
+  health_code: string | null;
+}
+
+const STORAGE_HEALTH = new Set(["ok", "local", "failed", "unknown"]);
+
+function describeStorageBackends(
+  value: unknown,
+): StorageBackendsSummary | null {
+  if (!value || typeof value !== "object") return null;
+  const item = value as Record<string, unknown>;
+  if (
+    typeof item.graph !== "string" ||
+    typeof item.vector !== "string" ||
+    typeof item.is_default !== "boolean" ||
+    typeof item.label !== "string" ||
+    !STORAGE_HEALTH.has(String(item.health))
+  ) {
+    return null;
+  }
+  return {
+    graph: item.graph,
+    vector: item.vector,
+    is_default: item.is_default,
+    label: item.label,
+    health: item.health as StorageBackendsSummary["health"],
+    health_code: typeof item.health_code === "string" ? item.health_code : null,
+  };
+}
+
+/** `存储后端：Neo4j + Qdrant（通过 CLI 配置）`, with the servers' health. */
+export function storageBackendsLine(storage: StorageBackendsSummary): string {
+  const origin = storage.is_default ? "默认" : "通过 CLI 配置";
+  const health =
+    storage.health === "failed"
+      ? `，连接失败：${storage.health_code ?? "storage_backend_probe_failed"}`
+      : storage.health === "ok"
+        ? "，连接正常"
+        : storage.health === "unknown"
+          ? "，尚未检查连接"
+          : "";
+  return `${storage.label}（${origin}${health}）`;
 }
 
 const MODES = new Set(["lite", "pro", "ultra"]);
@@ -134,17 +193,22 @@ export function describePipeline(value: unknown): PipelineSummary | null {
       };
     }
   }
-  const features: Record<string, boolean> = {};
+  const features: Record<string, boolean | number> = {};
   if (item.features && typeof item.features === "object") {
     for (const [name, value] of Object.entries(
       item.features as Record<string, unknown>,
     )) {
-      if (typeof value === "boolean") features[name] = value;
+      if (typeof value === "boolean" || typeof value === "number")
+        features[name] = value;
     }
   }
   const graph =
     item.graph_build && typeof item.graph_build === "object"
       ? (item.graph_build as Record<string, unknown>)
+      : {};
+  const graphStore =
+    item.graph_store && typeof item.graph_store === "object"
+      ? (item.graph_store as Record<string, unknown>)
       : {};
   return {
     mode: item.mode as PipelineSummary["mode"],
@@ -161,11 +225,17 @@ export function describePipeline(value: unknown): PipelineSummary | null {
     evolve_running: Array.isArray(evolve.running) ? evolve.running.length : 0,
     evolve_users: users,
     graph_build: typeof graph.state === "string" ? graph.state : null,
+    graph_store: typeof graphStore.state === "string" ? graphStore.state : null,
+    graph_quarantine_count:
+      typeof graphStore.quarantine_count === "number"
+        ? graphStore.quarantine_count
+        : 0,
     features,
     ui_language: typeof item.ui_language === "string" ? item.ui_language : null,
     // An older Runtime has no setting: it always left the SDK on auto.
     sdk_language:
       typeof item.sdk_language === "string" ? item.sdk_language : "auto",
+    storage_backends: describeStorageBackends(item.storage_backends),
   };
 }
 
@@ -210,12 +280,12 @@ export async function composeStatusReport(options: {
     for (const name of SECTION_NAMES) sections[name] = { state, code };
   } else {
     const reader = options.reader;
-    const [sources, sync, processing, model, memories] = await Promise.all([
+    const [sources, sync, processing, model, projection] = await Promise.all([
       reader<unknown>("/api/v1/sources"),
       reader<unknown>("/api/v1/live-sync"),
       reader<unknown>("/api/v1/memory-processing"),
       reader<unknown>("/api/v1/model-profiles"),
-      reader<unknown>("/api/v2/home-summary"),
+      reader<unknown>("/api/v2/home-projection"),
     ]);
     sections.sources = section(sources, validateSources, describeSources);
     sections.sync = section(sync, validateLiveSync, describeSync);
@@ -227,11 +297,7 @@ export async function composeStatusReport(options: {
     pipeline =
       processing.state === "ok" ? describePipeline(processing.data) : null;
     sections.model = section(model, validateModelProfiles, describeModel);
-    sections.memories = section(
-      memories,
-      validateHomeSummary,
-      describeMemories,
-    );
+    sections.memories = await memorySection(reader, projection, pipeline);
   }
   // A bridge we could not inspect is unknown, not broken and not fine.
   const bridge: StatusDocument["bridge"] =
@@ -250,6 +316,11 @@ export async function composeStatusReport(options: {
   );
   if (bridge.state === "degraded" || bridge.state === "untrusted") {
     degraded.push("bridge");
+  }
+  // A configured server that did not answer the last probe: memories cannot
+  // be written or read there, whatever the rest says.
+  if (pipeline?.storage_backends?.health === "failed") {
+    degraded.push("storage_backends");
   }
   const notChecked: string[] = SECTION_NAMES.filter(
     (name) => sections[name]?.state === "not_checked",
@@ -311,14 +382,25 @@ export function renderStatusText(
   ];
   for (const name of SECTION_NAMES) {
     lines.push(
-      `${SECTION_LABELS[name]}：${sectionLine(report.sections[name])}`,
+      `${sectionLabel(name, report.sections[name])}：${sectionLine(
+        report.sections[name],
+      )}`,
     );
   }
   if (report.pipeline) lines.push(`记忆模式：${pipelineLine(report.pipeline)}`);
+  if (report.pipeline?.storage_backends) {
+    lines.push(
+      `存储后端：${storageBackendsLine(report.pipeline.storage_backends)}`,
+    );
+  }
   const embeddingSwitch = describeEmbeddingSwitchSummary(
     report.sections.processing?.embedding_switch,
   );
   if (embeddingSwitch !== null) lines.push(`向量模型：${embeddingSwitch}`);
+  const backoff = modelBackoffLine(report.sections.processing);
+  if (backoff !== null) lines.push(backoff);
+  const drain = writeDrainLine(report.sections.processing);
+  if (drain !== null) lines.push(drain);
   if (report.summary.state === "partial") {
     const notes = [
       report.summary.degraded.length > 0
@@ -332,6 +414,35 @@ export function renderStatusText(
   }
   lines.push("");
   return lines.join("\n");
+}
+
+/** "Model paused" while Core's circuit breaker holds model work back; null
+ * otherwise. Nothing to do here: the queue resumes by itself once the model
+ * answers again (or after the model is fixed). */
+function modelBackoffLine(section: Section | undefined): string | null {
+  if (section?.state !== "ok") return null;
+  const error = section.llm_backoff_error;
+  if (typeof error !== "string" || error.length === 0) return null;
+  const until = section.llm_backoff_until;
+  return `模型暂停：${error}，${
+    typeof until === "string" && until.length > 0
+      ? `将于 ${until} 自动重试`
+      : "稍后自动重试"
+  }`;
+}
+
+/** The durable write drain, when it is not simply running: it exited on an
+ * error and is coming back (`restarting`), or it is not running at all. */
+function writeDrainLine(section: Section | undefined): string | null {
+  if (section?.state !== "ok") return null;
+  const state = section.write_drain;
+  if (state !== "restarting" && state !== "stopped") return null;
+  const error = section.write_drain_error;
+  const reason =
+    typeof error === "string" && error.length > 0 ? `（${error}）` : "";
+  return state === "restarting"
+    ? `写入队列：异常退出${reason}，正在自动重启`
+    : `写入队列：已停止${reason}`;
 }
 
 export function pipelineLine(pipeline: PipelineSummary): string {
@@ -352,12 +463,17 @@ export function pipelineLine(pipeline: PipelineSummary): string {
     );
     if (pipeline.evolve_running > 0)
       parts.push(`，进行中 ${pipeline.evolve_running}`);
+    const graphStore = graphStoreText(pipeline);
+    if (graphStore) parts.push(`，${graphStore}`);
   }
   const changed = Object.entries(pipeline.features);
   if (changed.length > 0) {
     parts.push(
       `；SDK 功能：${changed
-        .map(([name, value]) => `${name}=${value ? "开" : "关"}`)
+        .map(
+          ([name, value]) =>
+            `${name}=${typeof value === "number" ? value : value ? "开" : "关"}`,
+        )
         .join("、")}`,
     );
   }
@@ -371,6 +487,22 @@ export function pipelineLine(pipeline: PipelineSummary): string {
   return parts.join("");
 }
 
+const GRAPH_STORE_TEXT: Record<string, string> = {
+  opening: "知识图谱正在打开",
+  rebuilding_after_quarantine: "知识图谱文件损坏，已隔离并正在重建",
+  unavailable: "知识图谱暂不可用",
+};
+
+/** The ultra graph store, only when it is not simply ready. */
+function graphStoreText(pipeline: PipelineSummary): string | null {
+  const state = pipeline.graph_store
+    ? GRAPH_STORE_TEXT[pipeline.graph_store]
+    : undefined;
+  const count = pipeline.graph_quarantine_count;
+  if (state) return count > 0 ? `${state}（累计隔离 ${count} 次）` : state;
+  return count > 0 ? `知识图谱累计隔离 ${count} 次` : null;
+}
+
 function runtimeLine(report: StatusDocument): string {
   if (report.runtime.state !== "running") {
     return report.runtime.state === "stopped" ? "未运行" : "暂时无法确认";
@@ -380,15 +512,33 @@ function runtimeLine(report: StatusDocument): string {
   }）`;
 }
 
+/** Fields that have their own line (or none) instead of a place in the
+ * section's one-line summary. */
+const SECTION_LINE_OMITTED = new Set([
+  "state",
+  "code",
+  "embedding_switch",
+  "llm_backoff_until",
+  "llm_backoff_error",
+  "write_drain",
+  "write_drain_error",
+  "content_plane",
+  "visible_count",
+  "effective_mode",
+]);
+
+function sectionLabel(name: string, section: Section | undefined): string {
+  return name === "memories" && section?.content_plane === "raw"
+    ? "原始对话"
+    : SECTION_LABELS[name];
+}
+
 function sectionLine(section: Section | undefined): string {
   if (!section) return "未检查";
   if (section.state === "not_checked") return "未检查";
   if (section.state !== "ok") return "暂时不可用，请稍后重试";
   return Object.entries(section)
-    .filter(
-      ([key]) =>
-        key !== "state" && key !== "code" && key !== "embedding_switch",
-    )
+    .filter(([key]) => !SECTION_LINE_OMITTED.has(key))
     .map(([key, value]) => `${fieldLabel(key)} ${formatValue(value)}`)
     .join(" ");
 }
@@ -424,6 +574,7 @@ function fieldLabel(key: string): string {
     backlog_pending: "历史待处理",
     outside_window_pending: "稍后处理",
     waiting_for_model: "等待模型",
+    suspended: "来源已暂停",
     completed: "已完成",
     failed: "失败",
     blocked: "卡住",
@@ -433,6 +584,10 @@ function fieldLabel(key: string): string {
     profiles: "配置",
     active: "当前",
     memory_count: "记忆",
+    raw_count: "原始对话",
+    visible_count: "可见",
+    content_plane: "内容层",
+    effective_mode: "模式",
   };
   return labels[key] ?? key;
 }
@@ -504,7 +659,44 @@ function describeProcessing(
       reason: block.reason,
       count: block.count,
     })),
+    suspended: typeof summary.suspended === "number" ? summary.suspended : 0,
+    ...llmBackoffFields(summary),
+    ...writeDrainFields(summary),
     ...embeddingSwitchField(summary),
+  };
+}
+
+/** The model circuit breaker: set only while Core pauses model work because
+ * the provider keeps failing. Both null when nothing is paused. */
+function llmBackoffFields(summary: MemoryProcessingSummary): {
+  llm_backoff_until: string | null;
+  llm_backoff_error: string | null;
+} {
+  const until = summary.llm_backoff_until;
+  const error = summary.llm_backoff_error;
+  return {
+    llm_backoff_until:
+      typeof until === "string" && until.length <= 64 ? until : null,
+    llm_backoff_error:
+      typeof error === "string" && /^[a-z_]{1,64}$/.test(error) ? error : null,
+  };
+}
+
+/** Durable write drain liveness. Null when Core does not report it (older
+ * Core, or recovery has not started the drain yet). */
+function writeDrainFields(summary: MemoryProcessingSummary): {
+  write_drain: "running" | "restarting" | "stopped" | null;
+  write_drain_error: string | null;
+} {
+  const state = summary.write_drain;
+  const error = summary.write_drain_error;
+  return {
+    write_drain:
+      state === "running" || state === "restarting" || state === "stopped"
+        ? state
+        : null,
+    write_drain_error:
+      typeof error === "string" && /^[a-z_]{1,64}$/.test(error) ? error : null,
   };
 }
 
@@ -545,6 +737,70 @@ function describeModel(profiles: ModelProfile[]): Record<string, unknown> {
 function describeMemories(summary: SdkHomeSummary): Record<string, unknown> {
   return {
     memory_count: summary.memory_count,
+  };
+}
+
+async function memorySection(
+  reader: CoreReader,
+  projection: ReadOutcome<unknown>,
+  pipeline: PipelineSummary | null,
+): Promise<Section> {
+  if (projection.state === "ok") {
+    const parsed = validateHomeProjection(projection.data);
+    return parsed === null
+      ? { state: "invalid", code: "response_invalid" }
+      : { state: "ok", ...describeProjection(parsed) };
+  }
+  if (projection.state !== "not_found") {
+    return {
+      state: projection.state === "denied" ? "denied" : "unavailable",
+      code: projection.code,
+    };
+  }
+  if (pipeline === null) {
+    return { state: "unavailable", code: "effective_mode_unavailable" };
+  }
+  if (pipeline.mode === "lite") {
+    const raw = await reader<unknown>("/api/v2/raw", {
+      limit: 1,
+      offset: 0,
+    });
+    if (raw.state !== "ok") {
+      return {
+        state: raw.state === "denied" ? "denied" : "unavailable",
+        code: raw.code,
+      };
+    }
+    const total = validateRawTotal(raw.data);
+    return total === null
+      ? { state: "invalid", code: "response_invalid" }
+      : {
+          state: "ok",
+          content_plane: "raw",
+          visible_count: total,
+          effective_mode: "lite",
+          raw_count: total,
+        };
+  }
+  const legacy = await reader<unknown>("/api/v2/home-summary");
+  return section(legacy, validateHomeSummary, (summary) => ({
+    content_plane: "memory",
+    visible_count: summary.memory_count,
+    effective_mode: pipeline.mode,
+    ...describeMemories(summary),
+  }));
+}
+
+function describeProjection(
+  projection: HomeProjectionV1,
+): Record<string, unknown> {
+  return {
+    content_plane: projection.capabilities.content_plane,
+    visible_count: projection.visible_count,
+    effective_mode: projection.effective_mode,
+    ...(projection.capabilities.content_plane === "raw"
+      ? { raw_count: projection.visible_count }
+      : { memory_count: projection.visible_count }),
   };
 }
 

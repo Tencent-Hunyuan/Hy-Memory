@@ -160,7 +160,7 @@ it.each(["missing", "pending"] as const)(
   },
 );
 
-it("centers one or two apps and keeps three or more in a scrolling row", () => {
+it("centers one to three apps and keeps four or more in a scrolling row", () => {
   function shown(ids: string[]) {
     const view = render(
       <R6ImportProgress
@@ -181,7 +181,7 @@ it("centers one or two apps and keeps three or more in a scrolling row", () => {
   }
   expect(shown(["cursor"])).toBe("1");
   expect(shown(["cursor", "codex"])).toBe("2");
-  expect(shown(["cursor", "codex", "claude-code"])).toBe("many");
+  expect(shown(["cursor", "codex", "claude-code"])).toBe("3");
   expect(shown(["cursor", "codex", "claude-code", "workbuddy"])).toBe("many");
   const four = render(
     <R6ImportProgress
@@ -200,6 +200,38 @@ it("centers one or two apps and keeps three or more in a scrolling row", () => {
       .querySelector(".r6-import-progress")
       ?.getAttribute("data-count"),
   ).toBe("many");
+  expect(
+    four.container
+      .querySelector(".r6-import-progress")
+      ?.getAttribute("tabindex"),
+  ).toBe("0");
+});
+
+it("scrolls one card at a time from the keyboard", () => {
+  const ids = ["cursor", "codex", "claude-code", "workbuddy"];
+  render(
+    <R6ImportProgress
+      sourceIds={ids}
+      sources={ids.map((id) => ({
+        ...source,
+        source_id: id,
+        display_name: id,
+      }))}
+      jobs={[]}
+    />,
+  );
+  const progress = screen.getByRole("region", {
+    name: "本次应用导入进度",
+  });
+  Object.defineProperty(progress.firstElementChild, "offsetWidth", {
+    configurable: true,
+    value: 280,
+  });
+  progress.scrollBy = ((options: ScrollToOptions) => {
+    progress.scrollLeft += Number(options.left ?? 0);
+  }) as typeof progress.scrollBy;
+  fireEvent.keyDown(progress, { key: "ArrowRight" });
+  expect(progress.scrollLeft).toBe(296);
 });
 
 it("keeps the first app anchored across receipts unless the user scrolls", () => {

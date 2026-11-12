@@ -87,7 +87,12 @@ export interface ContextSearchResponse {
 
 export interface SdkRawContextItem {
   kind: "raw";
+  /** Parent SDK L1 raw storage batch. */
   raw_id: string;
+  /** Stable product identity of one turn inside `raw_id`, when requested. */
+  turn_id?: string | null;
+  turn_index?: number | null;
+  turn_count?: number | null;
   content: string;
   source: string;
   session_id: string;
@@ -118,6 +123,9 @@ export interface SdkContextSearchResponse {
   used_characters: number;
   truncated: boolean;
   total_ms: number;
+  /** Whose memories were searched; `local` unless the request named a user.
+   * Absent from a Core older than 1.0.6. */
+  user_id?: string;
 }
 
 /** Native Host Bridge wire response. Schemas stay distinct and are never adapted. */

@@ -5,6 +5,11 @@ Post-cutover hosts use SDK-native Context v2 at
 `POST /api/v2/context/search`. A v2 response is never converted into v1 by
 inventing revisions, Evidence IDs, paths, or adoption state.
 
+Since MemHub 1.0.6 the v2 response also carries `user_id`, the user whose
+memories were searched (`local` unless the request named one). The Host
+Bridge validator accepts it as an optional field, so a response from an older
+Core without it still validates; any other unknown field still fails closed.
+
 ## Transport
 
 - The Broker `/context` route (used by host hooks and `recall-cli --context`;
@@ -16,9 +21,10 @@ inventing revisions, Evidence IDs, paths, or adoption state.
 - Existing `om_recall` and `om_conversations` grants are composed rather than
   replaced by a universal context grant. At least one requested lane must be
   authorized.
-- Raw access requires `all-apps` plus source grants. Memory access requires an
-  existing memory scope. Explicit unauthorized raw sources are rejected before
-  Core is called.
+- Raw access requires `om_conversations` plus `all-apps`; Core resolves that
+  scope to every connected, unrevoked source. Memory access requires an existing
+  memory scope. Explicit raw source filters are checked against live connections
+  by Core.
 - Broker captures installation identity and revision, then re-authenticates
   before releasing results. Revocation, credential rotation, or scope
   narrowing invalidates the release.

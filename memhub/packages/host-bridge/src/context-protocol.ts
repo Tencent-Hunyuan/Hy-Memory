@@ -67,7 +67,7 @@ export function isContextSearchRequest(
   );
 }
 
-/** Composition of existing rights, not a new all-content grant. Core checks live sources. */
+/** Composition of existing rights. Core checks which connected sources remain live. */
 export function authorizeContext(
   identity: VerifiedHostIdentity,
   request: ContextSearchRequest,
@@ -76,16 +76,9 @@ export function authorizeContext(
   const raw =
     kinds.includes("raw") &&
     identity.allowedTools.includes("om_conversations") &&
-    identity.allowedScopes.includes("all-apps") &&
-    identity.allowedScopes.some((s) => s.startsWith("source:"));
+    identity.allowedScopes.includes("all-apps");
   const memory = kinds.includes("memory") && hasMemoryAuthority(identity);
-  if (
-    request.raw_source_ids &&
-    (!raw ||
-      !request.raw_source_ids.every((s) =>
-        identity.allowedScopes.includes(`source:${s}`),
-      ))
-  )
+  if (request.raw_source_ids && !raw)
     throw new HostGrantError("host_grant_scope_denied");
   if (!raw && !memory) throw new HostGrantError("host_grant_tool_denied");
 }
@@ -109,8 +102,7 @@ export function isContextResponseAuthorized(
     item.kind === "memory"
       ? hasMemoryAuthority(identity)
       : identity.allowedTools.includes("om_conversations") &&
-        identity.allowedScopes.includes("all-apps") &&
-        identity.allowedScopes.includes(`source:${item.source}`),
+        identity.allowedScopes.includes("all-apps"),
   );
 }
 
@@ -140,15 +132,22 @@ export function isSdkContextSearchResponse(
 ): value is SdkContextSearchResponse {
   if (
     !record(value) ||
-    !exact(value, [
-      "schema_version",
-      "request_id",
-      "state",
-      "items",
-      "used_characters",
-      "truncated",
-      "total_ms",
-    ]) ||
+    // `user_id` (whose memories were searched) is optional so a Core from
+    // before it was echoed still validates.
+    !exact(
+      value,
+      [
+        "schema_version",
+        "request_id",
+        "state",
+        "items",
+        "used_characters",
+        "truncated",
+        "total_ms",
+      ],
+      ["user_id"],
+    ) ||
+    (value.user_id !== undefined && !text(value.user_id, 1, 64)) ||
     value.schema_version !== 2 ||
     !text(value.request_id, 1, 64) ||
     !member(value.state, ["grounded", "empty", "partial", "unavailable"]) ||
@@ -177,17 +176,30 @@ function validSdkItem(value: unknown): boolean {
   if (!record(value) || typeof value.truncated !== "boolean") return false;
   if (value.kind === "raw")
     return (
-      exact(value, [
-        "kind",
-        "raw_id",
-        "content",
-        "source",
-        "session_id",
-        "memory_at",
-        "score",
-        "truncated",
-      ]) &&
+      exact(
+        value,
+        [
+          "kind",
+          "raw_id",
+          "content",
+          "source",
+          "session_id",
+          "memory_at",
+          "score",
+          "truncated",
+        ],
+        ["turn_id", "turn_index", "turn_count"],
+      ) &&
       text(value.raw_id, 1, 512) &&
+      (value.turn_id === undefined ||
+        value.turn_id === null ||
+        text(value.turn_id, 1, 96)) &&
+      (value.turn_index === undefined ||
+        value.turn_index === null ||
+        integer(value.turn_index, 0, Number.MAX_SAFE_INTEGER)) &&
+      (value.turn_count === undefined ||
+        value.turn_count === null ||
+        integer(value.turn_count, 1, Number.MAX_SAFE_INTEGER)) &&
       text(value.content, 0, 20000) &&
       text(value.source, 1, 128) &&
       text(value.session_id, 1, 512) &&
@@ -223,8 +235,15 @@ function record(value: unknown): value is Record<string, unknown> {
 function only(value: Record<string, unknown>, keys: string[]): boolean {
   return Object.keys(value).every((key) => keys.includes(key));
 }
-function exact(value: Record<string, unknown>, keys: string[]): boolean {
-  return only(value, keys) && keys.every((key) => Object.hasOwn(value, key));
+function exact(
+  value: Record<string, unknown>,
+  keys: string[],
+  optional: string[] = [],
+): boolean {
+  return (
+    only(value, [...keys, ...optional]) &&
+    keys.every((key) => Object.hasOwn(value, key))
+  );
 }
 function text(value: unknown, min: number, max: number): value is string {
   return (

@@ -39,8 +39,7 @@ def kuzu_graph_with_embedding_width(db_path: Path, width: int) -> None:
     database = kuzu.Database(str(db_path))
     connection = kuzu.Connection(database)
     connection.execute(
-        f"CREATE NODE TABLE Memory("
-        f"node_id STRING, embedding FLOAT[{width}], PRIMARY KEY(node_id))"
+        f"CREATE NODE TABLE Memory(node_id STRING, embedding FLOAT[{width}], PRIMARY KEY(node_id))"
     )
     del connection
     del database

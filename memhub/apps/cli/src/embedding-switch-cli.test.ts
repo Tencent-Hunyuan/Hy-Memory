@@ -250,6 +250,20 @@ describe("models activate with an embedding change", () => {
       code: "embedding_switch_required",
     });
   });
+
+  it("does not treat a domain 404 as an old-Core route miss", async () => {
+    transport.post.mockResolvedValue({
+      status: 404,
+      data: { detail: "embedding_switch_not_found" },
+    });
+    const result = await capturedRun(["models", "activate", PROFILE, "--json"]);
+    expect(result.code).toBe(1);
+    expect(
+      transport.post.mock.calls.some(([url]) =>
+        String(url).endsWith("/activate"),
+      ),
+    ).toBe(false);
+  });
 });
 
 describe("models switch and spaces", () => {

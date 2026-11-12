@@ -2,10 +2,11 @@
  * `memhub settings language [<code>|system]`.
  *
  * The display language the App reports to the Runtime (`ui_language`), and
- * the SDK prompt language it implies. zh-Hans and "system" (no explicit
- * choice) pass no language, so the SDK keeps detecting Chinese or English as
- * before; every other code, en included, makes extraction and the other SDK
- * prompts use that language. A change applies at once: a write in flight
+ * the SDK prompt language it implies. Every code, zh-Hans and en included,
+ * makes extraction and the other SDK prompts use that language; "system"
+ * (no language set) passes none, so the SDK keeps detecting Chinese or
+ * English as before. The App sends the language it shows, so it is only
+ * unset on an install without the App. A change applies at once: a write in flight
  * finishes in the old language, the next ones use the new one. The App sends
  * its own choice again whenever it changes there.
  */
@@ -162,14 +163,14 @@ export function renderLanguageText(document: LanguageDocument): string {
   const lines = [
     `界面语言：${
       state.ui_language === null
-        ? "跟随系统（未选择）"
+        ? "未设置（SDK 自动识别）"
         : `${state.ui_language}（${NAMES[state.ui_language]}）`
     }`,
     `SDK 提示语言：${sdkText(state.sdk_language)}`,
   ];
   if (document.state === "ok") {
     lines.push(
-      `可选：${UI_LANGUAGES.join("、")}、system。简体中文和 system 不指定语言，其余语言（包括 en）会让 SDK 使用该语言。`,
+      `可选：${UI_LANGUAGES.join("、")}、system。任一语言（包括 zh-Hans、en）都会让 SDK 使用该语言；system 不指定语言，SDK 自动识别中文或英文。`,
     );
   }
   if (document.state === "unchanged") lines.push("没有需要改动的设置。");

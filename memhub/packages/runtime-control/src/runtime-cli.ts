@@ -18,7 +18,10 @@ import { HostPermissions } from "./host-permissions.js";
 import { verifyInstalledDistribution } from "./local-install.js";
 import { RecallBrokerSupervisor } from "./recall-broker-supervisor.js";
 import { recallHosts } from "./recall-hosts.js";
-import { RuntimeService } from "./runtime-service.js";
+import {
+  type RuntimeBuildIdentity,
+  RuntimeService,
+} from "./runtime-service.js";
 import { RuntimeSupervisor } from "./runtime-supervisor.js";
 import {
   runSdkMigration,
@@ -653,6 +656,19 @@ function boundFingerprint(
     .digest("hex");
 }
 
+/** The build this Runtime publishes in its receipt. Unknown stays `null`, never
+ * a guess: an App treats an unknown build as "do not touch". */
+export function runtimeBuildIdentity(
+  identity: RuntimeCliConfig["buildIdentity"],
+): RuntimeBuildIdentity {
+  const build = Number(identity?.buildNumber);
+  const commit = identity?.commit?.trim().toLowerCase() ?? "";
+  return {
+    buildNumber: Number.isSafeInteger(build) && build > 0 ? build : null,
+    commit: /^[0-9a-f]{7,40}$/.test(commit) ? commit : null,
+  };
+}
+
 export async function createRuntimeService(
   config: RuntimeCliConfig,
 ): Promise<RuntimeService> {
@@ -668,6 +684,7 @@ export async function createRuntimeService(
   return new RuntimeService({
     dataDir: config.dataDir,
     diagnostics,
+    buildIdentity: runtimeBuildIdentity(config.buildIdentity),
     async createSupervisor(onSidecarFault) {
       const { port, overrideApplied, ignoredReason } = resolveCorePort(
         process.env,
@@ -732,12 +749,14 @@ export async function createRuntimeService(
         verifyHostRuntime,
         config.hostRuntime?.manifestSha256 ?? "daily",
       );
-      const hosts = (
-        await recallHosts(config.hostHome ?? os.homedir(), {
-          ...process.env,
-          ONE_MEMORY_HOST_HOME: config.hostHome,
-        })
-      ).filter((host) => host.hostId !== "openclaw");
+      const scanHosts = async () =>
+        (
+          await recallHosts(config.hostHome ?? os.homedir(), {
+            ...process.env,
+            ONE_MEMORY_HOST_HOME: config.hostHome,
+          })
+        ).filter((host) => host.hostId !== "openclaw");
+      const hosts = await scanHosts();
       await verifyHostRuntime().then(
         async () => {
           // Every Runtime start after an upgrade, the App's or `memhub
@@ -767,6 +786,9 @@ export async function createRuntimeService(
             connection,
             permissions,
             hosts,
+            // The Runtime outlives the App: a Harness profile created after it
+            // started must not make every later host read fail.
+            discoverHosts: scanHosts,
             layouts: new Map(
               hosts.flatMap((host) =>
                 host.hostId === "claude-code"

@@ -1,7 +1,7 @@
 # Memory mode, evolve and the nightly schedule v1
 
-Status: Core + CLI implemented (PR B of the SDK-surface batch). The App
-controls are built separately against this contract.
+Status: Core + CLI + App implemented. The App uses this contract for first-run
+mode choice, Settings, the mode-specific memory page and evolve status.
 
 All routes need the Runtime bearer token. Unknown query parameters and body
 fields answer `422 {"detail": "request_validation_failed"}`, like every
@@ -12,7 +12,7 @@ memory route. `user_id` is optional (default `local`) and must match
 
 | Mode | SDK client | What happens to a conversation | What search reads |
 |---|---|---|---|
-| `lite` | `mode="lite"` | Stored as one raw turn with one embedding. No model call; no generation model needs to be configured. | Raw turns only (the SDK forces `L1_RAW`). |
+| `lite` | `mode="lite"` | Stored in embedded L1 raw batches. No model call; no generation model needs to be configured. The product page projects each batch back into individual conversation turns. | Plain vector RAG over raw (the SDK forces `L1_RAW`), active and shadow, so history pro already processed stays findable. Every hit above the floor is returned by score; the turn view shows the turns containing the query, or else the hit's closest turn. |
 | `pro` (default) | `mode="pro"` | Stored as raw, then a model extracts memories (System 1). The raw becomes SHADOW once extraction succeeds. | Extracted memories (facts, profile, intentions). |
 | `ultra` | `mode="ultra"` | Same as pro, and new facts are also projected into the knowledge graph. Every night, evolve runs System 2 for every user. | Same as pro, plus the graph-backed lanes below. |
 
@@ -45,6 +45,22 @@ it as `forced_by_env: true`, with `configured_mode` showing the saved choice.
 **Raw is never deleted.** In every mode MemHub keeps every raw turn the SDK
 stored, and the SDK never deletes raw itself. There is no retention window.
 
+### Hand-added content in lite
+
+The lite memory page offers `手动添加`. It uses the existing
+`POST /api/v2/memories` receipt flow, but the lite write processor deliberately
+calls `client.add`, not `add_extracted`: the text is stored as one raw `user`
+turn under source `one-memory-manual`, with no generation-model call. The raw
+page and raw recall can therefore read it immediately after the durable write
+settles. A completed lite addition has raw ids but no generated memory ids, so
+the App presents `no_memories` as “已保存原文”, not as a failed extraction.
+
+This is a minimal compatibility path, not a claim that a hand-written note was
+an observed conversation. `input_mode=direct_memory_note` remains on the
+record so a future first-class manual-memory lane can migrate it without
+guessing. Like every other lite raw turn, switching to pro or ultra does not
+backfill it into a generated memory.
+
 ## 2. Switching mode: what changes and what does not
 
 The SDK migrates nothing when the mode changes. MemHub applies these rules,
@@ -72,9 +88,21 @@ and they are the owner's:
     (`build_memory_graph(user_id, limit=10000, clear_first=False)`);
   - this runs in the background, one user at a time, never beside that
     user's write;
+  - after a crash or App update, startup resumes users that did not finish
+    and does not repeat users already recorded as succeeded;
   - progress is reported in `graph_build`.
 - Vector collection names never depend on the mode. The mode is a separate
   client parameter, not part of the embedding-space identity.
+
+The sedimentation switch pauses model-based extraction, not Lite persistence.
+Claim and both execution gates use the same predicate:
+`effective_mode == lite OR sedimentation_enabled`. Consequently, Lite keeps
+writing raw turns while `PUT /api/v1/sedimentation {"enabled":false}` is in
+force. Source permission, history gate, embedding maintenance and per-user
+evolve gates still apply. Toggling sedimentation or switching to Lite does not
+call the broad parked-job readmission path: sedimentation-refused jobs remain
+pending for the next claim tick, while permission/model parked states retain
+their own reason-specific wakeups.
 
 ## 3. `GET /api/v1/settings/memory-mode`
 
@@ -84,6 +112,7 @@ No parameters. `200` response:
 {
   "mode": "pro",
   "configured_mode": "pro",
+  "explicitly_configured": false,
   "forced_by_env": false,
   "modes": ["lite", "pro", "ultra"],
   "graph_build": {
@@ -97,11 +126,46 @@ No parameters. `200` response:
 
 - `mode` is what SDK clients are built with now; `configured_mode` is the
   saved setting.
+- `explicitly_configured` is `true` once the user has chosen a mode, including
+  explicitly choosing the default `pro`. An older or untouched installation
+  with no `memory_mode` key defaults to `pro` and reports `false`.
 - `graph_build.state` is `idle | running | succeeded | failed`. Each entry in
   `graph_build.users[<user_id>]` is
   `{state: pending|running|succeeded|failed, memories_scanned, nodes, error_code}`.
 
-## 4. `PUT /api/v1/settings/memory-mode`
+## 4. Plan and apply a mode change
+
+### `POST /api/v1/settings/memory-mode/plan`
+
+Body: `{"mode": "lite" | "pro" | "ultra"}`. This endpoint changes nothing and
+returns the validator result PUT uses:
+
+```json
+{
+  "current": "lite",
+  "target": "pro",
+  "effective_target": "pro",
+  "capabilities": {
+    "content_plane": "memory",
+    "generation_required": true,
+    "graph_enabled": false,
+    "evolve_available": false
+  },
+  "effects": ["earlier_raw_not_extracted", "lite_search_stops"],
+  "warnings": [],
+  "blockers": []
+}
+```
+
+Blockers are `active_model_required` when changing effectively into Pro/Ultra,
+`embedding_maintenance_in_progress`, `memory_lifecycle_busy`, and
+`graph_store_unavailable`. `forced_by_env` is a warning and changes
+`effective_target` to Ultra. `effective_no_change` warns that the effective
+mode is already the target (including an environment-forced target).
+When `blockers` is non-empty, `effects` is empty: no listed effect is implied
+to execute for a refused plan.
+
+### `PUT /api/v1/settings/memory-mode`
 
 Body: `{"mode": "lite" | "pro" | "ultra"}`. `200` response: the GET shape,
 plus these fields:
@@ -129,13 +193,19 @@ this order:
 
 Errors:
 
+- `409 {"detail": "active_model_required"}`: changing effectively into Pro or
+  Ultra needs an active generation model. An effective no-op remains allowed.
+- `409 {"detail": "embedding_maintenance_in_progress"}`: an embedding switch,
+  startup scan or startup merge has closed the model-write gate. Nothing
+  changed; retry after embedding maintenance finishes. GET remains available.
+- `409 {"detail": "memory_lifecycle_busy"}`: evolve or graph backfill is
+  running. A real mode change waits until that lifecycle task finishes.
 - `409 {"detail": "graph_store_unavailable"}`: `ultra` was asked for, but the
   graph store package is not installed. Nothing changed.
 - `422 request_validation_failed`: an unknown mode or an extra field.
 
-Show the planned effects before calling PUT. Clients can compute them with the
-table above: the CLI (`memhub settings mode <m>` without `--yes`) and Core
-(`memory_mode_effects`) use the same rule.
+Show the server plan before calling PUT. Plan and PUT use the same Core
+validator, so clients do not duplicate blocker or effective-mode rules.
 
 ## 5. Evolve
 
@@ -164,6 +234,12 @@ on in the background.
 
 Errors:
 
+- `409 {"detail": "embedding_maintenance_in_progress"}`: an embedding switch,
+  startup scan or startup merge has closed the model-write gate. No evolve run
+  was started; retry after embedding maintenance finishes. Evolve GET routes
+  remain available.
+- `409 {"detail": "memory_lifecycle_busy"}`: the graph backfill is still
+  running. Start manual evolve after it finishes.
 - `409 {"detail": "memory_mode_not_ultra"}`: the effective mode is not ultra.
 - `422`: a malformed `user_id`, `max_batches` outside its range, or an extra
   field.
@@ -333,6 +409,26 @@ mode. A change rebuilds the SDK handles the same way. Contract:
 `memory-features-v1.md`.
 
 ## 9. Copy the UI can reuse
+
+The App's product rules are:
+
+- A new installation explicitly chooses lite, pro or ultra. Choosing lite
+  persists the mode and completes onboarding without a generation model.
+  Choosing pro or ultra opens model setup when no model is active and completes
+  onboarding only after activation succeeds.
+- Lite always ingests authorized imported and live conversations into L1 raw,
+  even when model sedimentation is paused. That pause controls generation-model
+  work in pro/ultra; it never turns raw conversation storage off.
+- Existing installations keep the default pro behaviour; an absent
+  `memory_mode` is never inferred from model availability.
+- Ultra's nightly schedule is configured during first-run selection or later
+  from Settings. It is on by default at 03:00 local time. Settings also exposes
+  a manual evolve action; onboarding does not run evolve immediately.
+- The memory page shows raw conversations in lite and advanced memories in
+  pro/ultra. Higher-mode memories remain stored while lite is active but are
+  neither shown nor served by lite search.
+- Mode changes and manual evolve are disabled while embedding maintenance has
+  closed the write gate.
 
 | Key | zh-CN | en | es |
 |---|---|---|---|

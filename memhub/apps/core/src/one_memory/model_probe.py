@@ -17,6 +17,7 @@ from one_memory.model_profiles import (
     ModelProfileStore,
     ProviderKind,
     attach_disable_thinking,
+    output_token_field,
 )
 from one_memory.secrets import SecretStore
 
@@ -26,6 +27,7 @@ if TYPE_CHECKING:
 _operation: ContextVar[tuple["ModelProbeOperations", str] | None] = ContextVar(
     "model_probe_operation", default=None
 )
+_dispatch_started: ContextVar[bool] = ContextVar("model_probe_dispatch_started", default=False)
 
 
 class ProbeCode(StrEnum):
@@ -44,6 +46,12 @@ class ProbeCode(StrEnum):
     STRUCTURED_OUTPUT_UNSUPPORTED = "structured_output_unsupported"
     EMBEDDING_MODEL_REQUIRED = "embedding_model_required"
     EMBEDDING_UNAVAILABLE = "embedding_unavailable"
+    # The provider refused `max_tokens` and asked for `max_completion_tokens`
+    # (#287). Not retried with the other field: the SDK and every other Core
+    # request send the profile's field, so a probe that passed on a retry
+    # would leave extraction failing. The fix is the profile's
+    # `output_token_parameter`.
+    OUTPUT_TOKEN_PARAMETER_REJECTED = "output_token_parameter_rejected"
 
 
 class ProbeStage(BaseModel):
@@ -113,16 +121,26 @@ class ModelProber:
         if existing is not None:
             return existing
         token = _operation.set((operations, request.operation_id))
+        dispatch_token = _dispatch_started.set(False)
         try:
             await self._probe(profile_id)
         except ProbeOperationConflict:
             await asyncio.to_thread(
                 operations.fail, request.operation_id, "model_probe_profile_changed"
             )
-        except Exception:
-            # Unknown dispatch/storage outcomes stay reserved, including across restart.
-            raise ProbeOperationUnavailable("model_probe_operation_unavailable") from None
+        except Exception as exc:
+            if _dispatch_started.get():
+                # Once a request may have reached the provider, preserve the
+                # reservation so a retry cannot duplicate a possibly billed call.
+                raise ProbeOperationUnavailable("model_probe_operation_unavailable") from None
+            logging.getLogger(__name__).warning(
+                "model probe failed before dispatch: %s", type(exc).__name__
+            )
+            await asyncio.to_thread(
+                operations.fail, request.operation_id, "model_probe_execution_failed"
+            )
         finally:
+            _dispatch_started.reset(dispatch_token)
             _operation.reset(token)
         return await asyncio.to_thread(operations.lookup, request.operation_id)
 
@@ -317,6 +335,8 @@ class ModelProber:
         listing_optional: bool = False,
     ) -> ProbeStage:
         await self._check_operation()
+        if _operation.get() is not None:
+            _dispatch_started.set(True)
         started = monotonic()
         try:
             response = await client.request(
@@ -336,10 +356,21 @@ class ModelProber:
         if listing_optional and response.status_code in {400, 404, 405, 501}:
             return _stage(stage, True, ProbeCode.MODEL_LIST_UNSUPPORTED, started)
         if response.status_code in {401, 403}:
-            # Read a structured error body before classifying a 401. Some
-            # compatible providers distinguish an unknown model in the body.
-            if _body_error_code(response) is ProbeCode.MODEL_NOT_FOUND:
+            # Read a structured error body before classifying a 401/403. A
+            # gateway may answer with a permission status while the body says
+            # the account is out of quota or over a rate limit; those need a
+            # top-up or a wait, not a new key. An unknown model can also be
+            # reported this way by some compatible providers.
+            body_error = _body_error_code(response)
+            if body_error is ProbeCode.MODEL_NOT_FOUND:
                 return _stage(stage, False, ProbeCode.MODEL_NOT_FOUND, started)
+            # Only an explicit provider error code/type moves a 401/403 off
+            # UNAUTHORIZED. Free-text words such as "credit" or "balance" also
+            # appear in genuine permission errors ("no credit permission for
+            # this model"), and those still need a different key.
+            permission_quota = _permission_quota_code(response)
+            if permission_quota is not None:
+                return _stage(stage, False, permission_quota, started)
             return _stage(stage, False, ProbeCode.UNAUTHORIZED, started)
         if response.status_code == 402:
             # 402 就是欠费，不看 body：网关常常只回这个状态码而不写字面量，
@@ -350,6 +381,13 @@ class ModelProber:
             return _stage(stage, False, ProbeCode.MODEL_NOT_FOUND, started)
         if response.status_code == 429:
             return _stage(stage, False, ProbeCode.RATE_LIMITED, started)
+        if (
+            response.status_code == 400
+            and payload is not None
+            and isinstance(sent := _sent_output_token_field(payload), str)
+            and _output_token_field_refused(response, sent)
+        ):
+            return _stage(stage, False, ProbeCode.OUTPUT_TOKEN_PARAMETER_REJECTED, started)
         if not response.is_success:
             # The body is read here too, not only on the 200 path below. A
             # gateway that refuses `response_format` says so in a 400 body, and
@@ -546,7 +584,7 @@ def _structured_request(
         )
     payload: dict[str, object] = {
         "model": profile.model,
-        "max_tokens": 256,
+        output_token_field(profile): 256,
         "messages": [
             {
                 "role": "user",
@@ -601,6 +639,86 @@ def _embedding_request(
         _headers(provider, secret),
         {"model": profile.embedding_model, "input": "memory probe"},
     )
+
+
+_BALANCE_ERROR_CODES = frozenset({"insufficientbalance", "balanceinsufficient"})
+_RATE_LIMIT_ERROR_CODES = frozenset(
+    {
+        "429",
+        "insufficientquota",
+        "quotaexceeded",
+        "ratelimitexceeded",
+        "ratelimiterror",
+        "ratelimited",
+        "toomanyrequests",
+        "requestlimitexceeded",
+    }
+)
+
+
+_OUTPUT_TOKEN_FIELDS = ("max_tokens", "max_completion_tokens")
+
+
+def _sent_output_token_field(payload: dict[str, object]) -> str | None:
+    return next((field for field in _OUTPUT_TOKEN_FIELDS if field in payload), None)
+
+
+def _output_token_field_refused(response: httpx.Response, sent: str) -> bool:
+    """A 400 that names the token field the probe sent and asks for the other.
+
+    The OpenAI shape (`error.param` = the refused field, the message naming
+    the replacement), as #427 matched it, plus a message that names both.
+    Anything less specific stays a generic refusal.
+    """
+    try:
+        body = response.json()
+    except ValueError:
+        return False
+    error = body.get("error") if isinstance(body, dict) else None
+    if not isinstance(error, dict):
+        return False
+    other = next(field for field in _OUTPUT_TOKEN_FIELDS if field != sent)
+    message = str(error.get("message", ""))
+    if other not in message:
+        return False
+    if error.get("param") == sent:
+        return True
+    # `max_tokens` is a substring of `max_completion_tokens`; drop the
+    # replacement before looking for the refused field.
+    return sent in message.replace(other, "")
+
+
+def _compact_code(value: object) -> str:
+    return "".join(ch for ch in str(value).lower() if ch.isalnum())
+
+
+def _permission_quota_code(response: httpx.Response) -> ProbeCode | None:
+    """Read an explicit quota/rate-limit code from a 401/403 error body.
+
+    Only the structured ``code``/``ret_code``/``type`` fields are matched, and
+    each must equal a known provider code once case and separators are
+    dropped. The free-text ``message`` is never read here, so a permission
+    error that merely mentions credit or balance stays UNAUTHORIZED.
+    """
+    try:
+        body = response.json()
+    except ValueError:
+        return None
+    if not isinstance(body, dict):
+        return None
+    error = body.get("error")
+    if isinstance(error, dict):
+        values = [error.get(key) for key in ("code", "ret_code", "type")]
+    elif isinstance(error, str):
+        values = [error]
+    else:
+        return None
+    codes = {_compact_code(value) for value in values if value not in (None, "")}
+    if codes & _BALANCE_ERROR_CODES:
+        return ProbeCode.INSUFFICIENT_BALANCE
+    if codes & _RATE_LIMIT_ERROR_CODES:
+        return ProbeCode.RATE_LIMITED
+    return None
 
 
 def _body_error_code(response: httpx.Response) -> ProbeCode | None:

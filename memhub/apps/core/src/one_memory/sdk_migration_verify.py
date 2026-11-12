@@ -176,6 +176,7 @@ def read_active_profile(database_path: Path) -> ModelProfileSnapshot | None:
         ).fetchone()
     if row is None:
         return None
+    columns = set(row.keys())
     return ModelProfileSnapshot(
         profile_id=row["profile_id"],
         revision=row["revision"],
@@ -198,6 +199,10 @@ def read_active_profile(database_path: Path) -> ModelProfileSnapshot | None:
         context_window=row["context_window"],
         has_api_key=row["secret_ref"] is not None,
         disable_thinking=bool(row["disable_thinking"]),
+        # Absent until a Core that knows the option opened the store.
+        output_token_parameter=(
+            row["output_token_parameter"] if "output_token_parameter" in columns else "max_tokens"
+        ),
     )
 
 
@@ -288,4 +293,3 @@ def verify_readback(
         productivity_readable=sum(1 for memory_id in legacy.productivity if readable(memory_id)),
         chat_missing_before_migration=chat_missing_before_migration,
     )
-

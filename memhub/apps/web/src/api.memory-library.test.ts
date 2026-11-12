@@ -13,8 +13,17 @@ vi.mock("axios", () => ({
       delete: del,
       interceptors: { request: { use: vi.fn() } },
     }),
+    isAxiosError: (value: unknown) =>
+      typeof value === "object" && value !== null && "isAxiosError" in value,
   },
 }));
+
+function httpError(status: number, detail: string) {
+  return Object.assign(new Error(`http_${status}`), {
+    isAxiosError: true,
+    response: { status, data: { detail } },
+  });
+}
 
 import {
   deleteSdkMemory,
@@ -98,6 +107,18 @@ describe("paged memory library client", () => {
     });
     await deleteSdkMemory("c1");
     expect(del).toHaveBeenLastCalledWith("/api/v2/memories/c1", undefined);
+  });
+
+  it("treats a delete answered 404 memory_not_found as already gone", async () => {
+    del.mockRejectedValueOnce(httpError(404, "memory_not_found"));
+    await expect(deleteSdkMemory("gone")).resolves.toBeUndefined();
+
+    const other = httpError(404, "source_not_found");
+    del.mockRejectedValueOnce(other);
+    await expect(deleteSdkMemory("x")).rejects.toBe(other);
+    const failed = httpError(503, "hy_memory_delete_failed");
+    del.mockRejectedValueOnce(failed);
+    await expect(deleteSdkMemory("x")).rejects.toBe(failed);
   });
 
   it("forwards cancellation for inactive or superseded views", async () => {

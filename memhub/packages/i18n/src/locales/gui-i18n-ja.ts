@@ -1,7 +1,11 @@
 import type { MessageKey } from "../gui-i18n.js";
+import { embeddingSwitchJapaneseMessages } from "../gui-i18n-embedding-switch.js";
+import { modeJapaneseMessages } from "../gui-i18n-mode.js";
 
 /** Japanese (ja) GUI copy. Machine-assisted; native-speaker review recommended. */
 export const japaneseMessages: Record<MessageKey, string> = {
+  ...modeJapaneseMessages,
+  ...embeddingSwitchJapaneseMessages,
   "connectionFallback.title": "ほかのツールを接続",
   "connectionFallback.desktopOnly":
     "ローカルのペアリングはデスクトップアプリでのみ利用できます。",
@@ -77,6 +81,16 @@ export const japaneseMessages: Record<MessageKey, string> = {
   "sdk.raw.searchFailed":
     "元の会話を検索できませんでした。もう一度お試しください。",
   "sdk.raw.recent": "最近の元の会話",
+  "sdk.raw.empty":
+    "元の会話はまだありません。ソースを接続すると、ここに表示されます。",
+  "sdk.raw.total": "元の会話 {count} 件",
+  "sdk.raw.total.one": "元の会話 {count} 件",
+  "memory:当前使用基础记忆。新对话会保存为原始记录，不会生成高级记忆；以前生成的高级记忆仍会保留，但当前不会显示或参与记忆召回。":
+    "基本メモリを使用中です。新しい会話は原文として保存され、高度なメモリは生成されません。既存の高度なメモリは保持されますが、現在は表示も呼び出しもされません。",
+  "memory:当前使用智能记忆。新对话会由模型整理为高级记忆。":
+    "スマートメモリを使用中です。モデルが新しい会話を高度なメモリに整理します。",
+  "memory:当前使用深度记忆。新对话会生成高级记忆，并由知识图谱和 evolve 继续整合。":
+    "ディープメモリを使用中です。新しい会話から高度なメモリを生成し、知識グラフと evolve が統合を続けます。",
   "sdk.raw.found": "{count} 件見つかりました",
   "sdk.raw.found.one": "{count} 件見つかりました",
   "memoryInspector.emptyHint": "ソース、内容、変更履歴を確認できます。",
@@ -140,6 +154,7 @@ export const japaneseMessages: Record<MessageKey, string> = {
   "selectedMemory.save": "変更を保存",
   "selectedMemory.author.user": "あなた",
   "selectedMemory.author.agent": "アシスタント",
+  "selectedMemory.author.tool": "ツール",
   "selectedMemory.sourceUnavailable":
     "ソースの権限が変更されたか、原文を利用できません。",
   "selectedMemory.related": "関連する記憶",
@@ -213,7 +228,6 @@ export const japaneseMessages: Record<MessageKey, string> = {
   "memory:整理需要处理": "処理に対応が必要",
   "memory:正在整理记忆": "記憶を処理中",
   "memory:整理状态": "処理状況",
-  "memory:重新整理": "再処理",
   "memory:自动提炼范围": "自動抽出の対象期間",
   "memory:手动提炼下一批": "次のバッチを手動で抽出",
   "memory:刷新核对": "更新して確認",
@@ -238,10 +252,6 @@ export const japaneseMessages: Record<MessageKey, string> = {
   "memory:处理（操作）": "処理",
   "memory:{count} 条原话": "原文抜粋 {count} 件",
   "memory:{count} 条原话.one": "原文抜粋 {count} 件",
-  "memory:有 {count} 段对话的整理结果不确定":
-    "{count} 件の会話の処理結果が不確かです",
-  "memory:有 {count} 段对话的整理结果不确定.one":
-    "{count} 件の会話の処理結果が不確かです",
   "memory:{count} 次整理已完成": "処理 {count} 回完了",
   "memory:{count} 次整理已完成.one": "処理 {count} 回完了",
   "memory: · {count} 条在窗口外（原文可搜）":
@@ -697,6 +707,7 @@ export const japaneseMessages: Record<MessageKey, string> = {
   nativeDevelopmentUnavailable: " （開発モードでは利用不可）",
   nativeOpen: "{product} を開く",
   nativeQuit: "{product} を終了（バックグラウンドサービスは引き続き実行）",
+  nativeQuitStopsService: "{product} を終了（メモリサービスも停止）",
   nativeLoginError:
     "ログイン時の起動設定を変更できませんでした。もう一度お試しください。",
   nativeMoveTitle:
@@ -960,6 +971,19 @@ export const japaneseMessages: Record<MessageKey, string> = {
   设置分组: "設定のセクション",
   记忆模型: "記憶モデル",
   当前模型: "現在のモデル",
+  "分别管理记忆整理与搜索所使用的模型。":
+    "記憶の整理と検索に使うモデルを個別に管理します。",
+  记忆整理: "記憶の整理",
+  "把会话理解并整理成可长期使用的记忆。":
+    "会話を理解し、長期的に活用できる記憶として整理します。",
+  记忆搜索: "記憶の検索",
+  "在需要时找到与你的问题最相关的记忆。":
+    "必要なときに、質問に最も関連する記憶を見つけます。",
+  "本地内置（推荐）": "ローカル内蔵（推奨）",
+  "Embedding · 配置记忆整理后可自定义":
+    "Embedding · 記憶の整理を設定後にカスタマイズ可能",
+  "Embedding · 本机处理，无需额外配置":
+    "Embedding · このデバイスで処理、追加設定不要",
   "正在读取模型…": "モデルを読み込み中…",
   模型状态暂不可读: "モデルの状態を取得できません",
   尚未配置模型: "モデル未設定",
@@ -1024,7 +1048,7 @@ export const japaneseMessages: Record<MessageKey, string> = {
     "アプリを開かなくても、記憶の同期、処理、提供を続けます。",
   导出日志: "ログを書き出す",
   "把本机运行日志打包成一个文件，发给开发排查。":
-    "ローカルの診断ログを 1 つのファイルにまとめ、サポートに共有できます。",
+    "ローカルログをすべてまとめます。会話本文やローカルパスが含まれる場合があるため、信頼できる開発者にのみ共有してください。",
   "确定退出 One Memory 界面吗？": "MemHub のウインドウを終了しますか？",
   "后台服务会继续同步、整理和提供记忆。":
     "バックグラウンドサービスは記憶の同期、処理、提供を続けます。",
@@ -1083,6 +1107,23 @@ export const japaneseMessages: Record<MessageKey, string> = {
     "記憶へのアクセスを取り消したため、{name} は記憶を照会できなくなりました。接続が完全に削除されたか確認できませんでした。次のパスを手動で確認してください：{paths}。",
   appRemovalReview:
     "接続が完全に削除されたか確認できませんでした。次のパスを手動で確認してください：{paths}。",
+  appProfilesLabel: "{name} のプロファイル",
+  appProfileOn: "{profile}：接続済み",
+  appProfileOff: "{profile}：未接続",
+  appProfilesHint:
+    "このスイッチは検出されたすべてのプロファイルに記憶の接続をインストールしてアクセスを許可し、オフにするとすべて取り消します。オンの間は、新しいプロファイルも自動的に接続されます。",
+  appProfilesNone:
+    "{name} のプロファイルが検出されませんでした。プロファイルを作成してから、このページに戻ってください。",
+  appProfilesConnectFailed:
+    "次のプロファイルを接続できませんでした：{profiles}。ほかのプロファイルはそのまま維持されます。{reason}",
+  appProfilesDisconnectFailed:
+    "次のプロファイルの接続を解除できず、引き続き記憶を使用できます：{profiles}。もう一度お試しください。{reason}",
+  appProfilesRevokedRetained:
+    "次のプロファイルの記憶へのアクセスを取り消しましたが、接続ファイルの一部は削除されていません。確認してください：{profiles}。",
+  appProfileNameUnsupported:
+    "プロファイル名に使えるのは小文字、数字、ハイフンのみで、32 文字までです",
+  "apps.autoHostProfilesFailed":
+    "{name} の次のプロファイルを自動的に接続できませんでした（{profiles}）{reason}。",
   "Cursor 的连接凭证已更新。请完全退出并重新打开 Cursor，再开始新对话。":
     "Cursor の接続の認証情報が更新されました。Cursor を完全に終了して開き直してから、新しい会話を始めてください。",
   连接其他工具: "ほかのツールを接続",
@@ -1193,6 +1234,9 @@ export const japaneseMessages: Record<MessageKey, string> = {
   onboardingMoreApps: "スクロールしてさらに表示 · 残り {count} 個のアプリ",
   "onboardingMoreApps.one":
     "スクロールしてさらに表示 · 残り {count} 個のアプリ",
+  onboardingMoreImportApps: "横にスクロール · 残り {count} 個のアプリ",
+  onboardingImportChecking:
+    "インポート結果を確認しています。選択内容は保持されています",
   onboardingAllApps: "全 {count} 個のアプリを表示中",
   默认位置: "既定の場所",
   自定义位置: "カスタムの場所",
@@ -1409,6 +1453,16 @@ export const japaneseMessages: Record<MessageKey, string> = {
     "接続に失敗しました。モデル、キー、送信先を確認してください。",
   "配置或测试结果暂未确认，请核对后重试。":
     "設定またはテストの結果を確認できませんでした。確認してから再試行してください。",
+  "索引更新没有完成，仍在使用原来的搜索模型。请检查连接后重试。":
+    "インデックスの更新が完了しませんでした。以前の検索モデルが引き続き使用されています。接続を確認して再試行してください。",
+  "上次模型测试结果仍待核对，请稍后重试。":
+    "前回のモデルテスト結果をまだ確認できていません。しばらくしてから再試行してください。",
+  "模型写入暂时关闭。请等待索引维护完成后重试。":
+    "モデルへの書き込みは一時停止されています。インデックスのメンテナンスが完了してから再試行してください。",
+  "模型未能确认启用，请在设置中核对。":
+    "モデルが有効になったことを確認できませんでした。設定で確認してください。",
+  "已保存的模型配置暂时无法读取，不会重复创建。请重试刷新。":
+    "保存済みのモデル設定を一時的に読み込めません。重複して作成されることはありません。もう一度更新してください。",
   所选连接已启用: "選択したアプリの接続が有効になりました",
   本次未选择应用连接: "今回はアプリの接続が選択されていません",
   尚未填写接收方: "送信先未入力",
@@ -1466,10 +1520,30 @@ export const japaneseMessages: Record<MessageKey, string> = {
   "apps.back": "ホームに戻る",
   "apps.overview": "記憶の概要",
   "apps.memories": "保存済みの記憶",
+  "apps.rawConversations": "元の会話",
+  "apps.rawSaving": "保存中",
+  "apps.rawSavingCompact": "保存中",
+  "apps.rawSavingStatus": "保存状態",
+  "apps.rawSavingDetail": "生成モデルを使わず元の会話を保存します",
+  "apps.rawNoExcerpt": "表示できるユーザーの原文がありません",
+  "apps.rawConversation": "元の会話",
+  "apps.rawSaved": "元の会話を保存しました",
+  "apps.rawEmpty": "保存済みの元の会話はまだありません",
+  "apps.rawCheckedEmpty": "確認済み：表示できる元の会話の更新はありません",
+  "apps.memoryCheckedEmpty": "確認済み：表示できる記憶の更新はありません",
+  "apps.recentEmptyCompact": "更新なし",
+  "apps.rawWaiting": "保存された元の会話がここに表示されます",
+  "apps.checkedRecent": "現在の内容を確認済み",
+  "apps.currentMode": "現在のモード",
+  "apps.mode.lite": "基本メモリ（lite）",
+  "apps.mode.pro": "スマートメモリ（pro）",
+  "apps.mode.ultra": "深層メモリ（ultra）",
   "apps.readingCount": "ローカルの記憶を確認中…",
+  "apps.rawReadingCount": "元の会話を確認中…",
   "apps.startingRetry":
     "バックグラウンドサービスを起動中です。自動的に更新されます",
   "apps.countWillUpdate": "記憶の件数は自動的に更新されます",
+  "apps.rawCountWillUpdate": "元の会話の件数は自動的に更新されます",
   "apps.showingPrevious": "前回のデータを表示しています。自動的に更新されます",
   "apps.unreadable": "利用できません",
   "apps.unit": "件",
@@ -1566,12 +1640,16 @@ export const japaneseMessages: Record<MessageKey, string> = {
   "apps.revision": "バージョン {count}",
   "apps.conversationTime": "会話日時",
   "apps.importTime": "インポート日時",
+  "apps.writeTime": "書き込み日時",
+  "apps.updateTime": "更新日時",
   "apps.incompleteCalls":
     " · 一部の呼び出しが記録されていないため、一覧が不完全な可能性があります",
   "apps.timeoutWarning":
     "{host} は最近、記憶を照会できませんでした。バックグラウンドサービスが混み合っている可能性があります。自動的に回復します。",
   "apps.autoHostFailed": "{name} は自動的に接続できませんでした{reason}。",
   "apps.failureReason": "：{reason}",
+  "apps.desktopBridgeUnavailable":
+    "ワンクリック接続は MemHub デスクトップアプリで操作してください",
   "apps.autoSyncFailed":
     "{name} の継続的な同期を自動的に有効にできませんでした。{reason}",
   "apps.noAutoRetry": "自動的に再試行されることはありません。",
@@ -1650,8 +1728,6 @@ export const japaneseMessages: Record<MessageKey, string> = {
     "一括操作の結果は保持されていますが、一覧を更新できませんでした。しばらくすると自動的に再読み込みされます。",
   "memory:召回范围已保存，但列表刷新失败。请稍后重新打开记忆页。":
     "呼び出し範囲は保存されましたが、一覧を更新できませんでした。しばらくしてから「記憶」を開き直してください。",
-  "memory:重新整理可能再次调用模型。只会重跑结果不确定的对话，是否继续？":
-    "再処理するとモデルが再度呼び出される場合があります。結果が不確かな会話のみが再試行されます。続行しますか？",
   "memory:原始对话暂时无法读取": "元の会話を読み込めませんでした",
   "memory:没有匹配的原始对话": "一致する元の会話はありません",
   "memory:还没有导入的原始对话": "インポートされた元の会話はまだありません",
@@ -1982,6 +2058,19 @@ export const japaneseMessages: Record<MessageKey, string> = {
   "memory:还没有开始生成记忆：{reason}（{count} 条待处理）":
     "記憶は作成されていません：{reason}（未処理 {count} 件）",
   "memory:去配置生成模型": "生成モデルを設定",
+  "memory:模型暂停处理": "モデル一時停止中",
+  "memory:模型配置有问题（{reason}），记忆暂停处理，已有 {count} 条在排队":
+    "モデル設定に問題があります（{reason}）。記憶の処理を一時停止中です。{count} 件が待機中です",
+  "memory:模型配置有问题（{reason}），记忆暂停处理，已有 {count} 条在排队.one":
+    "モデル設定に問題があります（{reason}）。記憶の処理を一時停止中です。{count} 件が待機中です",
+  "memory:API Key 无效或没有权限": "API キーが無効か権限がありません",
+  "memory:找不到模型或地址": "モデルまたはアドレスが見つかりません",
+  "memory:请求过于频繁，被服务商限流":
+    "リクエストが多すぎるため、プロバイダーに制限されています",
+  "memory:模型响应超时": "モデルの応答がタイムアウトしました",
+  "memory:模型服务出错": "モデルサービスでエラーが発生しました",
+  "memory:无法连接模型服务": "モデルサービスに接続できません",
+  "memory:连接模型服务失败": "モデルサービスへの接続に失敗しました",
   "calls.directHost": "直接呼び出し（診断）",
   "calls.headline.timedOut": "{host} は時間内に記憶を照会できませんでした",
   "calls.headline.unavailable": "{host} は現在記憶を照会できません",
@@ -1989,6 +2078,15 @@ export const japaneseMessages: Record<MessageKey, string> = {
   "calls.headline.empty": "{host} では一致する記憶が見つかりませんでした",
   "calls.headline.found": "{host} が関連する項目を {count} 件見つけました",
   "calls.headline.found.one": "{host} が関連する項目を {count} 件見つけました",
+  "calls.headline.rawOnly": "{host} が元の会話を {count} 件見つけました",
+  "calls.headline.rawOnly.one": "{host} が元の会話を {count} 件見つけました",
+  "calls.headline.memoryOnly": "{host} が記憶を {count} 件見つけました",
+  "calls.headline.memoryOnly.one": "{host} が記憶を {count} 件見つけました",
+  "calls.headline.mixed":
+    "{host} が記憶 {memories} 件 · 元の会話 {raw} 件を見つけました",
+  "calls.headline.mixed.one":
+    "{host} が記憶 {memories} 件 · 元の会話 {raw} 件を見つけました",
+  "calls.headline.completed": "{host} の呼び出しが完了しました",
   "calls.detail.timedOut":
     "記憶を処理中のため照会がタイムアウトし、今回の回答には記憶が含まれていません。",
   "calls.detail.unavailable":

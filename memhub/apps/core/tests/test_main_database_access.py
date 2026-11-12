@@ -318,7 +318,29 @@ def test_main_database_checkpoints_on_a_write_cadence(tmp_path, monkeypatch):
     with database.write() as db, db:
         db.execute("UPDATE counter SET value = 2 WHERE id = 1")
 
+    assert _access.wait_for_cadence_checkpoints()
     assert checkpoints and checkpoints[0][0] == "PASSIVE"
+
+
+def test_the_cadence_checkpoint_does_not_run_on_the_writing_thread(tmp_path, monkeypatch):
+    """The thread that wrote returns at once; the checkpointer takes the next turn."""
+    path = _database(tmp_path)
+    database = main_database(path)
+    ran_on = []
+    original = database._checkpoint_from_maintenance
+
+    def observed(mode):
+        ran_on.append(threading.current_thread().name)
+        return original(mode)
+
+    monkeypatch.setattr(database, "_checkpoint_from_maintenance", observed)
+    monkeypatch.setattr(_access, "MAIN_DATABASE_CHECKPOINT_WRITE_INTERVAL", 1)
+
+    with database.write() as db, db:
+        db.execute("UPDATE counter SET value = 1 WHERE id = 1")
+
+    assert _access.wait_for_cadence_checkpoints()
+    assert ran_on == ["one-memory-checkpoint"]
 
 
 def test_main_database_warns_when_wal_stays_above_the_high_water_mark(
@@ -332,8 +354,83 @@ def test_main_database_warns_when_wal_stays_above_the_high_water_mark(
 
     with database.write() as db, db:
         db.execute("UPDATE counter SET value = 1 WHERE id = 1")
+    assert _access.wait_for_cadence_checkpoints()
 
     assert any("main_database_wal_high" in record.message for record in caplog.records)
+
+
+def test_a_wal_whose_frames_are_all_checkpointed_is_not_reported_high(
+    tmp_path, monkeypatch, caplog
+):
+    """#245: the alert judges frames still waiting, not the file's size."""
+    path = _database(tmp_path)
+    database = main_database(path)
+    monkeypatch.setattr(_access, "MAIN_DATABASE_CHECKPOINT_WRITE_INTERVAL", 1)
+    # One page: any frame left uncopied would cross it, a fully copied WAL not.
+    monkeypatch.setattr(_access, "MAIN_DATABASE_WAL_WARN_BYTES", 1)
+    caplog.set_level("WARNING", logger="one_memory.database_access")
+
+    with database.write() as db, db:
+        db.execute("UPDATE counter SET value = 1 WHERE id = 1")
+    assert _access.wait_for_cadence_checkpoints()
+
+    assert database._wal_bytes() > 0
+    assert not any("main_database_wal_high" in record.message for record in caplog.records)
+
+
+def test_the_writer_caps_the_wal_it_leaves_behind(tmp_path):
+    path = _database(tmp_path)
+    with main_database(path).write() as db:
+        limit = db.execute("PRAGMA journal_size_limit").fetchone()[0]
+    assert limit == _access.MAIN_DATABASE_JOURNAL_SIZE_LIMIT_BYTES
+
+
+def test_an_idle_checkpoint_shrinks_the_wal_after_a_large_burst(tmp_path, monkeypatch):
+    """#245: a WAL that grew once used to stay that size for good."""
+    path = _database(tmp_path)
+    database = main_database(path)
+    # No cadence checkpoint during the burst: the WAL has to grow.
+    monkeypatch.setattr(_access, "MAIN_DATABASE_CHECKPOINT_WRITE_INTERVAL", 10_000_000)
+    monkeypatch.setattr(_access, "MAIN_DATABASE_CHECKPOINT_SECONDS", 10_000_000.0)
+    database._last_checkpoint_at = time.monotonic()
+    with database.write() as db, db:
+        db.execute("PRAGMA wal_autocheckpoint = 0")
+        db.execute("CREATE TABLE blobs (body BLOB)")
+        db.executemany(
+            "INSERT INTO blobs VALUES (randomblob(?))", [(64 * 1024,) for _ in range(1_500)]
+        )
+    with database.write() as db:
+        db.execute("PRAGMA wal_autocheckpoint = 1000")
+    grown = database._wal_bytes()
+    assert grown > _access.MAIN_DATABASE_JOURNAL_SIZE_LIMIT_BYTES
+
+    with database.read() as reader:
+        reader.execute("SELECT COUNT(*) FROM blobs").fetchone()
+        # Someone is reading: no truncate is even attempted.
+        assert database.checkpoint_if_idle() is None
+    assert _access.checkpoint_idle_main_databases() == 1
+
+    assert database._wal_bytes() <= _access.MAIN_DATABASE_JOURNAL_SIZE_LIMIT_BYTES
+    with database.read() as reader:
+        assert reader.execute("SELECT COUNT(*) FROM blobs").fetchone() == (1_500,)
+
+
+def test_a_busy_idle_checkpoint_is_skipped_not_raised(tmp_path):
+    path = _database(tmp_path)
+    database = main_database(path)
+    with database.write() as db, db:
+        db.execute("UPDATE counter SET value = 1 WHERE id = 1")
+    # Another process's reader holds a snapshot: TRUNCATE cannot finish.
+    outsider = sqlite3.connect(path)
+    try:
+        outsider.execute("BEGIN")
+        outsider.execute("SELECT value FROM counter").fetchone()
+        result = database.checkpoint_if_idle()
+        assert result is None or result[0] == 1
+    finally:
+        outsider.close()
+    assert database.checkpoint_if_idle() == (0, 0, 0)
+    assert database._wal_bytes() == 0
 
 
 def test_main_database_maintenance_checkpoint_does_not_break_an_active_reader(

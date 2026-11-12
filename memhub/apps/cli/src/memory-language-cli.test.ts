@@ -30,8 +30,7 @@ vi.mock("@one-memory/runtime-control", async (importOriginal) => ({
 }));
 
 function languageState(uiLanguage: string | null, extra = {}) {
-  const sdk =
-    uiLanguage === null || uiLanguage === "zh-Hans" ? "auto" : uiLanguage;
+  const sdk = uiLanguage === null ? "auto" : uiLanguage;
   return {
     ui_language: uiLanguage,
     sdk_language: sdk,
@@ -95,7 +94,7 @@ describe("memhub settings language", () => {
     });
     expect(transport.put).not.toHaveBeenCalled();
     const text = (await capturedRun(["settings", "language"])).stdout;
-    expect(text).toContain("界面语言：跟随系统（未选择）");
+    expect(text).toContain("界面语言：未设置（SDK 自动识别）");
     expect(text).toContain("SDK 提示语言：auto");
   });
 

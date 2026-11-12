@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 
 import type { SourceResponse } from "@one-memory/contracts";
+import { isMessageKey, SUPPORTED_LOCALES, translate } from "@one-memory/i18n";
 import { afterEach, expect, it, vi } from "vitest";
 import {
   readConnectionPreferences,
@@ -15,6 +16,7 @@ import {
 import {
   enableHostConnection,
   hostConnectionApproved,
+  hostWriteReason,
   refreshRecallHosts,
 } from "./host-state";
 import { connectSourceSet } from "./source-state";
@@ -104,7 +106,9 @@ it("repoints an already approved host without installing again", async () => {
   expect(installRecall).not.toHaveBeenCalled();
 });
 
-function piBridge(state: string) {
+/** A bridge whose host reports this permission state. The state is what the
+ * write path acts on; the host id is only a fixture. */
+function stateBridge(state: string) {
   const previewRecallInstall = vi.fn(async () => {
     throw Error("connection_client_unavailable");
   });
@@ -127,14 +131,14 @@ function piBridge(state: string) {
 }
 
 it("reports a host without a revocable connection as unsupported instead of previewing it", async () => {
-  const previewRecallInstall = piBridge("unsupported");
+  const previewRecallInstall = stateBridge("unsupported");
   await expect(enableHostConnection("pi")).rejects.toThrow("host_unsupported");
   expect(previewRecallInstall).not.toHaveBeenCalled();
 });
 
 it("stops retrying an unsupported host on later refreshes", async () => {
   saveConnectionPreferences({ syncSourceIds: [], hostSourceIds: ["pi"] });
-  const previewRecallInstall = piBridge("unsupported");
+  const previewRecallInstall = stateBridge("unsupported");
   await reconcileConnectionPreferences({ sources: [] });
   await reconcileConnectionPreferences({ sources: [] });
   expect(previewRecallInstall).not.toHaveBeenCalled();
@@ -143,11 +147,38 @@ it("stops retrying an unsupported host on later refreshes", async () => {
 
 it("keeps retrying a supported host whose preview failed", async () => {
   saveConnectionPreferences({ syncSourceIds: [], hostSourceIds: ["pi"] });
-  const previewRecallInstall = piBridge("not-installed");
+  const previewRecallInstall = stateBridge("not-installed");
   await reconcileConnectionPreferences({ sources: [] });
   await reconcileConnectionPreferences({ sources: [] });
   expect(previewRecallInstall).toHaveBeenCalledTimes(2);
   expect(readConnectionPreferences().hostSourceIds).toEqual(["pi"]);
+});
+
+it("keeps a remembered insertion for the desktop app when this shell has no bridge", async () => {
+  saveConnectionPreferences({ syncSourceIds: [], hostSourceIds: ["pi"] });
+  window.oneMemory = undefined;
+  // A browser Console reads hosts as empty: nothing here can be granted.
+  await refreshRecallHosts();
+  const failures = await autoReconcile({ sources: [] });
+  expect(failures).toEqual([]);
+  expect(readConnectionPreferences().hostSourceIds).toEqual(["pi"]);
+});
+
+it("names the page, not the host, when there is no bridge to write through", async () => {
+  window.oneMemory = undefined;
+  await expect(enableHostConnection("pi")).rejects.toThrow(
+    "desktop_bridge_unavailable",
+  );
+  const reason = hostWriteReason(Error("desktop_bridge_unavailable"));
+  expect(reason).toBe("apps.desktopBridgeUnavailable");
+  if (!reason || !isMessageKey(reason)) throw Error("reason is not a key");
+  const source = "一键插入需要在 MemHub 桌面 App 中操作";
+  expect(translate("zh-Hans", reason)).toBe(source);
+  for (const locale of SUPPORTED_LOCALES) {
+    expect(translate(locale, reason), locale).not.toBe(reason);
+    if (locale !== "zh-Hans")
+      expect(translate(locale, reason), locale).not.toBe(source);
+  }
 });
 
 it("does not treat a relink-required host as admitted", () => {

@@ -52,6 +52,35 @@ export type {
   ConnectionSetupResult,
   ConnectionSetupSelection,
 } from "./connection-setup.js";
+export type {
+  EmbeddingSpace,
+  EmbeddingSpaceDeleteReceipt,
+  EmbeddingSpaceState,
+  EmbeddingSpaceSummary,
+  EmbeddingSpaces,
+  EmbeddingSwitchCurrent,
+  EmbeddingSwitchJob,
+  EmbeddingSwitchJobState,
+  EmbeddingSwitchKind,
+  EmbeddingSwitchPlan,
+  EmbeddingSwitchPlannedSource,
+  EmbeddingSwitchProgress,
+  EmbeddingSwitchProgressPhase,
+  EmbeddingSwitchSummary,
+  ScannedEmbeddingSpace,
+} from "./embedding-switch.js";
+export type {
+  HomeProjectionCapabilities,
+  HomeProjectionLatest,
+  HomeProjectionMemoryLatest,
+  HomeProjectionMode,
+  HomeProjectionRawLatest,
+  HomeProjectionTimeBasis,
+  HomeProjectionV1,
+} from "./home-projection.js";
+
+import type { EmbeddingSwitchSummary } from "./embedding-switch.js";
+import type { HomeProjectionCapabilities } from "./home-projection.js";
 
 export interface HealthResponse {
   status: "ok";
@@ -72,6 +101,7 @@ export interface HealthResponse {
    */
   recovery?: "pending" | "running" | "done" | "failed";
   recovery_failed_steps?: string[];
+  embedding_switch?: EmbeddingSwitchSummary | null;
 }
 
 export type ImportStatus =
@@ -229,11 +259,23 @@ export interface ConnectSourcesResponse {
   request_id?: string | null;
 }
 
+export type OnboardingModeIntent = "lite" | "pro" | "ultra";
+export type OnboardingSetupStep = "review" | "mode" | "model";
+
+export interface OnboardingProgressUpdate {
+  mode_intent?: OnboardingModeIntent | null;
+  setup_step?: OnboardingSetupStep | null;
+  model_profile_id?: string | null;
+}
+
 export interface OnboardingState {
   status: "not_started" | "importing" | "completed";
   selected_source_ids: string[];
   started_at: string | null;
   completed_at: string | null;
+  mode_intent: OnboardingModeIntent | null;
+  setup_step: OnboardingSetupStep | null;
+  model_profile_id: string | null;
 }
 
 export interface ImportJob {
@@ -299,12 +341,16 @@ export interface ModelProfile {
   max_concurrency: number;
   context_window: number | null;
   disable_thinking: boolean;
+  /** The field OpenAI-compatible requests carry the output-token ceiling in. */
+  output_token_parameter?: OutputTokenParameter;
   capabilities: ModelCapabilities;
   revision: number;
   is_active: boolean;
   created_at: string;
   updated_at: string;
 }
+
+export type OutputTokenParameter = "max_tokens" | "max_completion_tokens";
 
 export interface ModelProfileInput {
   creation_operation_id?: string;
@@ -321,6 +367,7 @@ export interface ModelProfileInput {
   max_concurrency?: number;
   context_window?: number | null;
   disable_thinking?: boolean;
+  output_token_parameter?: OutputTokenParameter;
 }
 
 export interface ModelCreationOperation {
@@ -350,6 +397,7 @@ export interface ModelProfilePatch {
   max_concurrency?: number;
   context_window?: number | null;
   disable_thinking?: boolean;
+  output_token_parameter?: OutputTokenParameter;
 }
 
 export type ProbeCode =
@@ -365,7 +413,8 @@ export type ProbeCode =
   | "invalid_response"
   | "structured_output_unsupported"
   | "embedding_model_required"
-  | "embedding_unavailable";
+  | "embedding_unavailable"
+  | "output_token_parameter_rejected";
 
 export interface ModelProbeResult {
   profile_id: string;
@@ -425,6 +474,8 @@ export interface HomeSummary {
 
 export interface SdkHomeSummary {
   schema_version: 2;
+  /** The user the card was read for (`local` unless one was named). */
+  user_id?: string;
   memory_count: number;
   latest: SdkMemoryRecord | null;
   observed_at: string;
@@ -466,6 +517,10 @@ export interface MemoryLibraryPage {
   total: number;
   offset: number;
   limit: number;
+  /** Cursor paging: opaque continuation for a page whose exact total is not read. */
+  next_cursor?: string | null;
+  has_more?: boolean;
+  total_exact?: boolean;
   /** Active evidence sources for each returned memory, from the same authorized page snapshot. */
   source_ids_by_memory?: Record<string, string[]>;
   /** When each returned memory's cited conversation happened (D96). `import`
@@ -605,6 +660,8 @@ export interface SdkMemoryRecord {
 }
 
 export interface SdkMemoryPage {
+  /** `GET /api/v2/memory-library`: the user the page was read for. */
+  user_id?: string;
   memories: SdkMemoryRecord[];
   total: number;
   limit: number;
@@ -621,13 +678,20 @@ export interface SdkMemoryPage {
 }
 
 export interface SdkUserProfileResponse {
+  /** The user whose profile this is (`local` unless one was named). */
+  user_id?: string;
   request_id: string;
   profile: Record<string, unknown> | null;
   elapsed_ms: number;
 }
 
 export interface SdkRawRecord {
+  /** Parent SDK L1 raw storage batch. */
   raw_id: string;
+  /** Stable product identity of one turn inside `raw_id`, when unit=turn. */
+  turn_id?: string | null;
+  turn_index?: number | null;
+  turn_count?: number | null;
   content: string;
   user_id: string;
   agent_id: string;
@@ -649,16 +713,46 @@ export interface SdkRawRecord {
 }
 
 export interface SdkRawPage {
+  /** The user whose raw turns these are. */
+  user_id?: string;
   items: SdkRawRecord[];
   total: number;
   limit: number;
   offset: number;
+  unit?: "raw" | "turn";
+  next_cursor?: string | null;
+  has_more?: boolean;
+  total_exact?: boolean;
   /** A time range was applied to this page in Core (the SDK list has none). */
   time_filtered?: boolean;
 }
 
+/** Lightweight bounded-map projection. Raw text remains SDK-owned. */
+export interface SdkRawGraphItem {
+  turn_id: string;
+  raw_id: string;
+  label: string;
+  source: string;
+  session_id: string;
+  memory_at: number | null;
+  gmt_created: number | null;
+}
+
+export interface SdkRawGraphPage {
+  user_id: string;
+  items: SdkRawGraphItem[];
+  /** SDK-reported matching raw scope; `items` remains capped by `limit`. */
+  total: number;
+  limit: number;
+  offset: number;
+  /** More matching turns exist, but the product map does not auto-page them. */
+  has_more: boolean;
+}
+
 /** `GET /api/v2/memory-library/layers`: memories per SDK layer. */
 export interface SdkLayerCounts {
+  /** The user whose memories were counted. */
+  user_id?: string;
   layers: Record<string, number>;
   total: number;
   statuses: string[] | null;
@@ -763,7 +857,8 @@ export type AskMemoryEvent =
   | { type: "error"; code: string };
 
 export type SdkAskMemoryEvent =
-  | { type: "recall"; memories: SdkAskMemory[] }
+  /** `user_id`: whose memories answer (Core 1.0.6+). */
+  | { type: "recall"; memories: SdkAskMemory[]; user_id?: string }
   | { type: "delta"; text: string }
   | {
       type: "final";
@@ -833,6 +928,8 @@ export interface RecallReceipt {
   fallback_reason?: "model_unavailable" | "no_memories" | null;
   /** Sources the caller was not allowed to read, left out of this result. */
   excluded_sources?: string[];
+  /** Whose memories were searched (`local` unless the request named a user). */
+  user_id?: string;
 }
 
 export interface LiveSyncHealth {
@@ -874,6 +971,8 @@ export interface MemoryGraphEdge {
 }
 
 export interface MemoryGraphResponse {
+  /** The user whose memories were mapped. */
+  user_id?: string;
   total_memories: number;
   projected_memories: number;
   nodes: MemoryGraphNode[];
@@ -885,6 +984,148 @@ export interface MemoryProcessingBlock {
   kind: string;
   reason: string;
   count: number;
+}
+
+export type MemoryPipelineMode = "lite" | "pro" | "ultra";
+
+export interface GraphBuildUser {
+  state: "pending" | "running" | "succeeded" | "failed";
+  memories_scanned: number | null;
+  nodes: number | null;
+  error_code: string | null;
+}
+
+export interface GraphBuildState {
+  state: "idle" | "running" | "succeeded" | "failed";
+  started_at: string | null;
+  finished_at: string | null;
+  users: Record<string, GraphBuildUser>;
+}
+
+export interface EvolveSchedule {
+  enabled: boolean;
+  time: string;
+}
+
+export interface EvolveRunReceipt {
+  run_id: string;
+  user_id: string;
+  agent_id: string;
+  max_batches: number | null;
+  trigger: "manual" | "scheduled";
+  state: "running" | "succeeded" | "failed";
+  started_at: string;
+  finished_at: string | null;
+  rounds: number;
+  tasks_processed: number;
+  batch_failures: number;
+  cycle_status: string | null;
+  should_continue: boolean | null;
+  continuation_reason: string | null;
+  remaining_clusters: number | null;
+  remaining_actionable_clusters: number | null;
+  remaining_fresh_facts: number | null;
+  capped: boolean;
+  elapsed_ms: number;
+  error_code: string | null;
+  failure_kind: string | null;
+  request_id: string | null;
+}
+
+export interface UserEvolveState {
+  last_run_at: string | null;
+  last_result: EvolveRunReceipt | null;
+  last_error: string | null;
+}
+
+export interface EvolveOverview {
+  mode: MemoryPipelineMode;
+  schedule: EvolveSchedule;
+  users: Record<string, UserEvolveState>;
+  running: EvolveRunReceipt[];
+}
+
+/** The ultra graph's own state (Core `graph_open_guard`). */
+export interface GraphStoreStatus {
+  state:
+    | "not_used"
+    | "opening"
+    | "ready"
+    | "rebuilding_after_quarantine"
+    | "unavailable";
+  /** Every quarantine this home has seen (fewer copies are kept). */
+  quarantine_count: number;
+  last_quarantined_at: string | null;
+  /** A probe outcome (`timeout`, `rss_cap`, `crashed`, `exit_nonzero`) or
+   *  `core_died_during_probe`; optional for an older Core. */
+  last_quarantine_reason?: string | null;
+  /** Starts that died while opening the graph, not yet resolved. */
+  failed_open_attempts: number;
+}
+
+export interface MemoryModeState {
+  mode: MemoryPipelineMode;
+  configured_mode: MemoryPipelineMode;
+  explicitly_configured: boolean;
+  forced_by_env: boolean;
+  modes: MemoryPipelineMode[];
+  graph_build: GraphBuildState;
+  /** Optional: an older Core does not report it. */
+  graph_store?: GraphStoreStatus;
+}
+
+export interface MemoryModeChange extends MemoryModeState {
+  previous_mode: MemoryPipelineMode;
+  effects: Array<
+    | "earlier_raw_not_extracted"
+    | "higher_mode_memories_hidden"
+    | "existing_memories_added_to_graph"
+    | "evolve_stopped"
+    | "lite_search_stops"
+    | "graph_backfill_already_running"
+  >;
+}
+
+export interface MemoryModePlan {
+  current: MemoryPipelineMode;
+  target: MemoryPipelineMode;
+  effective_target: MemoryPipelineMode;
+  capabilities: HomeProjectionCapabilities;
+  effects: MemoryModeChange["effects"];
+  warnings: Array<"forced_by_env" | "effective_no_change">;
+  blockers: Array<
+    | "active_model_required"
+    | "embedding_maintenance_in_progress"
+    | "memory_lifecycle_busy"
+    | "graph_store_unavailable"
+  >;
+}
+
+export interface MemoryPipelineStatus {
+  mode: MemoryPipelineMode;
+  configured_mode: MemoryPipelineMode;
+  forced_by_env: boolean;
+  evolve: EvolveOverview;
+  last_evolve_at: string | null;
+  graph_build: GraphBuildState;
+  graph_store?: GraphStoreStatus;
+  features: Record<string, boolean | number>;
+  ui_language?: string | null;
+  sdk_language?: string;
+  /** The SDK graph and vector stores (`storage_backends`), configured only
+   *  through the CLI/API; absent from an older Core. */
+  storage_backends?: StorageBackendsSummary | null;
+}
+
+/** `pipeline.storage_backends` (docs/contracts/storage-backends-v1.md §4). */
+export interface StorageBackendsSummary {
+  graph: "kuzu" | "neo4j" | "memgraph";
+  vector: "chroma" | "qdrant" | "faiss";
+  is_default: boolean;
+  /** `Neo4j + Qdrant`: graph first; product names, never translated. */
+  label: string;
+  health: "ok" | "local" | "failed" | "unknown";
+  health_code: string | null;
 }
 
 export interface MemoryProcessingSummary {
@@ -909,14 +1150,16 @@ export interface MemoryProcessingSummary {
   running: number;
   /** Rows marked `running` that no worker currently owns.
    *
-   * The difference between `running` and `in_flight_count`, floored at zero.
+   * On the SDK data plane: `running` rows whose lease is missing or has
+   * lapsed, counted in the same read as `running`. On the legacy plane: the
+   * difference between `running` and `in_flight_count`, floored at zero.
    * Non-zero means work is stranded: those tasks hold their harness's slot
    * until they are recovered, and a harness is serial, so nothing else from
    * that harness can run behind them. */
   /* Optional so that existing producers and fixtures stay valid; Core always
-   * sends it, and a reader that does not see it should treat it as unknown
-   * rather than as zero. */
-  stranded_running?: number;
+   * sends it. A reader that does not see it, or sees `null`, should treat it
+   * as unknown rather than as zero. */
+  stranded_running?: number | null;
   /** Failed and never attempted because the continuous policy was not in
    * force. Included in `failed`, but not a real extraction failure: nothing
    * was sent to HY. A revoked policy otherwise reads as a broken pipeline. */
@@ -939,6 +1182,24 @@ export interface MemoryProcessingSummary {
    * Workers own a task from the moment they take it until they finish, fail or
    * give up, so unlike `running` this cannot include work nobody is doing. */
   in_flight_count: number;
+  /** Jobs held back because their source is off or its grant was revoked.
+   * Not part of `pending`: they run again, unchanged, once the source is on.
+   * Optional so older producers stay valid. */
+  suspended?: number;
+  /** Until when model work is paused because the provider kept failing
+   * (bad key, wrong URL, missing model, provider down); null when not. */
+  llm_backoff_until?: string | null;
+  /** The provider failure behind the pause, as a stable code. */
+  llm_backoff_error?: string | null;
+  /** The durable write drain: `restarting` after an unexpected exit, until it
+   * runs again. Null before startup recovery started it. */
+  write_drain?: "running" | "restarting" | "stopped" | null;
+  /** Why the drain last exited unexpectedly, as a stable code. */
+  write_drain_error?: string | null;
+  /** The active memory pipeline and its graph/evolve status. */
+  pipeline?: MemoryPipelineStatus | null;
+  /** A running embedding switch or startup merge pauses mode mutations. */
+  embedding_switch?: EmbeddingSwitchSummary | null;
   metrics?: {
     raw_evidence: number;
     complete_turns: number;
@@ -1110,12 +1371,24 @@ export interface MemoryAddReceipt {
   task_id: string | null;
   memory_ids: string[];
   error: string | null;
+  /** Stable code of the last failure while the addition still waits (for
+   * example `model_auth_failed`); null when none. Optional so older
+   * Runtimes stay valid. */
+  error_code?: string | null;
+  /** When Core will try this addition again (ISO); null when not scheduled. */
+  next_retry_at?: string | null;
 }
 
 export type {
+  BackupBackend,
+  BackupEstimate,
+  BackupFailureCode,
+  BackupRequest,
   BackupRestoreFailureCode,
   BackupRestoreRequest,
   BackupRestoreResult,
+  BackupRestoreVerification,
+  BackupResult,
 } from "./backup-restore.js";
 export type {
   ContextItem,

@@ -11,7 +11,7 @@ from one_memory.secrets import keychain_service_name
 def main() -> int:
     try:
         raw = sys.stdin.read(12_289)
-        if not raw or len(raw) > 12_288 or sys.platform != "darwin":
+        if not raw or len(raw) > 12_288:
             return 1
         body = json.loads(raw)
         if set(body) != {"reference", "value"}:

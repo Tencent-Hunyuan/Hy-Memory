@@ -289,7 +289,7 @@ it("keeps rows, sources, count and graph on the one filtered page", async () => 
   expect(await screen.findByText(/566/)).toBeTruthy();
 });
 
-it("hides the previous source graph until the all-applications graph settles", async () => {
+it("loads each source graph independently from list pagination and search", async () => {
   sdkAuthority();
   render(<MemorySpace simplified active />);
   await waitFor(() =>
@@ -389,7 +389,7 @@ it("hides the previous source graph until the all-applications graph settles", a
     expect(screen.getByTestId("map-graph-loading").textContent).toBe("true"),
   );
   expect(screen.getByTestId("map-nodes").textContent).toBe("none");
-  // Waiting for the graph is not page staleness: the list stays usable.
+  expect(screen.getByTestId("map-memories").textContent).toBe("");
   expect(screen.getByTestId("map-stale").textContent).toBe("false");
 
   await act(async () => {
@@ -415,16 +415,13 @@ it("hides the previous source graph until the all-applications graph settles", a
   );
   const graphCalls = api.sdkGraph.mock.calls.length;
   fireEvent.click(screen.getByText("search deploy"));
-  await waitFor(() =>
-    expect(screen.getByTestId("map-graph-loading").textContent).toBe("true"),
-  );
-  expect(screen.getByTestId("map-nodes").textContent).toBe("none");
+  expect(screen.getByTestId("map-graph-loading").textContent).toBe("false");
+  expect(screen.getByTestId("map-nodes").textContent).toBe("4");
+  expect(screen.getByTestId("map-memories").textContent).toBe("");
   expect(api.sdkGraph).toHaveBeenCalledTimes(graphCalls);
 
   await act(async () => releaseSearch(searchPage));
-  await waitFor(() =>
-    expect(screen.getByTestId("map-graph-loading").textContent).toBe("false"),
-  );
+  expect(screen.getByTestId("map-graph-loading").textContent).toBe("false");
 });
 
 it("opens an SDK memory in place instead of switching away from the map", async () => {

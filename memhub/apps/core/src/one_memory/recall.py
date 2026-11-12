@@ -135,6 +135,8 @@ class RecallReceipt(BaseModel):
     #: exists yet (`fallback_reason`). Raw hits are excerpts, not memories.
     mode: Literal["memory", "raw"] = "memory"
     fallback_reason: Literal["model_unavailable", "no_memories"] | None = None
+    #: Whose memories were searched: the request's `user_id`, else `local`.
+    user_id: str = DEFAULT_USER_ID
 
 
 class RecallTarget(Protocol):
@@ -248,7 +250,10 @@ class SdkRecallTarget:
         semantic_hits, outcome = await search_within(
             self.semantic_search,
             request.query,
-            hy_wait_budget(budget),
+            # Unlike governed recall, SDK search is the primary candidate
+            # source, not an optional enhancement. Leave a bounded share for
+            # resolving returned IDs, but honor the caller's remaining budget.
+            ledger_wait_budget(max(0.0, deadline - time.monotonic())),
         )
         hits: list[RecallHit] = []
         used = 0

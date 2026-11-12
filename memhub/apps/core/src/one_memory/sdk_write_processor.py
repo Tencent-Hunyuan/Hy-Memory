@@ -3,12 +3,15 @@
 from __future__ import annotations
 
 import asyncio
+import re
+import threading
 from collections.abc import AsyncIterator, Awaitable, Callable, Mapping, Sequence
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
 
+from one_memory.background_work import in_sdk_write
 from one_memory.embedding_spaces import (
     EmbeddingSpace,
     EmbeddingSpaceStore,
@@ -20,14 +23,72 @@ from one_memory.hy_sdk_runtime import (
     SdkClientHandle,
     builtin_retrieval_snapshot,
     language_kwargs,
+    retrieval_view,
 )
 from one_memory.imports.models import EvidenceContentKind, EvidenceOrigin, EvidenceRecord
 from one_memory.input_sanitization import sanitize_model_input
 from one_memory.memory_features import FeatureOverrides
-from one_memory.model_profiles import ModelProfileSnapshot, ModelProfileStore
+from one_memory.model_profiles import ModelProfileSnapshot, ModelProfileStore, ProviderKind
+from one_memory.model_request_audit import audit_precipitation_request
 from one_memory.secrets import SecretStore, SecretStoreUnavailableError
+from one_memory.storage_backends import ResolvedStorage, storage_kwargs
 
 PRODUCT_AGENT_ID = "all-apps"
+
+#: SDK request ids whose write call is running on a thread right now. A write
+#: the drain gave up on (its work ceiling, a lost lease) keeps running on its
+#: thread; it must not be re-run beside itself (`recover_unknown`).
+_IN_FLIGHT: set[str] = set()
+_IN_FLIGHT_LOCK = threading.Lock()
+
+
+def sdk_write_in_flight(request_id: str) -> bool:
+    with _IN_FLIGHT_LOCK:
+        return request_id in _IN_FLIGHT
+
+
+class _Tracked:
+    """One SDK write call, held in `_IN_FLIGHT` from submission until it ends.
+
+    If the wait for it is cancelled before a thread picked it up, it is
+    abandoned: it will not start, and it leaves `_IN_FLIGHT` at once.
+    """
+
+    def __init__(self, request_id: str, work: Callable[..., Any]) -> None:
+        self.request_id = request_id
+        self.work = work
+        self.started = False
+        self.abandoned = False
+        with _IN_FLIGHT_LOCK:
+            _IN_FLIGHT.add(request_id)
+
+    def __call__(self, *args: Any, **kwargs: Any) -> Any:
+        with _IN_FLIGHT_LOCK:
+            if self.abandoned:
+                raise RuntimeError("hy_memory_write_abandoned")
+            self.started = True
+        try:
+            return self.work(*args, **kwargs)
+        finally:
+            with _IN_FLIGHT_LOCK:
+                _IN_FLIGHT.discard(self.request_id)
+
+    def abandon(self) -> None:
+        with _IN_FLIGHT_LOCK:
+            if not self.started:
+                self.abandoned = True
+                _IN_FLIGHT.discard(self.request_id)
+
+
+async def _write(tracked_id: str, work: Callable[..., Any], /, *args: Any, **kwargs: Any) -> Any:
+    call = _Tracked(tracked_id, work)
+    try:
+        return await in_sdk_write(call, *args, **kwargs)
+    except asyncio.CancelledError:
+        call.abandon()
+        raise
+
+
 _MESSAGE_ROLES = frozenset({"user", "assistant", "tool"})
 _CONVERSATION_ROLES = frozenset({"user", "assistant"})
 
@@ -54,7 +115,7 @@ class SdkWriteProcessor:
         records: tuple[EvidenceRecord, ...],
         *,
         request_id: str,
-        before_hy_invocation: Callable[[], Awaitable[None]],
+        before_hy_invocation: Callable[[bool], Awaitable[None]],
     ) -> SdkWriteReceipt:
         if not records:
             raise RuntimeError("hy_memory_task_without_inputs")
@@ -81,8 +142,9 @@ class SdkWriteProcessor:
 
         if extracted and not self._lite:
             contents = [sanitize_model_input(record.verbatim) for record in records]
-            await before_hy_invocation()
-            result = await asyncio.to_thread(
+            await before_hy_invocation(True)
+            result = await _write(
+                request_id,
                 client.add_extracted,
                 contents,
                 user_id=scope.user_id,
@@ -108,8 +170,9 @@ class SdkWriteProcessor:
             ]
             if not messages:
                 raise RuntimeError("hy_memory_task_without_inputs")
-            await before_hy_invocation()
-            result = await asyncio.to_thread(
+            await before_hy_invocation(not self._lite)
+            result = await _write(
+                request_id,
                 client.add,
                 messages,
                 user_id=scope.user_id,
@@ -130,7 +193,7 @@ class SdkWriteProcessor:
         if not request_id:
             raise ValueError("request_id is required")
         client = await self._client_handle.client()
-        outcome = await asyncio.to_thread(client.get_write_outcome, request_id)
+        outcome = await in_sdk_write(client.get_write_outcome, request_id)
         if outcome is None:
             return None
         if not isinstance(outcome, Mapping):
@@ -188,6 +251,7 @@ class SdkWriteCoordinator:
         spaces: EmbeddingSpaceStore | None = None,
         writes_open: Callable[[], bool] = lambda: True,
         sdk_language: Callable[[], str | None] = lambda: None,
+        storage_backends: Callable[[], ResolvedStorage | None] = lambda: None,
     ) -> None:
         self.profiles = profiles
         self.secrets = secrets
@@ -197,10 +261,14 @@ class SdkWriteCoordinator:
         self.memory_mode = memory_mode
         self.memory_features = memory_features
         self.sdk_language = sdk_language
+        #: The `storage_backends` setting with its secrets; None = Kuzu + Chroma.
+        #: May read the secret store (cached), so it is called off the loop.
+        self.storage_backends = storage_backends
         #: Keyed by (profile id, revision, space id, memory mode, features,
-        #: SDK language).
+        #: SDK language, storage backends).
         self._handles: dict[
-            tuple[str, int, str, str, FeatureOverrides, str | None], SdkClientHandle
+            tuple[str, int, str, str, FeatureOverrides, str | None, ResolvedStorage | None],
+            SdkClientHandle,
         ] = {}
         #: Users evolve (or the graph backfill) is running for, the writes in
         #: flight per user, and one exclusive run per user at a time. Writes
@@ -223,10 +291,8 @@ class SdkWriteCoordinator:
         records: tuple[EvidenceRecord, ...],
         *,
         request_id: str,
-        before_hy_invocation: Callable[[], Awaitable[None]],
+        before_hy_invocation: Callable[[bool], Awaitable[None]],
     ) -> SdkWriteReceipt:
-        if not self.sedimentation_enabled():
-            raise RuntimeError("model_sedimentation_disabled")
         if not self.writes_open():
             # An embedding switch paused writes: the drain puts the job back.
             raise RuntimeError("embedding_switch_in_progress")
@@ -236,14 +302,17 @@ class SdkWriteCoordinator:
             raise RuntimeError("memory_evolve_in_progress")
         self._writing[user_id] = self._writing.get(user_id, 0) + 1
         try:
-            async with self._active_handle() as handle:
-                return await SdkWriteProcessor(
-                    handle, lite=getattr(handle, "mode", None) == "lite"
-                ).process_sdk_job(
-                    records,
-                    request_id=request_id,
-                    before_hy_invocation=before_hy_invocation,
-                )
+            # `AuditedModelTransport` records only while this context is set;
+            # without it every precipitation request is invisible to the
+            # diagnostics usage report.
+            with audit_precipitation_request(request_id):
+                async with self._active_handle() as handle:
+                    lite = getattr(handle, "mode", None) == "lite"
+                    return await SdkWriteProcessor(handle, lite=lite).process_sdk_job(
+                        records,
+                        request_id=request_id,
+                        before_hy_invocation=before_hy_invocation,
+                    )
         finally:
             remaining = self._writing.get(user_id, 1) - 1
             if remaining > 0:
@@ -254,13 +323,18 @@ class SdkWriteCoordinator:
                 self._writes_idle.notify_all()
 
     async def retire_stale_handles(self) -> None:
-        """After a mode, feature or language change: retire handles built otherwise.
+        """After a mode, feature, language or storage change: retire handles built otherwise.
 
         The idle ones close now. A handle still writing is closed when its
         last use ends (#218), so a write that started in the old mode, or
         with the old features, finishes in it.
         """
-        build = (self.memory_mode(), self.memory_features(), self.sdk_language())
+        build = (
+            self.memory_mode(),
+            self.memory_features(),
+            self.sdk_language(),
+            await asyncio.to_thread(self.storage_backends),
+        )
         async with self._lock:
             stale = {key: handle for key, handle in self._handles.items() if key[3:] != build}
             for key in stale:
@@ -343,6 +417,7 @@ class SdkWriteCoordinator:
         mode = self.memory_mode()
         features = self.memory_features()
         language = self.sdk_language()
+        storage = await asyncio.to_thread(self.storage_backends)
         profile_identity, profile, secret, space = await asyncio.to_thread(
             self._read_active_credentials, mode
         )
@@ -352,6 +427,7 @@ class SdkWriteCoordinator:
             mode,
             features,
             language,
+            storage,
         )
         async with self._lock:
             handle = self._handles.get(key)
@@ -365,6 +441,7 @@ class SdkWriteCoordinator:
                     features=features,
                     space=space,
                     **language_kwargs(language),
+                    **storage_kwargs(storage),
                 )
                 self._handles[key] = handle
             self._retired.update(value for name, value in self._handles.items() if name != key)
@@ -406,24 +483,27 @@ class SdkWriteCoordinator:
             return (builtin.profile_id, builtin.revision), builtin, None, space
         identity = (space.profile_id, space.profile_revision)
         profile = self.profiles.snapshot(*identity)
-        try:
-            secret = self.profiles.resolve_snapshot_secret(*identity, self.secrets)
-        except SecretStoreUnavailableError:
-            raise RuntimeError("secure_storage_unavailable") from None
-        if profile.has_api_key and secret is None:
-            raise RuntimeError("model_secret_unavailable")
-        return identity, profile, secret, space
+        view = retrieval_view(profile)
+        secret: str | None = None
+        if view.embedding_provider_kind is ProviderKind.OPENAI_COMPATIBLE:
+            try:
+                secret = self.profiles.resolve_snapshot_secret(*identity, self.secrets)
+            except SecretStoreUnavailableError:
+                raise RuntimeError("secure_storage_unavailable") from None
+            if secret is None:
+                raise RuntimeError("model_secret_unavailable")
+        return identity, view, secret, space
 
     def _read_active_credentials(
         self,
         mode: str = "pro",
     ) -> tuple[tuple[str, int], ModelProfileSnapshot, str | None, EmbeddingSpace | None]:
+        if mode == "lite":
+            # A lite write is an embedding-only view of the live space. Never
+            # resolve or inject the generation model endpoint or its secret.
+            return self._lite_credentials()
         identity = self.profiles.active_identity()
         if identity is None:
-            if mode == "lite":
-                # lite stores raw turns with one embedding and calls no model:
-                # the live space's own, so they land where reads look.
-                return self._lite_credentials()
             raise RuntimeError("model_profile_not_active")
         profile = self.profiles.snapshot(*identity)
         space = self._live_space() if self.spaces is not None else None
@@ -509,11 +589,36 @@ def _is_extracted_content(record: EvidenceRecord) -> bool:
     )
 
 
+#: The SDK's stable failure codes are upper snake case (`RECONCILE_FAILED`).
+_SDK_FAILURE_CODE = re.compile(r"[A-Z][A-Z0-9_]{0,47}")
+
+
+def sdk_write_failure_code(value: Mapping[object, object]) -> str:
+    """The job's `error_code` for a failed SDK write: the SDK's own cause if it gave one.
+
+    hy-memory 2.0.13 names why a write failed: `agent_error_code`
+    (`LLM_ERROR`, `EMPTY_RESPONSE`, `JSON_PARSE_FAILED`, `EMBEDDING_FAILED`,
+    `RECONCILE_FAILED`) and, for a failed reconcile, `reconcile_error_code`
+    (`LLM_UNAVAILABLE`, `EMPTY_RESPONSE`, `JSON_PARSE_FAILED`,
+    `RECONCILE_EXCEPTION`). They become `hy_sdk_reconcile_empty_response`,
+    `hy_sdk_llm_error`, ... Without a recognisable code it stays
+    `hy_sdk_write_failed`. Only the code is kept, never the SDK's message.
+    """
+    reconcile = value.get("reconcile_error_code")
+    if isinstance(reconcile, str) and _SDK_FAILURE_CODE.fullmatch(reconcile):
+        cause = reconcile.removeprefix("RECONCILE_") or "FAILED"
+        return f"hy_sdk_reconcile_{cause.lower()}"
+    agent = value.get("agent_error_code")
+    if isinstance(agent, str) and _SDK_FAILURE_CODE.fullmatch(agent):
+        return f"hy_sdk_{agent.lower()}"
+    return "hy_sdk_write_failed"
+
+
 def _receipt_from_result(value: object) -> SdkWriteReceipt:
     if not isinstance(value, Mapping):
         raise RuntimeError("hy_sdk_write_receipt_shape_invalid")
     if value.get("success") is not True:
-        raise RuntimeError("hy_sdk_write_failed")
+        raise RuntimeError(sdk_write_failure_code(value))
 
     # Read only documented public receipt fields. ``variant`` identifies the
     # productivity namespace; IDs from both variants are canonical memory IDs.

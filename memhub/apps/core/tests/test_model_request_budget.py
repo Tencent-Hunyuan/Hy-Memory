@@ -96,3 +96,65 @@ def test_runtime_limit_is_opt_in_and_bounds_are_validated():
     assert Settings(_env_file=None).model_request_limit is None
     with pytest.raises(ValueError):
         Settings(_env_file=None, model_request_limit=0)
+
+
+@pytest.mark.parametrize("field", ["max_tokens", "max_completion_tokens"])
+def test_token_field_variants_are_budgeted(tmp_path, field):
+    store = budget(tmp_path)
+    store.reserve(json.dumps({field: 12}).encode())
+    with sqlite3.connect(store.database) as db:
+        assert db.execute("SELECT output_tokens FROM model_request_budget_events").fetchone() == (
+            12,
+        )
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        {"max_completion_tokens": True},
+        {"max_completion_tokens": 0},
+        {"max_completion_tokens": 17},
+        {"max_tokens": 5, "max_completion_tokens": 17},
+        {"max_tokens": 17, "max_completion_tokens": 5},
+        {"max_tokens": 5, "max_completion_tokens": None},
+    ],
+)
+def test_either_token_field_must_be_valid_and_within_budget(tmp_path, body):
+    with pytest.raises(ModelRequestBudgetError):
+        budget(tmp_path).reserve(json.dumps(body).encode())
+
+
+def test_both_fields_account_for_the_largest_limit(tmp_path):
+    store = budget(tmp_path)
+    store.reserve(b'{"max_tokens":5,"max_completion_tokens":12}')
+    with sqlite3.connect(store.database) as db:
+        assert db.execute("SELECT output_tokens FROM model_request_budget_events").fetchone() == (
+            12,
+        )
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        {"max_tokens": 3, "max_completion_tokens": 17},
+        {"max_tokens": 17, "max_completion_tokens": 3},
+        {"max_completion_tokens": True},
+    ],
+)
+def test_invalid_either_field_never_reaches_model(tmp_path, body):
+    sent = []
+    store = budget(tmp_path)
+
+    async def scenario():
+        async with httpx.AsyncClient(
+            transport=BudgetedModelTransport(
+                store, inner=httpx.MockTransport(lambda req: sent.append(req) or httpx.Response(200))
+            )
+        ) as client:
+            with pytest.raises(ModelRequestBudgetError):
+                await client.post("https://example.test/chat/completions", json=body)
+
+    asyncio.run(scenario())
+    assert not sent
+    with sqlite3.connect(store.database) as db:
+        assert db.execute("SELECT COUNT(*) FROM model_request_budget_events").fetchone() == (0,)

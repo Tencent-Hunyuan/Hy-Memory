@@ -26,6 +26,34 @@ vi.mock("./api", () => ({
   getImportJobs: vi.fn(),
   connectSources: vi.fn(),
   completeOnboarding: vi.fn(),
+  getEvolveSchedule: vi.fn().mockResolvedValue({
+    enabled: true,
+    time: "03:00",
+  }),
+  setEvolveSchedule: vi.fn(),
+  memoryModePlanUnsupported: vi.fn(() => false),
+  getMemoryMode: vi.fn().mockResolvedValue({
+    mode: "pro",
+    configured_mode: "pro",
+    explicitly_configured: false,
+  }),
+  setMemoryMode: vi.fn().mockResolvedValue({ mode: "pro" }),
+  planMemoryMode: vi.fn().mockResolvedValue({
+    current: "pro",
+    target: "lite",
+    effective_target: "lite",
+    capabilities: {
+      content_plane: "raw",
+      generation_required: false,
+      graph_enabled: false,
+      evolve_available: false,
+    },
+    effects: [],
+    warnings: [],
+    blockers: [],
+  }),
+  putOnboardingProgress: vi.fn().mockResolvedValue({ model_profile_id: null }),
+  patchOnboardingProgress: vi.fn().mockResolvedValue({}),
   getSourceConnection: vi.fn(),
   createImportJob: vi.fn(),
   detectSource: vi.fn(),
@@ -68,6 +96,9 @@ const state: OnboardingState = {
   selected_source_ids: [],
   started_at: null,
   completed_at: null,
+  mode_intent: null,
+  setup_step: null,
+  model_profile_id: null,
 };
 let sources: SourceResponse[];
 let jobs: ImportJob[];
@@ -140,6 +171,32 @@ function noUnrequestedWrites() {
 }
 beforeEach(() => {
   vi.resetAllMocks();
+  vi.mocked(api.getMemoryMode).mockResolvedValue({
+    mode: "pro",
+    configured_mode: "pro",
+    explicitly_configured: false,
+  } as never);
+  vi.mocked(api.setMemoryMode).mockResolvedValue({ mode: "pro" } as never);
+  vi.mocked(api.planMemoryMode).mockResolvedValue({
+    current: "pro",
+    target: "lite",
+    effective_target: "lite",
+    capabilities: {
+      content_plane: "raw",
+      generation_required: false,
+      graph_enabled: false,
+      evolve_available: false,
+    },
+    effects: [],
+    warnings: [],
+    blockers: [],
+  } as never);
+  vi.mocked(api.getEvolveSchedule).mockResolvedValue({
+    enabled: true,
+    time: "03:00",
+  });
+  vi.mocked(api.putOnboardingProgress).mockResolvedValue(state);
+  vi.mocked(api.patchOnboardingProgress).mockResolvedValue(state);
   localStorage.clear();
   vi.stubGlobal("crypto", webcrypto);
   delete window.oneMemory;
@@ -160,6 +217,34 @@ beforeEach(() => {
   vi.mocked(api.completeOnboarding).mockResolvedValue({
     ...state,
     status: "completed",
+  });
+  vi.mocked(api.getMemoryMode).mockResolvedValue({
+    mode: "pro",
+    configured_mode: "pro",
+    explicitly_configured: false,
+    forced_by_env: false,
+    modes: ["lite", "pro", "ultra"],
+    graph_build: {
+      state: "idle",
+      started_at: null,
+      finished_at: null,
+      users: {},
+    },
+  });
+  vi.mocked(api.setMemoryMode).mockResolvedValue({
+    mode: "pro",
+    configured_mode: "pro",
+    explicitly_configured: true,
+    forced_by_env: false,
+    modes: ["lite", "pro", "ultra"],
+    graph_build: {
+      state: "idle",
+      started_at: null,
+      finished_at: null,
+      users: {},
+    },
+    previous_mode: "pro",
+    effects: [],
   });
   vi.mocked(api.connectSources).mockImplementation(
     async (ids, _confirmed, options) => ({
@@ -262,11 +347,13 @@ it("keeps the single-source submit frozen when another source arrives during fin
 it("empty discovery shows zero and allows explicit entry without a connection request", async () => {
   await ready();
   await waitFor(() => expect(count()).toBe("0"));
-  expect(screen.getByRole("button", { name: "开始导入" })).toHaveProperty(
+  expect(screen.getByRole("button", { name: "选择记忆模式" })).toHaveProperty(
     "disabled",
-    true,
+    false,
   );
-  fireEvent.click(screen.getByRole("button", { name: "稍后添加，先进入" }));
+  fireEvent.click(screen.getByRole("button", { name: "选择记忆模式" }));
+  fireEvent.click(screen.getByRole("radio", { name: /lite/i }));
+  fireEvent.click(screen.getByRole("button", { name: "使用 Lite 进入" }));
   await waitFor(() =>
     expect(finish).toHaveBeenCalledExactlyOnceWith("sources"),
   );
@@ -310,13 +397,9 @@ it("partial acceptance preserves the successful job and failure through model-st
     "accepted-job:completed",
   );
   fireEvent.click(screen.getByRole("button", { name: "继续配置模型" }));
-  fireEvent.click(await screen.findByRole("button", { name: "返回导入" }));
-  expect(screen.getByLabelText("保留任务").textContent).toBe(
-    "accepted-job:completed",
-  );
-  expect(screen.getByLabelText("失败来源").textContent).toBe("cursor");
   expect(api.completeOnboarding).not.toHaveBeenCalled();
-  fireEvent.click(screen.getByRole("button", { name: "进入应用" }));
+  fireEvent.click(screen.getByRole("radio", { name: /lite/i }));
+  fireEvent.click(screen.getByRole("button", { name: "使用 Lite 进入" }));
   await waitFor(() =>
     expect(finish).toHaveBeenCalledExactlyOnceWith("sources"),
   );

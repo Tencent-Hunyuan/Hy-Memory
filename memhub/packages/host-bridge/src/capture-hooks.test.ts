@@ -2,6 +2,7 @@ import { execFile, execFileSync } from "node:child_process";
 import { chmod, mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 import { promisify } from "node:util";
 import { describe, expect, it } from "vitest";
 
@@ -391,10 +392,135 @@ describe("capture hooks installed with recall", () => {
     );
     expect(plugin).toContain("session.idle");
     expect(plugin).toContain('type: "text"');
+    // V2 loads plugins as `{ id, setup }`; V1 (1.18.29+) reads `server()`.
+    // A bare function export fails V2 with "must export ... an id and ... setup".
+    expect(plugin).toContain('export default { id: "one-memory-capture"');
+    expect(plugin).toContain("async function server()");
+    expect(plugin).toContain("async function setup(ctx)");
+    expect(plugin).toContain("ctx.event.subscribe");
+    expect(plugin).toContain("session.text.ended");
+    expect(plugin).toContain("session.execution.succeeded");
+    expect(plugin).toContain("session.execution.interrupted");
+    // The host loads this file as ESM. Parse it as ESM here too: a template
+    // that only looks right still ships a plugin that never loads.
+    const pluginCopy = path.join(home, "one-memory-capture.mjs");
+    await writeFile(pluginCopy, plugin);
+    await promisify(execFile)(process.execPath, ["--check", pluginCopy]);
     await applyRecallUninstall(await planRecallUninstall(piLayout(pi)));
     await expect(
       readFile(path.join(pi, "extensions", "one-memory-capture.js"), "utf8"),
     ).rejects.toThrow();
+  });
+
+  it("sends OpenCode 2 events through the generated plugin", async () => {
+    const home = await root();
+    const opencode = path.join(home, ".config", "opencode");
+    await mkdir(opencode, { recursive: true });
+    const captured = path.join(home, "captured.json");
+    const fake = path.join(home, "fake-core.sh");
+    await writeFile(fake, `#!/bin/sh\ncat > ${JSON.stringify(captured)}\n`);
+    await chmod(fake, 0o755);
+
+    await applyRecallInstall(
+      await planRecallInstall(opencodeLayout(opencode), {
+        ...runtime(home),
+        captureCommand: fake,
+      }),
+    );
+    const pluginCopy = path.join(home, "one-memory-capture.mjs");
+    await writeFile(
+      pluginCopy,
+      await readFile(
+        path.join(opencode, "plugin", "one-memory-capture.js"),
+        "utf8",
+      ),
+    );
+    const { default: plugin } = (await import(
+      pathToFileURL(pluginCopy).href
+    )) as {
+      default: {
+        id: string;
+        setup: (ctx: unknown) => Promise<(() => Promise<void>) | void>;
+      };
+    };
+    expect(plugin.id).toBe("one-memory-capture");
+
+    type Prompt = (event: {
+      sessionID: string;
+      messageID: string;
+      prompt: { text: string };
+    }) => void;
+    let prompt: Prompt | undefined;
+    let finished: () => void = () => {};
+    const done = new Promise<void>((resolve) => {
+      finished = resolve;
+    });
+    const events = async function* () {
+      prompt?.({
+        sessionID: "session-v2",
+        messageID: "message-user",
+        prompt: { text: "question" },
+      });
+      // One reply in two text blocks (a tool call sat between them), the
+      // first delivered twice. They must leave as one message, not as two
+      // entries with one id that Core would read as a revision.
+      for (const [ordinal, text] of [
+        [0, "answer"],
+        [0, "answer"],
+        [2, "after the tool"],
+      ] as const) {
+        yield {
+          type: "session.text.ended",
+          data: {
+            sessionID: "session-v2",
+            assistantMessageID: "message-v2",
+            ordinal,
+            text,
+          },
+        };
+      }
+      yield {
+        type: "session.execution.succeeded",
+        data: { sessionID: "session-v2" },
+      };
+      finished();
+    };
+    const cleanup = await plugin.setup({
+      session: {
+        hook: async (
+          name: string,
+          callback: Prompt,
+        ): Promise<{ dispose: () => void }> => {
+          if (name === "prompt") prompt = callback;
+          return { dispose: () => {} };
+        },
+      },
+      event: { subscribe: () => events() },
+    });
+    await done;
+    await cleanup?.();
+
+    const payload = JSON.parse(await readFile(captured, "utf8"));
+    expect(payload).toMatchObject({
+      hook_event_name: "session.status",
+      session_id: "session-v2",
+      messages: [
+        {
+          role: "user",
+          message_id: "message-user",
+          parts: [{ type: "text", text: "question" }],
+        },
+        {
+          role: "assistant",
+          message_id: "message-v2",
+          parts: [
+            { type: "text", text: "answer" },
+            { type: "text", text: "after the tool" },
+          ],
+        },
+      ],
+    });
+    expect(payload.messages).toHaveLength(2);
   });
 });
 

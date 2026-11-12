@@ -6,7 +6,11 @@ import type {
 } from "@one-memory/contracts";
 import { cleanup, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it } from "vitest";
-import { MemoryGraph3D } from "./MemoryGraph3D";
+import {
+  graphNodeTooltip,
+  isGraphNodeSelectable,
+  MemoryGraph3D,
+} from "./MemoryGraph3D";
 
 afterEach(cleanup);
 
@@ -48,6 +52,18 @@ function makeGraph(nodeCount: number): MemoryGraphResponse {
 }
 
 describe("MemoryGraph3D", () => {
+  it("keeps topic annotations hover-only", () => {
+    const topic = {
+      ...makeGraph(1).nodes[0],
+      node_type: "topic" as const,
+      label: "CI",
+    };
+    expect(isGraphNodeSelectable(topic)).toBe(false);
+    expect(graphNodeTooltip(topic, "主题：")).toBe("主题：CI");
+    expect(graphNodeTooltip(topic, "Topic: ")).toBe("Topic: CI");
+    expect(isGraphNodeSelectable({ ...topic, node_type: "memory" })).toBe(true);
+  });
+
   it("没有 WebGL 时给出可访问降级提示", () => {
     render(
       <MemoryGraph3D

@@ -90,6 +90,11 @@ it("accepts only the SDK context shape", () => {
   ).toBe(false);
   expect(contextResponseInvalidField(mixed)).toBeNull();
   expect(contextResponseInvalidField(legacyShape)).toBe("response");
+  // Core 1.0.6 echoes whose memories were searched; an older Core does not.
+  expect(isSdkContextSearchResponse({ ...mixed, user_id: "local" })).toBe(true);
+  expect(isSdkContextSearchResponse({ ...mixed, user_id: "" })).toBe(false);
+  expect(isSdkContextSearchResponse({ ...mixed, user_id: 7 })).toBe(false);
+  expect(isSdkContextSearchResponse({ ...mixed, owner: "local" })).toBe(false);
 });
 
 async function fixture(
@@ -264,6 +269,87 @@ it("reads Core's SDK context directly and passes native fields unchanged", async
   expect(JSON.stringify(result.data)).not.toMatch(
     /revision|evidence_ids|adoption|paths/,
   );
+});
+
+it.each([
+  ["omitted", raw],
+  ["null", { ...raw, turn_id: null, turn_index: null, turn_count: null }],
+  [
+    "minimum populated",
+    {
+      ...raw,
+      turn_id: "t",
+      turn_index: 0,
+      turn_count: 1,
+    },
+  ],
+  [
+    "maximum populated",
+    {
+      ...raw,
+      turn_id: "t".repeat(96),
+      turn_index: Number.MAX_SAFE_INTEGER,
+      turn_count: Number.MAX_SAFE_INTEGER,
+    },
+  ],
+])("passes through %s optional raw turn metadata", async (_name, item) => {
+  const f = await fixture();
+  const response = receiptFor([item]);
+  f.respond(response);
+
+  const result = await f.post();
+
+  expect(result.status).toBe(200);
+  expect(result.data).toEqual(response);
+  expect(f.diagnostics).not.toContainEqual(
+    expect.objectContaining({ event: "context.response_invalid" }),
+  );
+});
+
+it.each([
+  ["empty turn_id", { turn_id: "" }],
+  ["overlong turn_id", { turn_id: "t".repeat(97) }],
+  ["non-string turn_id", { turn_id: 1 }],
+  ["negative turn_index", { turn_index: -1 }],
+  ["fractional turn_index", { turn_index: 0.5 }],
+  ["non-number turn_index", { turn_index: "0" }],
+  ["unsafe turn_index", { turn_index: 2 ** 53 }],
+  ["zero turn_count", { turn_count: 0 }],
+  ["negative turn_count", { turn_count: -1 }],
+  ["fractional turn_count", { turn_count: 1.5 }],
+  ["non-number turn_count", { turn_count: "1" }],
+  ["unsafe turn_count", { turn_count: 2 ** 53 }],
+  ["unknown field", { revision: 1 }],
+])("rejects raw context with %s", async (_name, fields) => {
+  const f = await fixture();
+  f.respond(receiptFor([{ ...raw, content: "private turn", ...fields }]));
+
+  const result = await f.post();
+
+  expect(result.status).toBe(502);
+  expect(result.data).toEqual({ error: "context_unavailable" });
+  expect(f.diagnostics).toContainEqual(
+    expect.objectContaining({
+      event: "context.response_invalid",
+      error_code: "invalid_context_response",
+      details: { reason: "response" },
+    }),
+  );
+  expect(JSON.stringify(f.diagnostics)).not.toContain("private turn");
+});
+
+it("rejects raw turn metadata on a memory context item", async () => {
+  const f = await fixture();
+  f.respond({
+    ...mixed,
+    items: [{ ...memory, turn_id: "t" }],
+    used_characters: [...memory.content].length,
+  });
+
+  const result = await f.post();
+
+  expect(result.status).toBe(502);
+  expect(result.data).toEqual({ error: "context_unavailable" });
 });
 
 it.each([
@@ -444,15 +530,20 @@ it("rechecks the WorkBuddy installation after Core records delivery", async () =
 it.each([
   { tools: ["om_recall"], scopes: ["all-apps"] },
   { tools: ["om_recall"], scopes: [`workspace:v1:${"a".repeat(64)}`] },
-  { tools: ["om_conversations"], scopes: ["all-apps", "source:codex"] },
+  { tools: ["om_conversations"], scopes: ["all-apps"] },
+  {
+    tools: ["om_conversations"],
+    scopes: ["all-apps", "source:codex"],
+    body: { query: "original", raw_source_ids: ["cursor"] },
+  },
 ])(
   "combines only the underlying grants: $tools $scopes",
-  async ({ tools, scopes }) => {
+  async ({ tools, scopes, body }) => {
     const f = await fixture(tools as HostReadTool[], scopes);
-    expect((await f.post()).status).toBe(200);
+    expect((await f.post(body)).status).toBe(200);
     expect(f.calls).toHaveLength(1);
     expect(f.calls[0].url).toBe("/api/v2/context/search");
-    expect(f.calls[0].body).toEqual({ query: "original" });
+    expect(f.calls[0].body).toEqual(body ?? { query: "original" });
     expect(
       JSON.parse(f.calls[0].headers["x-one-memory-allowed-tools"] as string),
     ).toEqual(tools);
@@ -466,16 +557,10 @@ it.each([
   { tools: [], scopes: ["all-apps"], body: { query: "x" } },
   { tools: ["om_ask"], scopes: ["all-apps"], body: { query: "x" } },
   { tools: ["om_recall"], scopes: ["source:codex"], body: { query: "x" } },
-  { tools: ["om_conversations"], scopes: ["all-apps"], body: { query: "x" } },
   {
     tools: ["om_recall"],
     scopes: ["all-apps"],
     body: { query: "x", kinds: ["raw"] },
-  },
-  {
-    tools: ["om_recall", "om_conversations"],
-    scopes: ["all-apps", "source:codex"],
-    body: { query: "x", raw_source_ids: ["cursor"] },
   },
 ])(
   "denies invalid requested authority before Core: $tools $body",
@@ -983,11 +1068,6 @@ it.each([
     scopes: ["all-apps", "source:codex"],
     response: receiptFor([memory]),
   },
-  {
-    tools: ["om_recall", "om_conversations"],
-    scopes: ["all-apps", "source:codex"],
-    response: receiptFor([{ ...raw, source: "cursor" }]),
-  },
 ])(
   "checks captured identity on Core output: $tools $scopes",
   async ({ tools, scopes, response }) => {
@@ -1013,8 +1093,8 @@ it.each([
   },
   {
     tools: ["om_conversations"],
-    scopes: ["all-apps", "source:codex"],
-    response: receiptFor([raw]),
+    scopes: ["all-apps"],
+    response: receiptFor([{ ...raw, source: "cursor" }]),
   },
 ])(
   "preserves correctly authorized single-lane output: $tools $scopes",

@@ -10,6 +10,8 @@ import type {
 import type { LoginPreference } from "./login-preference";
 import type { NativeLanguageSource } from "./native-language";
 
+export type RuntimeHosting = "background-service" | "app-hosted" | "unknown";
+
 export const LOGIN_SERVICE_NAME = "com.tencent.onememory.runtime.plist";
 
 interface TrayOptions {
@@ -24,6 +26,9 @@ interface TrayOptions {
   reportError(message: string): void;
   readLoginPreference(): Promise<LoginPreference>;
   setLoginPreference(enabled: boolean): Promise<LoginPreference>;
+  /** Who keeps the Runtime alive, re-read on every menu refresh: the
+   * background service (quit leaves it running) or this App (quit stops it). */
+  readRuntimeHosting?(): Promise<RuntimeHosting>;
   allowLoginStartup?: boolean;
   productName?: string;
   language?: NativeLanguageSource;
@@ -67,6 +72,13 @@ export function installBackgroundTray(options: TrayOptions): () => void {
     } else {
       label += t("nativeDevelopmentUnavailable");
     }
+    let hosting: RuntimeHosting = "unknown";
+    try {
+      hosting = (await options.readRuntimeHosting?.()) ?? "unknown";
+    } catch {
+      hosting = "unknown";
+    }
+    if (disposed || current !== generation) return;
     tray.setContextMenu(
       options.buildMenu([
         { label: t("nativeOpen"), click: options.open },
@@ -92,7 +104,10 @@ export function installBackgroundTray(options: TrayOptions): () => void {
         },
         { type: "separator" },
         {
-          label: t("nativeQuit"),
+          // Unknown keeps the plain label: quit then stops nothing.
+          label: t(
+            hosting === "app-hosted" ? "nativeQuitStopsService" : "nativeQuit",
+          ),
           click: () => {
             if (!disposed) app.quit();
           },

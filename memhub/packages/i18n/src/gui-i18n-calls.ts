@@ -8,6 +8,14 @@ export const callsChineseMessages = {
   "calls.headline.empty": "{host} 没有查到相关记忆",
   "calls.headline.found": "{host} 查到 {count} 条相关内容",
   "calls.headline.found.one": "{host} 查到 {count} 条相关内容",
+  "calls.headline.rawOnly": "{host} 找到 {count} 条原始会话",
+  "calls.headline.rawOnly.one": "{host} 找到 {count} 条原始会话",
+  "calls.headline.memoryOnly": "{host} 找到 {count} 条记忆",
+  "calls.headline.memoryOnly.one": "{host} 找到 {count} 条记忆",
+  "calls.headline.mixed": "{host} 找到 {memories} 条记忆 · {raw} 条原始会话",
+  "calls.headline.mixed.one":
+    "{host} 找到 {memories} 条记忆 · {raw} 条原始会话",
+  "calls.headline.completed": "{host} 调用已完成",
   "calls.detail.timedOut": "后台正在整理记忆，查询超时，这次回答没有带上记忆",
   "calls.detail.unavailable": "MemHub 暂时不可用，这次回答没有带上记忆",
   "calls.detail.denied": "当前授权不允许这次查询",
@@ -109,6 +117,15 @@ export const callsSpanishMessages: Record<
   "calls.headline.empty": "{host} no encontró memorias relacionadas",
   "calls.headline.found": "{host} encontró {count} contenidos relacionados",
   "calls.headline.found.one": "{host} encontró {count} contenido relacionado",
+  "calls.headline.rawOnly": "{host} encontró {count} conversaciones originales",
+  "calls.headline.rawOnly.one": "{host} encontró {count} conversación original",
+  "calls.headline.memoryOnly": "{host} encontró {count} memorias",
+  "calls.headline.memoryOnly.one": "{host} encontró {count} memoria",
+  "calls.headline.mixed":
+    "{host} encontró {memories} memorias · {raw} conversaciones originales",
+  "calls.headline.mixed.one":
+    "{host} encontró {memories} memoria · {raw} conversaciones originales",
+  "calls.headline.completed": "La llamada de {host} se completó",
   "calls.detail.timedOut":
     "La consulta agotó el tiempo mientras se organizaban las memorias; la respuesta no incluyó memorias",
   "calls.detail.unavailable":

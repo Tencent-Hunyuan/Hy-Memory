@@ -119,6 +119,86 @@
   margin: 0;
 }
 
+.model-settings .generation-technical-disclosure {
+  grid-column: 1 / -1;
+  border-block: 1px solid var(--bd, #d3d9e0);
+  padding-block: 4px;
+}
+.model-settings .generation-technical-toggle {
+  display: flex;
+  width: 100%;
+  min-height: 44px;
+  align-items: center;
+  justify-content: space-between;
+  border: 0;
+  background: transparent;
+  color: #4e6478;
+}
+.model-settings .generation-technical-toggle:hover:not(:disabled) {
+  border-color: transparent;
+  background: #e9f0f4;
+  color: #304757;
+}
+.model-settings .generation-technical-fields {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px;
+  padding-block: 12px;
+}
+.model-settings .generation-model-field {
+  display: grid;
+  min-width: 0;
+  gap: 6px;
+}
+.model-settings .generation-model-field:has([name="base-url"]),
+.model-settings .generation-runtime-fields,
+.model-settings .generation-thinking {
+  grid-column: 1 / -1;
+}
+.model-settings .generation-runtime-fields {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+}
+.model-settings .generation-technical-fields[hidden] {
+  display: none;
+}
+.model-settings .generation-runtime-note {
+  grid-column: 1 / -1;
+  color: #63707b;
+  font-size: 12px;
+  line-height: 1.5;
+}
+.model-settings .generation-thinking {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.model-settings .generation-model-error {
+  color: #96453e;
+}
+@media (max-width: 600px) {
+  .model-settings .generation-technical-fields,
+  .model-settings .generation-runtime-fields {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .model-settings .generation-technical-toggle,
+  .model-settings .generation-model-field :is(input, select) {
+    transition: none;
+  }
+}
+.model-settings
+  :is(
+    .generation-technical-toggle,
+    .generation-model-field input,
+    .generation-model-field select
+  ):focus-visible {
+  outline: 2px solid #4e6478;
+  outline-offset: 3px;
+}
+
 .model-settings .model-saved-card .source-actions,
 .model-settings .preset-profile .source-actions {
   flex-wrap: wrap;

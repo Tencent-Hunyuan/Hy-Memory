@@ -318,22 +318,38 @@ it("records a failed test only for the attempted revision and rejects a mismatch
   expect(result.current.profiles[0].capabilities).toEqual(profile.capabilities);
 });
 
-it("shows a probe-induced new revision only after the matching profile refresh", async () => {
+it("commits a probe-induced revision before the follow-up refresh returns", async () => {
   vi.mocked(api.getModelProfiles).mockResolvedValueOnce([profile]);
   const { result } = renderHook(useModelProfiles);
   await waitFor(() => expect(result.current.profiles).toHaveLength(1));
-  const updated = { ...profile, revision: 2, embedding_dimensions: 512 };
+  const updated = {
+    ...profile,
+    revision: 2,
+    embedding_dimensions: 512,
+    capabilities: {
+      ...profile.capabilities,
+      endpoint_reachable: true,
+      model_available: true,
+      embedding_available: true,
+    },
+  };
+  const receipt = {
+    ...probeResult(updated),
+    input_profile_revision: profile.revision,
+  };
   const delayed = deferred<ModelProfile[]>();
   vi.mocked(api.getModelProfiles).mockReturnValueOnce(delayed.promise);
-  vi.mocked(api.probeModelProfile).mockResolvedValueOnce(probeResult(updated));
+  vi.mocked(api.probeModelProfile).mockResolvedValueOnce(receipt);
   await act(async () => {
     await result.current.probeProfile(profile.profile_id);
   });
-  expect(result.current.probeFor(profile)).toBeNull();
+  expect(result.current.profiles[0]).toMatchObject({
+    revision: 2,
+    capabilities: receipt.capabilities,
+  });
+  expect(result.current.probeFor(result.current.profiles[0])).toEqual(receipt);
   await act(async () => {
     delayed.resolve([updated]);
   });
-  expect(result.current.probeFor(result.current.profiles[0])).toEqual(
-    probeResult(updated),
-  );
+  expect(result.current.probeFor(result.current.profiles[0])).toEqual(receipt);
 });

@@ -342,10 +342,13 @@ async def test_coding_writer_threads_language_to_every_step():
     fact = WorkingFactDraft(subject="x", statement="y")
     writer.extractor = type("X", (), {})()
     writer.extractor.extract = AsyncMock(return_value=([draft], [fact]))
+    # writer 先做两层的模型决策（plan），都成功后才落库（apply）
     writer.reconciler = type("R", (), {})()
-    writer.reconciler.reconcile = AsyncMock(return_value=[])
+    writer.reconciler.plan = AsyncMock(return_value=object())
+    writer.reconciler.apply = AsyncMock(return_value=[])
     writer.fact_reconciler = type("F", (), {})()
-    writer.fact_reconciler.reconcile = AsyncMock(return_value=([], []))
+    writer.fact_reconciler.plan = AsyncMock(return_value=object())
+    writer.fact_reconciler.apply = AsyncMock(return_value=([], []))
     writer._crosslink = AsyncMock()
     writer.cache = None
     writer.variant = "working"
@@ -353,8 +356,8 @@ async def test_coding_writer_threads_language_to_every_step():
     await writer.write([ChatMessage(role="user", content="hi")], user_id="u1",
                        language="de")
     assert writer.extractor.extract.await_args.kwargs["language"] == "de"
-    assert writer.reconciler.reconcile.await_args.kwargs["language"] == "de"
-    assert writer.fact_reconciler.reconcile.await_args.kwargs["language"] == "de"
+    assert writer.reconciler.plan.await_args.kwargs["language"] == "de"
+    assert writer.fact_reconciler.plan.await_args.kwargs["language"] == "de"
 
 
 # ── summaries ──

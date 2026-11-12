@@ -42,6 +42,8 @@
   margin-bottom: 24px;
 }
 .r6-home-overview {
+  display: flex;
+  flex-direction: column;
   min-width: 0;
   min-height: 346px;
   padding: 26px;
@@ -67,6 +69,17 @@
   font-size: 18px;
   font-weight: 500;
 }
+.r6-evolve-status {
+  width: fit-content;
+  margin: 12px 0 -4px;
+  padding: 5px 9px;
+  border: 1px solid #cbd8e0;
+  border-radius: 999px;
+  background: #edf3f6;
+  color: #4f6574;
+  font-size: 12px;
+  line-height: 20px;
+}
 .r6-home-metrics {
   display: grid;
   grid-template-columns: 1.1fr 1fr 1fr;
@@ -74,6 +87,9 @@
   min-height: 129px;
 }
 .r6-home-metrics > div {
+  display: grid;
+  grid-template-rows: 20px 72px minmax(20px, auto);
+  align-content: start;
   min-width: 0;
   padding: 4px 24px;
   border-right: 1px solid #d5dfe8;
@@ -87,12 +103,16 @@
 .r6-home-metrics p,
 .r6-home-metrics small {
   font-size: 12px;
+  line-height: 20px;
   color: #63707b;
   margin: 0;
 }
+.r6-home-metrics small {
+  display: block;
+}
 .r6-home-figure {
   display: flex;
-  align-items: flex-end;
+  align-items: center;
   gap: 6px;
   margin: 0;
 }
@@ -100,12 +120,10 @@
   font-style: normal;
   font-size: 12px;
   line-height: 20px;
-  padding-bottom: 10px;
   color: #405e75;
 }
 /* Holds the digit slot while the first summary read is in flight, so the 48px
-   type does not spend that frame rendering a word. Height matches the strong
-   below (48px x 1.3). */
+   type does not spend that frame rendering a word. */
 .r6-home-figure-pending {
   display: block;
   width: 92px;
@@ -132,24 +150,25 @@
   animation: none;
 }
 .r6-home-metrics strong {
-  display: block;
+  display: flex;
+  align-items: center;
   font-size: 48px;
   font-weight: 400;
-  line-height: 1.3;
+  line-height: 1;
   color: #405e75;
   font-variant-numeric: tabular-nums;
 }
 .r6-home-metrics strong.r6-home-word {
   font-size: 32px;
-  padding: 14px 0;
+  line-height: 1.25;
   overflow-wrap: anywhere;
 }
 .r6-home-metrics strong.r6-home-time {
   font-size: 34px;
-  line-height: 1.85;
-  padding: 8px 0;
+  line-height: 1.25;
 }
 .r6-home-activity {
+  margin-top: auto;
   border-top: 1px solid #d5dfe8;
   padding-top: 12px;
 }
@@ -270,8 +289,18 @@
   overflow: hidden;
   overflow-wrap: anywhere;
 }
+.r6-home-activity h3.r6-home-raw-excerpt {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  overflow: hidden;
+  white-space: normal;
+}
 .r6-home-activity small {
+  display: block;
+  margin-top: 4px;
   font-size: 12px;
+  line-height: 18px;
   color: #637786;
 }
 .r6-home-runtime {
@@ -503,6 +532,9 @@ button.r6-home-expand:focus-visible,
   }
   .r6-home-activity > div {
     flex-wrap: wrap;
+  }
+  .r6-home-activity section {
+    flex-basis: min(100%, 260px);
   }
   .r6-home-metrics {
     grid-template-columns: 1fr;

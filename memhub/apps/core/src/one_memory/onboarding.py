@@ -4,9 +4,10 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
+from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from one_memory.database import (
     take_the_write_lock_first,
@@ -14,11 +15,25 @@ from one_memory.database import (
 from one_memory.database_access import main_database
 
 #: Schema owned by `memory_server.migrations` (migration 12). No local copy.
-from one_memory.memory_server.migrations import onboarding_state_ddl
-from one_memory.memory_server.sql_compat import execute, is_mysql
+from one_memory.memory_server.migrations import (
+    onboarding_progress_ddl,
+    onboarding_state_ddl,
+)
+from one_memory.memory_server.sql_compat import execute, is_mysql, row_to_dict
 from one_memory.memory_server.store_binding import store_for
 
 SCHEMA = onboarding_state_ddl("sqlite")
+ONBOARDING_COLUMNS = (
+    "singleton",
+    "status",
+    "selected_source_ids_json",
+    "started_at",
+    "completed_at",
+    "updated_at",
+    "mode_intent",
+    "setup_step",
+    "model_profile_id",
+)
 
 #: The start/complete upserts, per engine.
 #:
@@ -51,11 +66,13 @@ START_MYSQL = """
         updated_at = VALUES(updated_at)
 """
 COMPLETE_UPDATE_SQLITE = (
-    "UPDATE onboarding_state SET status = 'completed', completed_at = ?, updated_at = ? "
+    "UPDATE onboarding_state SET status = 'completed', completed_at = ?, updated_at = ?, "
+    "mode_intent = NULL, setup_step = NULL, model_profile_id = NULL "
     "WHERE singleton = 1"
 )
 COMPLETE_UPDATE_MYSQL = (
-    "UPDATE onboarding_state SET status = 'completed', completed_at = %s, updated_at = %s "
+    "UPDATE onboarding_state SET status = 'completed', completed_at = %s, updated_at = %s, "
+    "mode_intent = NULL, setup_step = NULL, model_profile_id = NULL "
     "WHERE singleton = 1"
 )
 COMPLETE_INSERT_SQLITE = (
@@ -71,12 +88,26 @@ COMPLETE_INSERT_MYSQL = (
 RESET_UPDATE_SQLITE = (
     "UPDATE onboarding_state SET status = 'not_started', "
     "selected_source_ids_json = '[]', started_at = NULL, completed_at = NULL, "
+    "mode_intent = NULL, setup_step = NULL, model_profile_id = NULL, "
     "updated_at = ? WHERE singleton = 1"
 )
 RESET_UPDATE_MYSQL = (
     "UPDATE onboarding_state SET status = 'not_started', "
     "selected_source_ids_json = '[]', started_at = NULL, completed_at = NULL, "
+    "mode_intent = NULL, setup_step = NULL, model_profile_id = NULL, "
     "updated_at = %s WHERE singleton = 1"
+)
+ENSURE_PROGRESS_SQLITE = (
+    "INSERT INTO onboarding_state ("
+    "singleton,status,selected_source_ids_json,started_at,completed_at,updated_at"
+    ") VALUES (1,'not_started','[]',NULL,NULL,?) "
+    "ON CONFLICT(singleton) DO NOTHING"
+)
+ENSURE_PROGRESS_MYSQL = (
+    "INSERT INTO onboarding_state ("
+    "singleton,status,selected_source_ids_json,started_at,completed_at,updated_at"
+    ") VALUES (1,'not_started','[]',NULL,NULL,%s) "
+    "ON DUPLICATE KEY UPDATE singleton=VALUES(singleton)"
 )
 
 
@@ -87,6 +118,35 @@ class OnboardingState(BaseModel):
     selected_source_ids: tuple[str, ...]
     started_at: datetime | None
     completed_at: datetime | None
+    mode_intent: Literal["lite", "pro", "ultra"] | None
+    setup_step: Literal["review", "mode", "model"] | None
+    model_profile_id: str | None
+
+
+class OnboardingProgressUpdate(BaseModel):
+    """Only non-sensitive, resumable choices accepted from the onboarding UI."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    mode_intent: Literal["lite", "pro", "ultra"] | None = None
+    setup_step: Literal["review", "mode", "model"] | None = None
+    model_profile_id: str | None = Field(default=None, min_length=36, max_length=36)
+
+    @field_validator("model_profile_id")
+    @classmethod
+    def validate_model_profile_id(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        try:
+            if str(UUID(value)) != value:
+                raise ValueError
+        except (ValueError, TypeError, AttributeError):
+            raise ValueError("invalid_model_profile_id") from None
+        return value
+
+
+class OnboardingCompletedError(RuntimeError):
+    pass
 
 
 class OnboardingStore:
@@ -103,12 +163,31 @@ class OnboardingStore:
         """
         with self._connect(initialize=True) as connection:
             execute(connection, is_mysql(self._store), SCHEMA)
+            if not is_mysql(self._store):
+                existing = {
+                    str(row[1]) for row in connection.execute("PRAGMA table_info(onboarding_state)")
+                }
+                statements = tuple(
+                    statement.strip()
+                    for statement in onboarding_progress_ddl("sqlite").split(";")
+                    if statement.strip()
+                )
+                for column, statement in zip(
+                    ("mode_intent", "setup_step", "model_profile_id"),
+                    statements,
+                    strict=True,
+                ):
+                    if column not in existing:
+                        connection.execute(statement)
 
     def get(self) -> OnboardingState:
         mysql = is_mysql(self._store)
         with self._connect() as connection:
             row = execute(
-                connection, mysql, "SELECT * FROM onboarding_state WHERE singleton = 1"
+                connection,
+                mysql,
+                "SELECT " + ", ".join(ONBOARDING_COLUMNS) + " "
+                "FROM onboarding_state WHERE singleton = 1",
             ).fetchone()
         if row is None:
             return OnboardingState(
@@ -116,8 +195,11 @@ class OnboardingStore:
                 selected_source_ids=(),
                 started_at=None,
                 completed_at=None,
+                mode_intent=None,
+                setup_step=None,
+                model_profile_id=None,
             )
-        return self._to_state(row)
+        return self._to_state(row, mysql=mysql)
 
     def start(self, source_ids: tuple[str, ...]) -> OnboardingState:
         now = datetime.now(UTC).isoformat()
@@ -148,6 +230,43 @@ class OnboardingStore:
                     COMPLETE_INSERT_MYSQL if mysql else COMPLETE_INSERT_SQLITE,
                     (now, now),
                 )
+        return self.get()
+
+    def update_progress(self, update: OnboardingProgressUpdate) -> OnboardingState:
+        fields = tuple(
+            field
+            for field in ("mode_intent", "setup_step", "model_profile_id")
+            if field in update.model_fields_set
+        )
+        if not fields:
+            state = self.get()
+            if state.status == "completed":
+                raise OnboardingCompletedError("onboarding_completed")
+            return state
+        mysql = is_mysql(self._store)
+        placeholder = "%s" if mysql else "?"
+        assignments = [f"{field} = {placeholder}" for field in fields]
+        assignments.append(f"updated_at = {placeholder}")
+        values = [getattr(update, field) for field in fields]
+        now = datetime.now(UTC).isoformat()
+        values.append(now)
+        with self._connect(writing=True) as connection:
+            execute(
+                connection,
+                mysql,
+                ENSURE_PROGRESS_MYSQL if mysql else ENSURE_PROGRESS_SQLITE,
+                (now,),
+            )
+            updated = execute(
+                connection,
+                mysql,
+                "UPDATE onboarding_state SET "
+                + ", ".join(assignments)
+                + " WHERE singleton = 1 AND status != 'completed'",
+                tuple(values),
+            )
+            if updated.rowcount != 1:
+                raise OnboardingCompletedError("onboarding_completed")
         return self.get()
 
     def reset(self) -> OnboardingState:
@@ -207,33 +326,53 @@ class OnboardingStore:
             yield connection
 
     @staticmethod
-    def _to_state(row: Any) -> OnboardingState:
-        """Read the row by position, so it works for `sqlite3.Row` and tuples.
-
-        `SELECT *` makes the column order part of the contract here, which is
-        why the query is `SELECT *` and the indices are named: relying on
-        `row["..."]` would only work on SQLite, and relying on position alone
-        without saying which column is which would be unreadable.
-
-        Timestamps are a further engine difference: SQLite hands back the stored
-        string, MySQL hands back a `datetime`. Accepting both is not padding —
-        parsing a `datetime` raises, and treating a string as one would be
-        silently wrong.
-        """
-        # singleton, status, selected_source_ids_json, started_at, completed_at, updated_at
-        raw_ids = json.loads(row[2])
+    def _to_state(row: Any, *, mysql: bool) -> OnboardingState:
+        """Map SQLite rows and MySQL tuples through the shared database adapter."""
+        if mysql:
+            if not isinstance(row, tuple):
+                raise ValueError("onboarding_row_shape_invalid")
+        elif not isinstance(row, sqlite3.Row):
+            raise ValueError("onboarding_row_shape_invalid")
+        if len(row) != len(ONBOARDING_COLUMNS):
+            raise ValueError("onboarding_row_shape_invalid")
+        if mysql:
+            values = dict(zip(ONBOARDING_COLUMNS, tuple(row), strict=True))
+        else:
+            values = row_to_dict(row, ONBOARDING_COLUMNS, mysql=False)
+            if set(values) != set(ONBOARDING_COLUMNS):
+                raise ValueError("onboarding_row_shape_invalid")
+        _as_datetime(values["updated_at"], mysql=mysql, nullable=False)
+        raw_ids = json.loads(values["selected_source_ids_json"])
         return OnboardingState(
-            status=row[1],
+            status=values["status"],
             selected_source_ids=tuple(value for value in raw_ids if isinstance(value, str)),
-            started_at=_as_datetime(row[3]),
-            completed_at=_as_datetime(row[4]),
+            started_at=_as_datetime(values["started_at"], mysql=mysql),
+            completed_at=_as_datetime(values["completed_at"], mysql=mysql),
+            mode_intent=values["mode_intent"],
+            setup_step=values["setup_step"],
+            model_profile_id=values["model_profile_id"],
         )
 
 
-def _as_datetime(value: object) -> datetime | None:
-    """SQLite stores these as text; MySQL returns `datetime` objects."""
-    if value is None or value == "":
+def _as_datetime(
+    value: object,
+    *,
+    mysql: bool,
+    nullable: bool = True,
+) -> datetime | None:
+    """Validate the engine's timestamp shape and normalize it to UTC."""
+    if value is None:
+        if not nullable:
+            raise ValueError("onboarding_datetime_invalid")
         return None
-    if isinstance(value, datetime):
-        return value
-    return datetime.fromisoformat(str(value))
+    if mysql:
+        if not isinstance(value, datetime):
+            raise ValueError("onboarding_datetime_invalid")
+        parsed = value
+    else:
+        if not isinstance(value, str) or value == "":
+            raise ValueError("onboarding_datetime_invalid")
+        parsed = datetime.fromisoformat(value)
+    if parsed.tzinfo is None:
+        return parsed.replace(tzinfo=UTC)
+    return parsed.astimezone(UTC)

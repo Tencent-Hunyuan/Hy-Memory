@@ -11,6 +11,16 @@ import {
 
 // Loopback HTTP tests are milliseconds in isolation; the generous timeout
 // prevents a busy CI host from turning scheduler contention into a false red.
+/** What a restore of an old backup (or an old Core's answer) reads as. */
+const OLD_BACKUP = {
+  backupSchemaVersion: 1,
+  memoriesIncluded: false,
+  restoredFiles: null,
+  verification: null,
+  graphRebuildScheduled: false,
+  note: null,
+} as const;
+
 describe("managed restore over HTTP", { timeout: 15_000 }, () => {
   let server: Server;
   let port: number;
@@ -77,6 +87,7 @@ describe("managed restore over HTTP", { timeout: 15_000 }, () => {
         restoredBytes: 8192,
         previousBackupPath: "/home/backups/pre-restore.sqlite3",
         sourceSchemaVersion: 34,
+        ...OLD_BACKUP,
       },
     });
   });
@@ -217,7 +228,48 @@ describe("backup restore result shape", () => {
       restoredBytes: 123456,
       previousBackupPath: "/home/backups/pre-restore-1.sqlite3",
       sourceSchemaVersion: 34,
+      ...OLD_BACKUP,
     });
+  });
+
+  it("reads a v2 restore: memories included, counts verified", () => {
+    const verification = {
+      vector_store: "verified",
+      layers: "verified",
+      layers_reason: null,
+      graph: "quarantined",
+      mismatches: [],
+    };
+    expect(
+      normalizeRestoreResult({
+        state: "restored",
+        restored_bytes: 9,
+        previous_backup_path: "/home/backups/pre-restore-1.memhub-previous",
+        source_schema_version: 63,
+        backup_schema_version: 2,
+        memories_included: true,
+        restored_files: 9,
+        verification,
+        graph_rebuild_scheduled: true,
+        note: null,
+      }),
+    ).toMatchObject({
+      backupSchemaVersion: 2,
+      memoriesIncluded: true,
+      restoredFiles: 9,
+      verification,
+      graphRebuildScheduled: true,
+    });
+    // `memories_included` from an answer that is not v2 is not believed.
+    expect(
+      normalizeRestoreResult({
+        state: "restored",
+        restored_bytes: 9,
+        previous_backup_path: "/p",
+        source_schema_version: 63,
+        memories_included: true,
+      }),
+    ).toMatchObject({ backupSchemaVersion: 1, memoriesIncluded: false });
   });
 
   it("rejects a malformed result instead of reporting success", () => {

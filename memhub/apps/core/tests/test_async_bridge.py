@@ -324,3 +324,48 @@ def test_saturated_raw_reads_do_not_delay_memory_reads() -> None:
     finally:
         release_raw.set()
         shutdown_bulk_pool()
+
+
+def test_recall_reads_answer_while_every_sdk_write_thread_is_stuck() -> None:
+    """A write that hangs in the SDK keeps its thread, not recall's (#231)."""
+    from one_memory.background_work import SDK_WRITE_WORKERS, in_sdk_read, in_sdk_write
+
+    stuck = threading.Barrier(SDK_WRITE_WORKERS + 1)
+    release = threading.Event()
+
+    def hung_write() -> None:
+        stuck.wait(timeout=2)
+        assert release.wait(5)
+
+    async def scenario() -> tuple[float, int]:
+        writes = [asyncio.create_task(in_sdk_write(hung_write)) for _ in range(SDK_WRITE_WORKERS)]
+        # One more than the pool holds: it waits for a write thread, as the
+        # drain's next write would.
+        queued = asyncio.create_task(in_sdk_write(lambda: None))
+        await asyncio.to_thread(stuck.wait, 2)
+        started = time.monotonic()
+        answer = await asyncio.wait_for(in_sdk_read(lambda: 7), 1)
+        elapsed = time.monotonic() - started
+        assert not queued.done()
+        release.set()
+        await asyncio.gather(*writes, queued)
+        return elapsed, answer
+
+    try:
+        elapsed, answer = asyncio.run(scenario())
+        assert answer == 7
+        assert elapsed < 0.2
+    finally:
+        release.set()
+        shutdown_bulk_pool()
+
+
+def test_sdk_writes_run_on_their_own_bounded_threads() -> None:
+    from one_memory.background_work import SDK_WRITE_WORKERS, in_sdk_write, sdk_write_pool
+
+    try:
+        name = asyncio.run(in_sdk_write(lambda: threading.current_thread().name))
+        assert name.startswith("one-memory-sdk-write")
+        assert sdk_write_pool()._max_workers == SDK_WRITE_WORKERS
+    finally:
+        shutdown_bulk_pool()

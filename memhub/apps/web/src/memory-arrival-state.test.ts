@@ -283,3 +283,50 @@ it("raw import alone has an import title, without a generated-memory promise", (
   expect(result.phase).toBe("importing");
   expect(memoryArrivalTitle(result)).toBe("正在导入对话");
 });
+
+it("lite capabilities never require a generation model", () => {
+  const result = resolveMemoryArrival({
+    ...base,
+    capabilities: {
+      content_plane: "raw",
+      generation_required: false,
+      graph_enabled: false,
+      evolve_available: false,
+    },
+    arrival: {
+      importing: false,
+      importedMessages: 12,
+      importedConversations: 3,
+      phase: "model-required",
+    },
+    processing: {
+      ...processing,
+      waiting_for_model: 4,
+      blocked_stages: [
+        { kind: "extract", reason: "model_profile_not_active", count: 4 },
+      ],
+    },
+  });
+  expect(result.phase).toBe("idle");
+  expect(memoryArrivalTitle(result)).not.toContain("模型");
+});
+
+it("lite ignores a closed sedimentation state instead of staying stopped", () => {
+  const result = resolveMemoryArrival({
+    ...base,
+    capabilities: {
+      content_plane: "raw",
+      generation_required: false,
+      graph_enabled: false,
+      evolve_available: false,
+    },
+    arrival: {
+      importing: false,
+      importedMessages: 12,
+      importedConversations: 3,
+      phase: "stopped",
+    },
+  });
+  expect(result.phase).toBe("idle");
+  expect(memoryArrivalTitle(result)).toBe("待继续");
+});

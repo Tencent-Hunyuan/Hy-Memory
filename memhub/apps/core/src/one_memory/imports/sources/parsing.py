@@ -10,7 +10,10 @@ from pydantic import JsonValue
 from one_memory.input_sanitization import sanitize_model_input
 
 _REMINDER_TAGS = r"additional_data|system[-_]reminder|working_memory_reminder"
-_CONTEXT_TAGS = r"user_info|rules|agent_transcripts|system[-_]notification|pipeline_log"
+_CONTEXT_TAGS = (
+    r"user_info|rules|agent_transcripts|attached_files|image_local_path|"
+    r"system[-_]notification|pipeline_log"
+)
 _TAG_ATTRIBUTES = r"""(?:\s+[\w:-]+\s*=\s*(?:"[^"<>]*"|'[^'<>]*'))*\s*"""
 _HOST_PREFIX = re.compile(rf"<(?P<tag>{_REMINDER_TAGS}|{_CONTEXT_TAGS}){_TAG_ATTRIBUTES}>")
 _REMINDER_START = re.compile(rf"<(?P<tag>{_REMINDER_TAGS}){_TAG_ATTRIBUTES}>")

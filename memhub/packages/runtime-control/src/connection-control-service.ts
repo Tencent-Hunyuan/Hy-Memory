@@ -21,6 +21,7 @@ interface Options {
   permissions: HostPermissions;
   layouts: ReadonlyMap<string, RecallHostLayout>;
   hosts?: readonly RecallHostDescriptor[];
+  discoverHosts?: () => Promise<readonly RecallHostDescriptor[]>;
 }
 
 /** Constructed inside the Runtime with its existing permission owner. */
@@ -28,6 +29,7 @@ export function createConnectionControlService(options: Options) {
   const hostControl = createHostControlService({
     permissions: options.permissions,
     hosts: options.hosts ?? [],
+    ...(options.discoverHosts ? { discover: options.discoverHosts } : {}),
   });
   let controller: Promise<ConnectionController | null> | null = null;
   let pinned: string | null = null;

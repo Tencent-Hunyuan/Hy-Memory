@@ -5,6 +5,20 @@ from types import ModuleType, SimpleNamespace
 
 import pytest
 
+#: Everything the spec collects whole, in order: the SDK, its embedded stores,
+#: the drivers of the storage backends `memhub settings backends` can select,
+#: and built-in embedding.
+CORE_PACKAGES = [
+    "hy_memory",
+    "chromadb",
+    "kuzu",
+    "neo4j",
+    "qdrant_client",
+    "portalocker",
+    "onnxruntime",
+    "tokenizers",
+]
+
 
 def evaluate_spec(monkeypatch, layout):
     if layout is None:
@@ -56,7 +70,7 @@ def test_single_file_layout_remains_available_without_private_preset(monkeypatch
     assert analysis.binaries in calls["exe"][0]
     assert analysis.datas in calls["exe"][0]
     assert "collect" not in calls
-    assert collected == ["hy_memory", "chromadb", "kuzu", "onnxruntime", "tokenizers"]
+    assert collected == CORE_PACKAGES
 
 
 def test_folder_layout_keeps_same_core_and_all_native_dependencies(monkeypatch):
@@ -67,7 +81,7 @@ def test_folder_layout_keeps_same_core_and_all_native_dependencies(monkeypatch):
     assert analysis.datas not in calls["exe"][0]
     assert calls["collect"][0] == ("owned-core-executable", analysis.binaries, analysis.datas)
     assert calls["collect"][1]["name"] == "one-memory-runtime"
-    assert collected == ["hy_memory", "chromadb", "kuzu", "onnxruntime", "tokenizers"]
+    assert collected == CORE_PACKAGES
 
 
 def test_unknown_layout_does_not_silently_build_another_package(monkeypatch):
@@ -79,3 +93,30 @@ def test_default_distribution_avoids_per_launch_self_extraction(monkeypatch):
     calls, _, _ = evaluate_spec(monkeypatch, None)
     assert calls["exe"][1]["exclude_binaries"] is True
     assert calls["collect"][1]["name"] == "one-memory-runtime"
+
+
+def test_linux_bundle_includes_secret_service_backend(monkeypatch):
+    """A frozen Linux Core needs keyring's D-Bus backend to store API keys.
+
+    `keyring` resolves backends through entry points at runtime, so PyInstaller
+    cannot discover `SecretService`, `secretstorage` or `jeepney` on its own.
+    """
+    monkeypatch.setattr(sys, "platform", "linux")
+    calls, _, collected = evaluate_spec(monkeypatch, "folder")
+    hiddenimports = calls["analysis"][1]["hiddenimports"]
+    assert "keyring.backends.SecretService" in hiddenimports
+    assert "secretstorage" in hiddenimports
+    assert "jeepney" in hiddenimports
+    # The backend is added as plain hidden imports, not as a collected package.
+    assert collected == CORE_PACKAGES
+
+
+def test_non_linux_bundles_do_not_require_linux_only_packages(monkeypatch):
+    """secretstorage/jeepney are Linux-only dependencies in the lock file."""
+    for platform in ("darwin", "win32"):
+        monkeypatch.setattr(sys, "platform", platform)
+        calls, _, _ = evaluate_spec(monkeypatch, "folder")
+        hiddenimports = calls["analysis"][1]["hiddenimports"]
+        assert "keyring.backends.SecretService" not in hiddenimports
+        assert "secretstorage" not in hiddenimports
+        assert "jeepney" not in hiddenimports

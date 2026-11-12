@@ -248,6 +248,10 @@ function addReceipt(receipt: MemoryAddReceipt): Record<string, unknown> {
     task_id: receipt.task_id,
     memory_ids: receipt.memory_ids,
     error: receipt.error,
+    error_code:
+      typeof receipt.error_code === "string" ? receipt.error_code : null,
+    next_retry_at:
+      typeof receipt.next_retry_at === "string" ? receipt.next_retry_at : null,
   };
 }
 
@@ -346,6 +350,12 @@ export function renderMemoryAddText(document: MemoryAddDocument): string {
       `state: ${document.receipt.state}`,
       ...((document.receipt.memory_ids as string[]).length > 0
         ? [`memory_ids: ${(document.receipt.memory_ids as string[]).join(",")}`]
+        : []),
+      ...(document.receipt.error_code
+        ? [`error_code: ${document.receipt.error_code}`]
+        : []),
+      ...(document.receipt.next_retry_at
+        ? [`next_retry_at: ${document.receipt.next_retry_at}`]
         : []),
       document.command === "memories add"
         ? `查询进度：memhub memories add-status ${document.request_id}；重试请带上同一个 --request-id，不会重复添加。`

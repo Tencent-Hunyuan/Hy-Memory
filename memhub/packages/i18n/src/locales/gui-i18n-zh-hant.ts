@@ -1,7 +1,11 @@
 import type { MessageKey } from "../gui-i18n.js";
+import { embeddingSwitchTraditionalChineseMessages } from "../gui-i18n-embedding-switch.js";
+import { modeTraditionalChineseMessages } from "../gui-i18n-mode.js";
 
 /** Traditional Chinese (zh-Hant, Taiwan usage) GUI copy. Machine-assisted; native-speaker review recommended. */
 export const traditionalChineseMessages: Record<MessageKey, string> = {
+  ...modeTraditionalChineseMessages,
+  ...embeddingSwitchTraditionalChineseMessages,
   "connectionFallback.title": "連線其他工具",
   "connectionFallback.desktopOnly": "本機配對僅在桌面 App 中可用。",
   "connectionFallback.description":
@@ -69,6 +73,15 @@ export const traditionalChineseMessages: Record<MessageKey, string> = {
   "sdk.raw.loadFailed": "原始對話暫時無法讀取。",
   "sdk.raw.searchFailed": "原始對話搜尋失敗，請重試。",
   "sdk.raw.recent": "最近原始對話",
+  "sdk.raw.empty": "還沒有原始對話。連接來源後，對話會顯示在這裡。",
+  "sdk.raw.total": "{count} 則原始對話",
+  "sdk.raw.total.one": "{count} 則原始對話",
+  "memory:当前使用基础记忆。新对话会保存为原始记录，不会生成高级记忆；以前生成的高级记忆仍会保留，但当前不会显示或参与记忆召回。":
+    "目前使用基礎記憶。新對話會保留為原始記錄，不會產生進階記憶；過去的進階記憶仍會保留，但目前不會顯示或參與記憶召回。",
+  "memory:当前使用智能记忆。新对话会由模型整理为高级记忆。":
+    "目前使用智慧記憶。模型會把新對話整理為進階記憶。",
+  "memory:当前使用深度记忆。新对话会生成高级记忆，并由知识图谱和 evolve 继续整合。":
+    "目前使用深度記憶。新對話會產生進階記憶，並由知識圖譜與 evolve 持續整合。",
   "sdk.raw.found": "找到 {count} 則",
   "sdk.raw.found.one": "找到 {count} 則",
   "memoryInspector.emptyHint": "檢視它的來源、內容和修改歷史。",
@@ -128,6 +141,7 @@ export const traditionalChineseMessages: Record<MessageKey, string> = {
   "selectedMemory.save": "儲存修改",
   "selectedMemory.author.user": "你",
   "selectedMemory.author.agent": "助理",
+  "selectedMemory.author.tool": "工具",
   "selectedMemory.sourceUnavailable": "來源權限已變化或原文不可用。",
   "selectedMemory.related": "對應記憶",
   "selectedMemory.viewMemory": "檢視記憶",
@@ -197,7 +211,6 @@ export const traditionalChineseMessages: Record<MessageKey, string> = {
   "memory:整理需要处理": "整理需要處理",
   "memory:正在整理记忆": "正在整理記憶",
   "memory:整理状态": "整理狀態",
-  "memory:重新整理": "重新整理",
   "memory:自动提炼范围": "自動萃取範圍",
   "memory:手动提炼下一批": "手動萃取下一批",
   "memory:刷新核对": "重新整理核對",
@@ -222,10 +235,6 @@ export const traditionalChineseMessages: Record<MessageKey, string> = {
   "memory:处理（操作）": "處理",
   "memory:{count} 条原话": "{count} 則原話",
   "memory:{count} 条原话.one": "{count} 則原話",
-  "memory:有 {count} 段对话的整理结果不确定":
-    "有 {count} 段對話的整理結果不確定",
-  "memory:有 {count} 段对话的整理结果不确定.one":
-    "有 {count} 段對話的整理結果不確定",
   "memory:{count} 次整理已完成": "{count} 次整理已完成",
   "memory:{count} 次整理已完成.one": "{count} 次整理已完成",
   "memory: · {count} 条在窗口外（原文可搜）":
@@ -625,6 +634,7 @@ export const traditionalChineseMessages: Record<MessageKey, string> = {
   nativeDevelopmentUnavailable: "（開發模式不可用）",
   nativeOpen: "開啟 {product}",
   nativeQuit: "結束 {product}（背景服務會繼續執行）",
+  nativeQuitStopsService: "結束 {product}（同時停止記憶服務）",
   nativeLoginError: "無法更改登入啟動設定，請重試。",
   nativeMoveTitle: "請先將 MemHub 移到「應用程式」檔案夾",
   nativeMoveDetail:
@@ -872,6 +882,16 @@ export const traditionalChineseMessages: Record<MessageKey, string> = {
   设置分组: "設定分組",
   记忆模型: "記憶模型",
   当前模型: "目前模型",
+  "分别管理记忆整理与搜索所使用的模型。":
+    "分別管理記憶整理與搜尋所使用的模型。",
+  记忆整理: "記憶整理",
+  "把会话理解并整理成可长期使用的记忆。":
+    "將對話理解並整理成可長期使用的記憶。",
+  记忆搜索: "記憶搜尋",
+  "在需要时找到与你的问题最相关的记忆。": "需要時找出與你的問題最相關的記憶。",
+  "本地内置（推荐）": "本機內建（建議）",
+  "Embedding · 配置记忆整理后可自定义": "Embedding · 設定記憶整理後可自訂",
+  "Embedding · 本机处理，无需额外配置": "Embedding · 本機處理，無需額外設定",
   "正在读取模型…": "正在讀取模型…",
   模型状态暂不可读: "模型狀態暫不可讀",
   尚未配置模型: "尚未設定模型",
@@ -934,7 +954,7 @@ export const traditionalChineseMessages: Record<MessageKey, string> = {
     "不需開啟視窗，也能持續同步、整理和提供記憶。",
   导出日志: "匯出日誌",
   "把本机运行日志打包成一个文件，发给开发排查。":
-    "把本機執行日誌打包成一個檔案，提供給開發人員排查。",
+    "打包完整本機日誌，可能包含對話正文和本機路徑；只傳送給可信的開發人員。",
   "确定退出 One Memory 界面吗？": "要關閉 MemHub 視窗嗎？",
   "后台服务会继续同步、整理和提供记忆。":
     "背景服務會繼續同步、整理和提供記憶。",
@@ -990,6 +1010,22 @@ export const traditionalChineseMessages: Record<MessageKey, string> = {
   appRevokedReview:
     "已撤銷記憶權限，{name} 已無法查詢記憶。但無法確認連線已全部移除，請手動核對以下路徑：{paths}。",
   appRemovalReview: "無法確認連線已全部移除，請手動核對以下路徑：{paths}。",
+  appProfilesLabel: "{name} 的 Profile",
+  appProfileOn: "{profile}：已串接",
+  appProfileOff: "{profile}：未串接",
+  appProfilesHint:
+    "開關會為每個已偵測到的 Profile 安裝記憶連線並授權，關閉時全部撤銷。開關開啟期間，新建立的 Profile 會自動串接。",
+  appProfilesNone: "尚未偵測到 {name} 的 Profile。建立 Profile 後請回到此頁。",
+  appProfilesConnectFailed:
+    "以下 Profile 未能串接：{profiles}。其他 Profile 已保留。{reason}",
+  appProfilesDisconnectFailed:
+    "以下 Profile 的連線未能移除，記憶權限也未能撤銷，仍可使用記憶：{profiles}。請重試。{reason}",
+  appProfilesRevokedRetained:
+    "已撤銷以下 Profile 的記憶權限，但連線檔案沒有全部移除，請核對：{profiles}。",
+  appProfileNameUnsupported:
+    "Profile 名稱只能包含小寫字母、數字和連字號，最長 32 個字元",
+  "apps.autoHostProfilesFailed":
+    "{name} 的以下 Profile 未能自動串接（{profiles}）{reason}。",
   "Cursor 的连接凭证已更新。请完全退出并重新打开 Cursor，再开始新对话。":
     "Cursor 的連線憑證已更新。請完全結束並重新開啟 Cursor，再開始新對話。",
   连接其他工具: "連線其他工具",
@@ -1097,6 +1133,8 @@ export const traditionalChineseMessages: Record<MessageKey, string> = {
   "少一些重复交代，多一些理解。": "少一些重複交代，多一些理解。",
   onboardingMoreApps: "向下捲動檢視更多 · 還有 {count} 個 App",
   "onboardingMoreApps.one": "向下捲動檢視更多 · 還有 {count} 個 App",
+  onboardingMoreImportApps: "橫向捲動查看更多 · 還有 {count} 個 App",
+  onboardingImportChecking: "正在確認匯入結果，已保留你的選擇",
   onboardingAllApps: "已顯示全部 {count} 個 App",
   默认位置: "預設位置",
   自定义位置: "自訂位置",
@@ -1290,6 +1328,15 @@ export const traditionalChineseMessages: Record<MessageKey, string> = {
     "連線未通過，請核對模型、金鑰和接收方。",
   "配置或测试结果暂未确认，请核对后重试。":
     "設定或測試結果暫未確認，請核對後重試。",
+  "索引更新没有完成，仍在使用原来的搜索模型。请检查连接后重试。":
+    "索引更新未完成，仍在使用原本的搜尋模型。請檢查連線後重試。",
+  "上次模型测试结果仍待核对，请稍后重试。":
+    "上次模型測試結果仍待核對，請稍後重試。",
+  "模型写入暂时关闭。请等待索引维护完成后重试。":
+    "模型寫入暫時關閉。請等待索引維護完成後重試。",
+  "模型未能确认启用，请在设置中核对。": "未能確認模型已啟用，請在設定中核對。",
+  "已保存的模型配置暂时无法读取，不会重复创建。请重试刷新。":
+    "已儲存的模型設定暫時無法讀取，不會重複建立。請重試重新整理。",
   所选连接已启用: "所選連線已啟用",
   本次未选择应用连接: "本次未選擇 App 連線",
   尚未填写接收方: "尚未填寫接收方",
@@ -1344,9 +1391,29 @@ export const traditionalChineseMessages: Record<MessageKey, string> = {
   "apps.back": "返回首頁",
   "apps.overview": "記憶概覽",
   "apps.memories": "已建立的記憶",
+  "apps.rawConversations": "原始對話",
+  "apps.rawSaving": "儲存中",
+  "apps.rawSavingCompact": "儲存中",
+  "apps.rawSavingStatus": "儲存狀態",
+  "apps.rawSavingDetail": "原始對話會持續儲存，不需要生成模型",
+  "apps.rawNoExcerpt": "這段對話沒有可顯示的使用者原文",
+  "apps.rawConversation": "原始對話",
+  "apps.rawSaved": "原始對話已儲存",
+  "apps.rawEmpty": "還沒有儲存的原始對話",
+  "apps.rawCheckedEmpty": "已核對，暫無可顯示的原始對話更新",
+  "apps.memoryCheckedEmpty": "已核對，暫無可顯示的記憶更新",
+  "apps.recentEmptyCompact": "暫無更新",
+  "apps.rawWaiting": "原始對話儲存後會顯示在這裡",
+  "apps.checkedRecent": "已核對目前內容",
+  "apps.currentMode": "目前模式",
+  "apps.mode.lite": "基礎記憶（lite）",
+  "apps.mode.pro": "智慧記憶（pro）",
+  "apps.mode.ultra": "深度記憶（ultra）",
   "apps.readingCount": "正在核對本機記憶…",
+  "apps.rawReadingCount": "正在核對本機原始對話…",
   "apps.startingRetry": "背景服務正在啟動，稍後會自動更新",
   "apps.countWillUpdate": "記憶數量稍後自動更新",
+  "apps.rawCountWillUpdate": "原始對話數量稍後自動更新",
   "apps.showingPrevious": "正在顯示上次資料，稍後自動更新",
   "apps.unreadable": "暫無法讀取",
   "apps.unit": "則",
@@ -1437,11 +1504,14 @@ export const traditionalChineseMessages: Record<MessageKey, string> = {
   "apps.revision": "版本 {count}",
   "apps.conversationTime": "對話時間",
   "apps.importTime": "匯入時間",
+  "apps.writeTime": "寫入時間",
+  "apps.updateTime": "更新時間",
   "apps.incompleteCalls": " · 有些呼叫未被記錄，清單可能不完整",
   "apps.timeoutWarning":
     "{host} 最近無法查詢記憶，背景服務可能正忙，稍後會自動恢復。",
   "apps.autoHostFailed": "{name} 未能自動串接{reason}。",
   "apps.failureReason": "：{reason}",
+  "apps.desktopBridgeUnavailable": "一鍵串接需要在 MemHub 桌面 App 中操作",
   "apps.autoSyncFailed": "{name} 的持續同步未能自動開啟。{reason}",
   "apps.noAutoRetry": "不會自動重試。",
   "apps.cardUnavailable":
@@ -1512,8 +1582,6 @@ export const traditionalChineseMessages: Record<MessageKey, string> = {
     "批次處理結果已保留，但清單重新整理失敗，稍後會自動重新讀取。",
   "memory:召回范围已保存，但列表刷新失败。请稍后重新打开记忆页。":
     "檢索範圍已儲存，但清單重新整理失敗。請稍後重新開啟記憶頁面。",
-  "memory:重新整理可能再次调用模型。只会重跑结果不确定的对话，是否继续？":
-    "重新整理可能再次呼叫模型。只會重跑結果不確定的對話，是否繼續？",
   "memory:原始对话暂时无法读取": "原始對話暫時無法讀取",
   "memory:没有匹配的原始对话": "沒有符合的原始對話",
   "memory:还没有导入的原始对话": "還沒有匯入的原始對話",
@@ -1824,6 +1892,18 @@ export const traditionalChineseMessages: Record<MessageKey, string> = {
   "memory:还没有开始生成记忆：{reason}（{count} 条待处理）":
     "還沒有開始產生記憶：{reason}（{count} 則待處理）",
   "memory:去配置生成模型": "去設定生成模型",
+  "memory:模型暂停处理": "模型暫停處理",
+  "memory:模型配置有问题（{reason}），记忆暂停处理，已有 {count} 条在排队":
+    "模型設定有問題（{reason}），記憶暫停處理，已有 {count} 則在排隊",
+  "memory:模型配置有问题（{reason}），记忆暂停处理，已有 {count} 条在排队.one":
+    "模型設定有問題（{reason}），記憶暫停處理，已有 {count} 則在排隊",
+  "memory:API Key 无效或没有权限": "API Key 無效或沒有權限",
+  "memory:找不到模型或地址": "找不到模型或位址",
+  "memory:请求过于频繁，被服务商限流": "請求過於頻繁，被服務商限流",
+  "memory:模型响应超时": "模型回應逾時",
+  "memory:模型服务出错": "模型服務出錯",
+  "memory:无法连接模型服务": "無法連線模型服務",
+  "memory:连接模型服务失败": "連線模型服務失敗",
   "calls.directHost": "直接呼叫（診斷）",
   "calls.headline.timedOut": "{host} 未能及時查詢到記憶",
   "calls.headline.unavailable": "{host} 暫時無法查詢記憶",
@@ -1831,6 +1911,14 @@ export const traditionalChineseMessages: Record<MessageKey, string> = {
   "calls.headline.empty": "{host} 沒有找到相關記憶",
   "calls.headline.found": "{host} 找到 {count} 筆相關內容",
   "calls.headline.found.one": "{host} 找到 {count} 筆相關內容",
+  "calls.headline.rawOnly": "{host} 找到 {count} 筆原始對話",
+  "calls.headline.rawOnly.one": "{host} 找到 {count} 筆原始對話",
+  "calls.headline.memoryOnly": "{host} 找到 {count} 筆記憶",
+  "calls.headline.memoryOnly.one": "{host} 找到 {count} 筆記憶",
+  "calls.headline.mixed": "{host} 找到 {memories} 筆記憶 · {raw} 筆原始對話",
+  "calls.headline.mixed.one":
+    "{host} 找到 {memories} 筆記憶 · {raw} 筆原始對話",
+  "calls.headline.completed": "{host} 呼叫已完成",
   "calls.detail.timedOut": "記憶正在整理中，查詢逾時，這次回答沒有包含記憶。",
   "calls.detail.unavailable": "MemHub 暫時無法使用，這次回答沒有包含記憶。",
   "calls.detail.denied": "目前的授權不允許這次查詢。",

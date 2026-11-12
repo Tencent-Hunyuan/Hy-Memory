@@ -1,7 +1,9 @@
 import { describe, expectTypeOf, it } from "vitest";
 
 import type {
+  BackupEstimate,
   BackupRestoreResult,
+  BackupResult,
   UISessionExchange,
   UISessionLogout,
 } from "./index.js";
@@ -28,5 +30,19 @@ describe("Core UI session and restore contracts", () => {
     expectTypeOf<
       BackupRestoreResult["source_schema_version"]
     >().toEqualTypeOf<number>();
+    expectTypeOf<BackupRestoreResult["backup_schema_version"]>().toEqualTypeOf<
+      1 | 2 | undefined
+    >();
+    expectTypeOf<BackupRestoreResult["memories_included"]>().toEqualTypeOf<
+      boolean | undefined
+    >();
+  });
+
+  it("pins a v2 backup: memories included, size first", () => {
+    expectTypeOf<BackupResult["schema_version"]>().toEqualTypeOf<2>();
+    expectTypeOf<BackupResult["memories_included"]>().toEqualTypeOf<true>();
+    expectTypeOf<BackupResult["pause_ms"]>().toEqualTypeOf<number>();
+    expectTypeOf<BackupEstimate["bytes"]>().toEqualTypeOf<number>();
+    expectTypeOf<BackupEstimate["free_bytes"]>().toEqualTypeOf<number | null>();
   });
 });
