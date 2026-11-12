@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 
 import type { SourceResponse } from "@one-memory/contracts";
+import { isMessageKey, SUPPORTED_LOCALES, translate } from "@one-memory/i18n";
 import { afterEach, expect, it, vi } from "vitest";
 import {
   readConnectionPreferences,
@@ -168,9 +169,16 @@ it("names the page, not the host, when there is no bridge to write through", asy
   await expect(enableHostConnection("pi")).rejects.toThrow(
     "desktop_bridge_unavailable",
   );
-  expect(hostWriteReason(Error("desktop_bridge_unavailable"))).toBe(
-    "一键插入需要在 MemHub 桌面 App 中操作",
-  );
+  const reason = hostWriteReason(Error("desktop_bridge_unavailable"));
+  expect(reason).toBe("apps.desktopBridgeUnavailable");
+  if (!reason || !isMessageKey(reason)) throw Error("reason is not a key");
+  const source = "一键插入需要在 MemHub 桌面 App 中操作";
+  expect(translate("zh-Hans", reason)).toBe(source);
+  for (const locale of SUPPORTED_LOCALES) {
+    expect(translate(locale, reason), locale).not.toBe(reason);
+    if (locale !== "zh-Hans")
+      expect(translate(locale, reason), locale).not.toBe(source);
+  }
 });
 
 it("does not treat a relink-required host as admitted", () => {

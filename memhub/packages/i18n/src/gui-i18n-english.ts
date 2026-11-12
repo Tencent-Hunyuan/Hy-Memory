@@ -1478,6 +1478,8 @@ const baseEnglishMessages = {
     "{host} could not look up memories recently. The background service may be busy and should recover automatically.",
   "apps.autoHostFailed": "{name} could not connect automatically{reason}.",
   "apps.failureReason": ": {reason}",
+  "apps.desktopBridgeUnavailable":
+    "One-click connection needs the MemHub desktop app",
   "apps.autoSyncFailed":
     "Continuous sync could not be enabled automatically for {name}. {reason}",
   "apps.noAutoRetry": "It will not retry automatically.",

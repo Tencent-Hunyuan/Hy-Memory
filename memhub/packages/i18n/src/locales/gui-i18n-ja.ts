@@ -1648,6 +1648,8 @@ export const japaneseMessages: Record<MessageKey, string> = {
     "{host} は最近、記憶を照会できませんでした。バックグラウンドサービスが混み合っている可能性があります。自動的に回復します。",
   "apps.autoHostFailed": "{name} は自動的に接続できませんでした{reason}。",
   "apps.failureReason": "：{reason}",
+  "apps.desktopBridgeUnavailable":
+    "ワンクリック接続は MemHub デスクトップアプリで操作してください",
   "apps.autoSyncFailed":
     "{name} の継続的な同期を自動的に有効にできませんでした。{reason}",
   "apps.noAutoRetry": "自動的に再試行されることはありません。",

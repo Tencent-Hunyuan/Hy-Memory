@@ -233,7 +233,7 @@ export function matchHost(
 const REASONS: Record<string, string> = {
   host_unsupported: "它没有 MCP 通道，无法发放可撤销的记忆凭证",
   profile_name_unsupported: "appProfileNameUnsupported",
-  desktop_bridge_unavailable: "一键插入需要在 MemHub 桌面 App 中操作",
+  desktop_bridge_unavailable: "apps.desktopBridgeUnavailable",
   unsupported_host: "当前安装不支持一键插入",
   connection_client_unavailable: "桌面端的连接组件不可用",
   noncanonical_data_dir_host_integration_disabled: "测试实例不接入应用",

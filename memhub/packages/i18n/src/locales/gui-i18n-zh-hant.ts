@@ -1511,6 +1511,7 @@ export const traditionalChineseMessages: Record<MessageKey, string> = {
     "{host} 最近無法查詢記憶，背景服務可能正忙，稍後會自動恢復。",
   "apps.autoHostFailed": "{name} 未能自動串接{reason}。",
   "apps.failureReason": "：{reason}",
+  "apps.desktopBridgeUnavailable": "一鍵串接需要在 MemHub 桌面 App 中操作",
   "apps.autoSyncFailed": "{name} 的持續同步未能自動開啟。{reason}",
   "apps.noAutoRetry": "不會自動重試。",
   "apps.cardUnavailable":

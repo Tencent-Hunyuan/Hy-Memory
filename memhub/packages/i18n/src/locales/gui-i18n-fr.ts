@@ -1710,6 +1710,8 @@ export const frenchMessages: Record<MessageKey, string> = {
   "apps.autoHostFailed":
     "{name} n’a pas pu se connecter automatiquement{reason}.",
   "apps.failureReason": " : {reason}",
+  "apps.desktopBridgeUnavailable":
+    "La connexion en un clic doit se faire dans l’application de bureau MemHub",
   "apps.autoSyncFailed":
     "La synchronisation continue n’a pas pu être activée automatiquement pour {name}. {reason}",
   "apps.noAutoRetry":
