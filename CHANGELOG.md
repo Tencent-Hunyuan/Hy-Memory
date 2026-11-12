@@ -34,18 +34,6 @@ Hy Memory and MemHub are versioned and released independently.
   schedule no longer holds a read client for good, which kept a backup (and an
   ultra embedding switch's graph re-embed) from closing every client. Contract:
   `memhub/docs/contracts/backup-v2.md`.
-- Hy Memory: `HyMemoryClient.export_user_memories()` /
-  `import_user_memories()` (and their `async_` forms) export one user's
-  vector-store memories with their ids and vectors, and write them back into
-  an empty store as they were: every layer including `L1_RAW`, every status,
-  the evolution pointers and the times. A node without its vector is
-  re-embedded with the current embedding service; a width that does not match
-  the store, a node of another user or a non-empty target is refused, and a
-  failed write is rolled back. The graph is not touched (rebuild it with
-  `build_memory_graph()`). This is what a backup needs to restore memories
-  onto another store, a Qdrant server included; `clone_user()` only copies
-  within one store under new ids, and `add_extracted()` re-reconciles. No
-  version change.
 - MemHub: the graph and vector stores can be chosen from the CLI and the API.
   The default stays the embedded Kuzu + Chroma pair. `memhub settings backends
   show|set|test|reset` (and `GET/PUT/DELETE /api/v1/settings/storage-backends`,
@@ -129,12 +117,6 @@ Hy Memory and MemHub are versioned and released independently.
   and at most 4 Kuzu threads (`MEMORY_GRAPH_BUFFER_POOL_MB`,
   `MEMORY_GRAPH_MAX_THREADS`). The startup graph-open probe now opens the
   graph with the same bounds.
-- Memory Strength idle decay now also applies when a memory's timestamp is
-  timezone-aware, an ISO string with an offset, or an epoch integer (the shape
-  `bump_access` writes back). `compute_strength` could raise `TypeError` on
-  those and fell back to `idle_days = 0`; both sides are now converted to epoch
-  seconds before subtracting. Unreadable timestamps still fall back to
-  `idle_days = 0` and are logged at debug.
 - Hermes and OpenCode history imports now produce memories. Neither adapter
   ended a file with a `ScanCursorTouch`, and that event is the only thing that
   turns staged records into a write job: `finalize_sdk_file` is reached from
@@ -175,6 +157,67 @@ Hy Memory and MemHub are versioned and released independently.
   Qwen Work, while live sync is on) is now left to the file path; only a
   source without file polling is staged from its hook. Tables an older hook
   re-created on an SDK home are dropped by the existing startup cleanup.
+
+## Hy Memory 2.0.16 — 2026-11-12
+
+- Pluggable business storage (#296): Working/Coding experiences, facts, raw
+  traces and the Coding version chain sit behind `MemoryRepository` /
+  `ChainRepository`. SQLite stays the default (same files, legacy upgrades);
+  an optional PostgreSQL backend ships as `hy-memory[postgres]`
+  (`docs/business_storage.md`). Existing SQLite data is not migrated.
+- `HyMemoryClient.export_user_memories()` /
+  `import_user_memories()` (and their `async_` forms) export one user's
+  vector-store memories with their ids and vectors, and write them back into
+  an empty store as they were: every layer including `L1_RAW`, every status,
+  the evolution pointers and the times. A node without its vector is
+  re-embedded with the current embedding service; a width that does not match
+  the store, a node of another user or a non-empty target is refused, and a
+  failed write is rolled back. The graph is not touched (rebuild it with
+  `build_memory_graph()`). This is what a backup needs to restore memories
+  onto another store, a Qdrant server included; `clone_user()` only copies
+  within one store under new ids, and `add_extracted()` re-reconciles.
+- Qdrant vector spaces can be re-embedded (#422): scan, diff, re-embed, verify
+  and a drop limited to one collection prefix, like the Chroma path.
+- `LLMConfig.output_token_parameter` / `MEMORY_LLM_OUTPUT_TOKEN_PARAMETER`
+  (#421) chooses `max_tokens` (default) or `max_completion_tokens`, for
+  OpenAI models that refuse `max_tokens`.
+- `MEMORY_LOG_STREAM=stderr` (#362) keeps INFO/DEBUG logs off stdout for
+  stdio hosts; default unchanged.
+- Embeddings:
+  - a response whose items carry `index` must map exactly 0..n-1, or the
+    request fails once without retries; index-less responses keep their order
+    (#437);
+  - a shared batch request survives one waiter being cancelled (#257);
+  - permanent HTTP errors (401/403/400…) are no longer retried because the
+    message mentions "timeout" or "connection" (#220).
+- LLM: a failing pooled client is retired only after its in-flight requests
+  finish, so one error no longer aborts concurrent writes (#290).
+- Chroma: `tag_ners` round-trips as a list instead of growing on every read
+  and write (#311); a content-only `update_payload` keeps the stored vector
+  instead of letting Chroma re-embed with its default model (#438).
+- Chat memory edits refresh `gmt_modified` (#219) and update the existing
+  graph node's content (#439; `graph_sync_failed` reports a failed graph
+  update without failing the edit).
+- Coding:
+  - a repeated user prompt in a later turn gets its own chain version instead
+    of being merged into an earlier one (#436);
+  - editing an experience or fact fails with `EMBEDDING_FAILED` and leaves the
+    old content and vector in place when embedding fails, instead of reporting
+    success (#399);
+  - extraction cut off by the token limit reports `OUTPUT_TRUNCATED` (#368).
+- Memory Strength idle decay now also applies when a memory's timestamp is
+  timezone-aware, an ISO string with an offset, or an epoch integer (the shape
+  `bump_access` writes back). `compute_strength` could raise `TypeError` on
+  those and fell back to `idle_days = 0`; both sides are now converted to epoch
+  seconds before subtracting. Unreadable timestamps still fall back to
+  `idle_days = 0` and are logged at debug.
+- Re-embed verification reports roles missing from the target instead of
+  passing an incomplete copy (#283).
+- Smaller fixes: `MemoryMetadata.to_dict()` no longer raises (#426);
+  `IntentionNode` keeps `trigger_event_embedding` through `to_dict()` (#428);
+  FAISS keeps memories searchable when a vector write is rejected (#247);
+  local Qdrant writes `meta.json` atomically (#340); a snapshot destination
+  inside the source tree is refused (#232).
 
 ## Hy Memory 2.0.15 — 2026-11-10
 
