@@ -116,6 +116,23 @@ export class CoreStartupPhaseError extends Error {
 /** Core's exit status when it refuses a home that is not on SDK authority. */
 export const SDK_MIGRATION_REQUIRED_EXIT = 78;
 
+/** The Core's port-in-use refusal exit status (`EX_TEMPFAIL`). */
+export const PORT_IN_USE_EXIT = 75;
+
+/** The stable stderr lines the Core prints for a refused bind, most
+ * specific first so a tail scan prefers the right one. */
+const PORT_IN_USE_CODES = [
+  "core_port_in_use_by_runtime",
+  "core_port_in_use",
+] as const;
+
+const refusedPortCodeFrom = (tail: string): string | null =>
+  tail
+    .split("\n")
+    .map((line) => line.trim())
+    .find((line) => (PORT_IN_USE_CODES as readonly string[]).includes(line)) ??
+  null;
+
 /** Map package/build identity onto the env names the Core records. Only the
  *  fields that are actually known are emitted, so a source run without a build
  *  identity does not fabricate one. */
@@ -799,11 +816,19 @@ export class CoreSupervisor {
         // exit status; it is a stable code the callers show, not a crash.
         const refusedLegacy =
           !this.spawnError && this.exitCode === SDK_MIGRATION_REQUIRED_EXIT;
+        // Core refuses a bind the same way: exit 75, with the stable refusal
+        // code as the last stderr line. Callers show the code, not the exit.
+        const refusedPortCode =
+          !this.spawnError && this.exitCode === PORT_IN_USE_EXIT
+            ? refusedPortCodeFrom(this.stderrTail)
+            : null;
         const failure = this.spawnError
           ? `MemHub Core could not start: ${this.spawnError.message}`
           : refusedLegacy
             ? "sdk_migration_required"
-            : `MemHub Core exited before becoming ready (${describeExit(this.exitCode, this.exitSignal)})`;
+            : this.exitCode === PORT_IN_USE_EXIT
+              ? (refusedPortCode ?? "core_port_in_use")
+              : `MemHub Core exited before becoming ready (${describeExit(this.exitCode, this.exitSignal)})`;
         await this.options.diagnostics?.log({
           level: "error",
           component: "runtime.core",
@@ -814,9 +839,11 @@ export class CoreSupervisor {
             ? "core_spawn_failed"
             : refusedLegacy
               ? "sdk_migration_required"
-              : diedInPhase
-                ? "core_died_in_startup_phase"
-                : "core_exited_before_ready",
+              : refusedPortCode !== null
+                ? refusedPortCode
+                : diedInPhase
+                  ? "core_died_in_startup_phase"
+                  : "core_exited_before_ready",
           error_type: this.spawnError?.name ?? "Error",
           details: {
             ...(this.exitCode === null ? {} : { exit_code: this.exitCode }),

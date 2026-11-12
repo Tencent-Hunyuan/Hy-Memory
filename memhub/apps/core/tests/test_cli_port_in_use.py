@@ -1,10 +1,22 @@
 import errno
 import io
+import json
+import os
+import socket
+import subprocess
+import sys
+import time
 
 import pytest
 
 from one_memory import cli
-from one_memory.runtime_client import RuntimeStatus
+from one_memory.runtime_client import RuntimeStatus, inspect_runtime
+
+
+def _free_port() -> int:
+    with socket.socket() as probe:
+        probe.bind(("127.0.0.1", 0))
+        return int(probe.getsockname()[1])
 
 
 def test_port_in_use_by_runtime_names_the_runtime() -> None:
@@ -16,20 +28,92 @@ def test_port_in_use_by_runtime_names_the_runtime() -> None:
         port=8765,
         version="1.0.4",
     )
-    code, message = cli._port_in_use_explanation(status)
-    assert code == "core_port_in_use_by_runtime"
-    assert "8765" in message
-    assert "1.0.4" in message
+    assert cli._port_in_use_explanation(status, settings_port=8765) == "core_port_in_use_by_runtime"
+
+
+def test_port_in_use_by_runtime_requires_the_same_port() -> None:
+    """Our Core serving P1 is not blamed when a foreign process holds P2."""
+    status = RuntimeStatus(
+        state="running",
+        code="runtime_verified",
+        instance_id="inst-377",
+        host="127.0.0.1",
+        port=8765,
+        version="1.0.4",
+    )
+    port = _free_port()
+    assert cli._port_in_use_explanation(status, settings_port=port) == "core_port_in_use"
 
 
 def test_port_in_use_by_other_process_keeps_the_generic_code() -> None:
+    """Stopped, untrusted, and unanswered-receipt homes are all foreign."""
     for status in (
-        RuntimeStatus(state="stopped", code="runtime_process_not_running"),
+        RuntimeStatus(
+            state="stopped",
+            code="runtime_process_not_running",
+            host="127.0.0.1",
+            port=8765,
+        ),
         RuntimeStatus(state="untrusted", code="runtime_receipt_invalid"),
-        RuntimeStatus(state="unhealthy", code="runtime_identity_unreachable"),
+        # unhealthy with nothing listening on the receipt's port: the pid was
+        # recycled or the Runtime died mid-bind; either way, not a holder.
+        RuntimeStatus(
+            state="unhealthy",
+            code="runtime_identity_unreachable",
+            host="127.0.0.1",
+            port=_free_port(),
+        ),
     ):
-        code, _message = cli._port_in_use_explanation(status)
-        assert code == "core_port_in_use"
+        assert (
+            cli._port_in_use_explanation(status, settings_port=status.port or 8765)
+            == "core_port_in_use"
+        )
+
+
+def test_starting_runtime_is_ours_not_foreign(tmp_path) -> None:
+    """The bind precedes the lifespan: our Runtime's port listens before
+    its identity answers (the graph probe can hold the lifespan minutes).
+
+    Receipt + token present, pid alive, port listening but not answering:
+    the holder is this home's Runtime starting, not a foreign process."""
+    listener = socket.socket()
+    holder = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(300)"])
+    try:
+        listener.bind(("127.0.0.1", 0))
+        # A real Core listens with backlog 2048; the identity probe's pending
+        # connection must not crowd out the liveness probe this test makes.
+        listener.listen(16)
+        port = int(listener.getsockname()[1])
+        (tmp_path / "runtime.json").write_text(
+            json.dumps(
+                {
+                    "schema_version": 1,
+                    "service": "one-memory-core",
+                    "instance_id": "inst-starting",
+                    "pid": holder.pid,
+                    "parent_pid": None,
+                    "host": "127.0.0.1",
+                    "port": port,
+                }
+            ),
+            encoding="utf-8",
+        )
+        token = tmp_path / "runtime-token"
+        token.write_text("runtime-secret", encoding="utf-8")
+        if os.name == "posix":
+            token.chmod(0o600)
+
+        status = inspect_runtime(tmp_path)
+        assert status.state == "unhealthy"
+        assert status.code == "runtime_identity_unreachable"
+        assert (
+            cli._port_in_use_explanation(status, settings_port=port)
+            == "core_port_in_use_by_runtime"
+        )
+    finally:
+        listener.close()
+        holder.kill()
+        holder.wait()
 
 
 def test_refused_bind_exits_structured_when_the_port_holder_is_foreign(
@@ -37,9 +121,9 @@ def test_refused_bind_exits_structured_when_the_port_holder_is_foreign(
 ) -> None:
     """A refused bind is an exit with a code, not a crash (#377).
 
-    The receipt names a dead process, so the operator is told the port is held
-    by something else -- exactly the reporter's state after the old Runtime
-    died with its files left behind.
+    The home has no receipt, so the refusal is attributed to a process that
+    is not this home's Core: the operator gets the code line, never
+    uvicorn's internal SystemExit(3) and never prose to localize.
     """
     monkeypatch.setattr(
         cli,
@@ -56,12 +140,11 @@ def test_refused_bind_exits_structured_when_the_port_holder_is_foreign(
             stderr=stream,
         )
     assert exited.value.code == cli.PORT_IN_USE_EXIT
-    output = stream.getvalue()
-    assert "core_port_in_use" in output
-    assert "Traceback" not in output
+    assert stream.getvalue() == "core_port_in_use\n"
+    assert "Traceback" not in stream.getvalue()
 
 
-def test_refused_bind_blames_this_homes_runtime_when_the_receipt_proves_one(
+def test_refused_bind_names_this_homes_runtime_when_the_receipt_proves_one(
     monkeypatch, tmp_path
 ) -> None:
     monkeypatch.setattr(
@@ -86,9 +169,23 @@ def test_refused_bind_blames_this_homes_runtime_when_the_receipt_proves_one(
             stderr=stream,
         )
     assert exited.value.code == cli.PORT_IN_USE_EXIT
-    output = stream.getvalue()
-    assert "core_port_in_use_by_runtime" in output
-    assert "1.0.4" in output
+    assert stream.getvalue() == "core_port_in_use_by_runtime\n"
+
+
+def test_refused_bind_treats_windows_wsa_eaddrinuse_as_a_refusal(monkeypatch, tmp_path) -> None:
+    monkeypatch.setattr(
+        cli,
+        "inspect_runtime",
+        lambda _data_dir: RuntimeStatus(state="stopped", code="runtime_process_not_running"),
+    )
+    with pytest.raises(SystemExit) as exited:
+        cli._serve_forever_refused(
+            OSError(10048, "only one usage of each socket address is permitted"),
+            settings_port=8765,
+            data_dir=tmp_path,
+            stderr=io.StringIO(),
+        )
+    assert exited.value.code == cli.PORT_IN_USE_EXIT
 
 
 def test_refused_bind_reraises_other_os_errors(tmp_path) -> None:
@@ -107,11 +204,6 @@ def test_serve_exits_named_when_a_foreign_process_holds_the_port(tmp_path) -> No
     is not this home's Core: the operator gets the code and the lever
     (release the port), never uvicorn's internal SystemExit(3).
     """
-    import os
-    import socket
-    import subprocess
-    import sys
-
     holder = socket.socket()
     try:
         holder.bind(("127.0.0.1", 0))
@@ -139,22 +231,16 @@ def test_serve_exits_named_when_a_foreign_process_holds_the_port(tmp_path) -> No
         holder.close()
 
     assert process.returncode == cli.PORT_IN_USE_EXIT, stderr
-    assert "core_port_in_use" in stderr
-    assert "Traceback" not in stderr
+    assert stderr.strip() == "core_port_in_use"
 
 
 def test_serve_exits_named_when_this_homes_runtime_holds_the_port(tmp_path) -> None:
-    """The #377 state: a live Core of this home owns the port (#377).
+    """The #377 state: a live Core of this home owns the port.
 
     A second Core must refuse the bind and name the holder -- the running
-    Core's receipt, with its version -- instead of crashing on the bind, and
-    without deleting or rewriting the first Core's state.
+    Core's receipt -- instead of crashing on the bind, and without deleting
+    or rewriting the first Core's state.
     """
-    import os
-    import subprocess
-    import sys
-    import time
-
     import httpx
 
     def start_core(
@@ -173,14 +259,7 @@ def test_serve_exits_named_when_this_homes_runtime_holds_the_port(tmp_path) -> N
             text=True,
         )
 
-    def free_port() -> int:
-        with socket.socket() as probe:
-            probe.bind(("127.0.0.1", 0))
-            return int(probe.getsockname()[1])
-
-    import socket
-
-    port = free_port()
+    port = _free_port()
     first = start_core(port, "port-in-use-holder")
     try:
         health = None
@@ -212,5 +291,4 @@ def test_serve_exits_named_when_this_homes_runtime_holds_the_port(tmp_path) -> N
             first.communicate(timeout=30)
 
     assert second.returncode == cli.PORT_IN_USE_EXIT, stderr
-    assert "core_port_in_use_by_runtime" in stderr
-    assert "Traceback" not in stderr
+    assert stderr.strip() == "core_port_in_use_by_runtime"

@@ -747,8 +747,9 @@ SDK_MIGRATION_REQUIRED_EXIT = 78
 #: interpreter's unhandled-error status.
 PORT_IN_USE_EXIT = 75
 
-#: Errnos that mean "another listener owns the address", across platforms.
-_PORT_IN_USE_ERRNOS = frozenset({errno.EADDRINUSE})
+#: Errnos that mean "another listener owns the address", across platforms:
+#: POSIX EADDRINUSE and Windows WSAEADDRINUSE (10048).
+_PORT_IN_USE_ERRNOS = frozenset({errno.EADDRINUSE, 10048})
 
 
 def _refuse_unmigrated_home(data_dir: Path) -> None:
@@ -811,33 +812,50 @@ def _without_embedding_switch(settings: Any) -> Any:
     return copy(update={"embedding_switch_worker": False}) if callable(copy) else settings
 
 
-def _port_in_use_explanation(status: RuntimeStatus) -> tuple[str, str]:
-    """The exit code and human sentence for a bind that did not happen.
+def _port_in_use_explanation(status: RuntimeStatus, *, settings_port: int) -> str:
+    """The refusal code for a bind that did not happen, naming the holder.
 
     `inspect_runtime`'s receipt is the other Core's -- the failing Core has not
     written its own yet (the receipt is published only after the bind, from the
-    server's lifespan). A receipt whose process still serves this port proves
-    the blocker is this home's own Runtime; anything else leaves the port to
-    some unrelated process.
+    server's lifespan). A receipt whose process serves *this* port proves the
+    blocker is this home's own Runtime, including one that is still starting:
+    the bind now precedes the lifespan, so during a long startup phase (the
+    graph probe can hold it for minutes) the port listens while the identity
+    probe gets no answer -- a receipt plus a live pid plus a listening port is
+    this home's Runtime, not a foreign process. The localized sentence for
+    each code lives with the i18n catalogs; the Core prints the code only.
     """
-    if status.state == "running" and status.port is not None:
-        code = "core_port_in_use_by_runtime"
-        message = (
-            f"端口 127.0.0.1:{status.port} 已被本数据目录的 MemHub Core 占用"
-            f"（version={status.version or 'unknown'}）。"
-            "先停止它（如 memhub stop / 重启系统服务）或更换 ONE_MEMORY_PORT。"
-        )
-        return code, message
-    code = "core_port_in_use"
-    message = (
-        "端口被其他进程占用（不是本数据目录的 MemHub Core）。"
-        "找出占用 127.0.0.1 端口的进程，或更换 ONE_MEMORY_PORT。"
-    )
-    return code, message
+    if status.port is not None and status.port == settings_port:
+        if status.state == "running":
+            return "core_port_in_use_by_runtime"
+        if (
+            status.state == "unhealthy"
+            and status.code == "runtime_identity_unreachable"
+            and _port_is_listening(status.host or "127.0.0.1", status.port)
+        ):
+            return "core_port_in_use_by_runtime"
+    return "core_port_in_use"
+
+
+def _port_is_listening(host: str, port: int) -> bool:
+    """Whether something accepts a TCP connection at `host:port`.
+
+    Distinguishes the Runtime-that-is-still-starting (port listening, HTTP
+    identity not answering yet) from a receipt whose pid was recycled: a
+    recycled pid that happens to hold exactly this port is not a listener we
+    could ever attribute to this home.
+    """
+    import socket
+
+    try:
+        with socket.create_connection((host, port), timeout=0.5):
+            return True
+    except OSError:
+        return False
 
 
 def _serve_forever(application: object, settings: Settings) -> None:
-    """Serve on a socket this process binds itself.
+    """Serve on sockets this process binds itself.
 
     uvicorn (pinned 0.52) answers a refused bind internally -- logged, then
     `SystemExit(3)` -- and its lifespan takes `core.lock` and publishes this
@@ -845,17 +863,45 @@ def _serve_forever(application: object, settings: Settings) -> None:
     could report a refusal the receipt no longer names the holder. Binding
     here keeps the refusal ours to answer while the previous Core's receipt
     still speaks for the process that actually holds the port, and hands
-    uvicorn a socket it never has to bind.
+    uvicorn sockets it never has to bind.
+
+    Addresses resolve the way uvicorn's own bind did: `localhost` serves
+    both stacks and `::1` serves IPv6, instead of `create_server`'s
+    single-family first answer.
     """
     import socket
 
     import uvicorn
 
+    listening: list[socket.socket] = []
+    refusal: OSError | None = None
     try:
-        listening = socket.create_server((settings.host, settings.port), backlog=2048)
+        infos = socket.getaddrinfo(
+            settings.host,
+            settings.port,
+            type=socket.SOCK_STREAM,
+            flags=socket.AI_PASSIVE,
+        )
+        for family, socktype, proto, _canonname, sockaddr in infos:
+            sock = socket.socket(family, socktype, proto)
+            try:
+                if family == socket.AF_INET6:
+                    # Bound explicitly per family: a dual-stack v6 listener
+                    # would collide with the v4 one below.
+                    sock.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_V6ONLY, 1)
+                sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+                sock.bind(sockaddr)
+                sock.listen(2048)
+                listening.append(sock)
+            except OSError as error:
+                sock.close()
+                refusal = refusal if refusal is not None else error
     except OSError as error:
+        refusal = error
+    if not listening:
+        assert refusal is not None
         _serve_forever_refused(
-            error,
+            refusal,
             settings_port=settings.port,
             data_dir=settings.data_dir,
             stderr=sys.stderr,
@@ -869,9 +915,10 @@ def _serve_forever(application: object, settings: Settings) -> None:
     )
     server = uvicorn.Server(config)
     try:
-        server.run(sockets=[listening])
+        server.run(sockets=listening)
     finally:
-        listening.close()
+        for sock in listening:
+            sock.close()
 
 
 def _serve_forever_refused(
@@ -889,7 +936,7 @@ def _serve_forever_refused(
 
     from one_memory.diagnostic_log import diagnostic_event
 
-    code, message = _port_in_use_explanation(inspect_runtime(data_dir))
+    code = _port_in_use_explanation(inspect_runtime(data_dir), settings_port=settings_port)
     diagnostic_event(
         level="error",
         component="core.lifecycle",
@@ -899,7 +946,6 @@ def _serve_forever_refused(
         details={"code": code, "port": settings_port},
     )
     print(code, file=stderr, flush=True)  # type: ignore[arg-type]
-    print(message, file=stderr, flush=True)  # type: ignore[arg-type]
     raise SystemExit(PORT_IN_USE_EXIT) from error
 
 
