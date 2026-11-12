@@ -209,3 +209,66 @@ rollback on a production deployment was performed.
 Future PR wording remains **Related to #432**, retaining its dense-pool escape
 goal through Qdrant-native capabilities with a Server-only boundary. This
 record is local evidence, not maintainer approval or a merge/CI certification.
+
+## PR #447 CI follow-up (2026-11-12)
+
+After this local record was written, the user authorized creating draft
+[PR #447](https://github.com/Tencent-Hunyuan/Hy-Memory/pull/447) and then
+parallel investigation/fixes for its failed CI. The draft remains one SDK
+feature PR. Three original untracked handoff documents remain unchanged.
+
+The first PR run at `d19fd63` failed the SDK native-contract step and two
+MemHub Core tests. To reproduce the actual merge context, upstream
+`a2a1858` was merged as `bf9ad03`; its changes are already on upstream main
+and do not add unrelated feature changes to the PR diff.
+
+Three agents separately investigated the SDK and the two Core failures:
+
+| Failure | Reproduced cause and minimal repair | Executed validation |
+|---|---|---|
+| Native backend TimeoutError cause identity | Python 3.12's standard-library Future conversion reconstructs `TimeoutError(*args)`; object identity is not the SDK error contract. `b781edd` preserves `reason=backend`, nonempty cause, exact cause type and args. No production change. | Original assertion: 1 failed/1 passed on real Python 3.12. Revised native error module: 41 passed on Python 3.12 and 41 passed on Python 3.13. |
+| Retired read-client lease closure | The old test counted five `sleep(0)` turns while close runs in a worker thread. `1f04c0e` waits on the close callback's completion Event with a five-second bound and retains both exact closure-order assertions. | Real Linux/Python 3.12 isolated wrapper: delayed-close original 1 failed; same delayed seam repaired 1 passed; module 7 passed; controlled-delay repetition 20/20 passed. |
+| Permission/live-sync trigger | A watcher can complete the import before an explicit automatic trigger, which then legitimately returns no job. `1f04c0e` checks actual watcher completion, source attribution, evidence count and the subsequent no-op; permission/freeze checks remain and task shutdown is checked. | Watcher-first original 1 failed after evidence count 2 was confirmed; repaired permission module 6 passed and target repeats passed twice. The proposed EOF-baseline explanation was tested and not supported. |
+
+The two repaired MemHub modules passed together: **13 passed**, exit 0,
+13.56 seconds. These are test synchronization repairs only; no MemHub
+production implementation, SDK/MemHub integration or new dependency was added.
+Both standards and contract reviewers found no actionable issue in the three
+test changes (`bf9ad03...1f04c0e`).
+
+Core local validation used a fresh dedicated Docker runner, Python 3.12.15,
+Core 1.0.6 and the unchanged Core lock's SDK 2.0.16. Runtime/dev packages were
+installed from a lock export with `--require-hashes`; locked `uv sync` then
+completed. Checkout source was mounted read-only. Windows CRLF required a
+container-only LF copy of `run-tests-isolated.sh`, with only its ROOT fixed
+to `/workspace/memhub`; its real temporary HOME/data/config/ports and all
+isolation checks were preserved. Reports use separate `/tmp` directories.
+A read-only pytest cache warning in the combined run was not a test failure.
+
+The SDK job on [CI run 43221674616](https://github.com/Tencent-Hunyuan/Hy-Memory/actions/runs/43221674616/job/131194455491)
+at `b781edd` completed successfully on Ubuntu/Python 3.12:
+
+- Native contracts: **41 passed**, 26 deselected.
+- Native Qdrant Server integration, without FastEmbed: **26 passed**, 41 deselected.
+- Chroma local/real-HTTP regressions: **53 passed**.
+- Complete SDK suite: **2039 passed, 30 skipped, 71 deselected**.
+
+This provides real Linux/Python 3.12 evidence that was unavailable in the
+earlier Windows installation attempts. It does not relabel those historical
+Windows failures as passes. MemHub on that same run still failed the original
+closure-timing assertion (4798 passed/1 failed), before `1f04c0e` was pushed.
+Later current-head CI is tracked on the [PR checks page](https://github.com/Tencent-Hunyuan/Hy-Memory/pull/447/checks);
+neither this prior successful SDK run nor local records replace a new head's
+actual results.
+
+Additional local neighbor checks are recorded without hiding their failure:
+`test_live_watch.py`, `test_live_sync_job_coalescing.py` and
+`test_live_watch_grants.py` produced **28 passed/1 failed**. The failed,
+unmodified test was `test_a_new_turn_lands_well_inside_the_ten_second_target`
+(append not observed within ten seconds). That invocation did not run either
+modified Core module; its specific cause was not established in this record.
+No unrelated product change or weakened assertion was used to force it green.
+
+Diagnostic/reproduction reports remain in the dedicated runner under
+`/tmp/hy-memory-pr447-reports/lifecycle-*`, `sync-*` and `combined`.
+No raw diagnostic log or private application data was published.
