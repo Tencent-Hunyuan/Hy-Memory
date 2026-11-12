@@ -320,7 +320,9 @@ describe.skipIf(process.platform === "win32")("HostGrantStore", () => {
       const corrupt = JSON.parse(before);
       corrupt.installations[0].allowedScopes.push(sourceScope);
       await writeFile(file, JSON.stringify(corrupt));
-      await expect(HostGrantStore.open(directory)).rejects.toMatchObject({
+      const reopened = await HostGrantStore.open(directory);
+      expect(reopened.quarantined).toContain("allowedScopes");
+      await expect(reopened.authenticate(issued.secret)).rejects.toMatchObject({
         code: "host_grant_store_corrupt",
       });
     },
@@ -690,7 +692,6 @@ describe.skipIf(process.platform === "win32")("HostGrantStore", () => {
     for (const operation of [
       () => store.authenticate(issued.secret),
       () => store.createInstallation({ hostId: "codex" }),
-      () => HostGrantStore.open(directory),
     ]) {
       const error = await operation().catch((failure: unknown) => failure);
       expect(error).toMatchObject({ code: "host_grant_store_corrupt" });
@@ -698,9 +699,79 @@ describe.skipIf(process.platform === "win32")("HostGrantStore", () => {
       expect(error).not.toHaveProperty("cause");
       expect(await readFile(file, "utf8")).toBe(corrupt);
     }
+    const reopened = await HostGrantStore.open(directory);
+    expect(reopened.quarantined).toBe("the store is not valid JSON");
+    const error = await reopened
+      .authenticate(issued.secret)
+      .catch((failure: unknown) => failure);
+    expect(error).toMatchObject({ code: "host_grant_store_corrupt" });
+    expect(inspect(reopened)).not.toContain(issued.secret);
+    expect(inspect(error)).not.toContain(issued.secret);
+    expect(error).not.toHaveProperty("cause");
+    expect(await readFile(file, "utf8")).toBe(corrupt);
     await expect(HostGrantStore.initialize(directory)).rejects.toMatchObject({
       code: "host_grant_store_exists",
     });
+  });
+
+  it("quarantines a store that failed validation instead of refusing startup (#387)", async () => {
+    const { store, directory, file, issued, receipt } = await approved();
+    const before = await readFile(file, "utf8");
+    // The #387 edit: hand-written scope values the schema does not know,
+    // in an approved entry.
+    const corrupt = JSON.parse(before);
+    corrupt.installations[0].allowedScopes = [
+      "all-apps",
+      "chat",
+      "working",
+      "coding",
+    ];
+    await writeFile(file, JSON.stringify(corrupt));
+
+    // Startup survives: the store opens quarantined, naming the field.
+    const reopened = await HostGrantStore.open(directory);
+    expect(reopened.quarantined).toContain("allowedScopes");
+    expect(store.quarantined).toBeUndefined();
+
+    // Every operation fails closed, reads included, with the same reason.
+    const mutation = {
+      installationId: receipt.installationId,
+      expectedRevision: receipt.revision,
+    };
+    for (const operation of [
+      () => reopened.listInstallations(),
+      () => reopened.authenticate(issued.secret),
+      () => reopened.authenticateInstallation(issued.secret),
+      () =>
+        reopened.authorize(issued.secret, {
+          tool: "om_conversations",
+          scopes: ["all-apps"],
+        }),
+      () => reopened.createInstallation({ hostId: "codex" }),
+      () => reopened.createPairing({ displayName: "later" }),
+      () => reopened.exchangePairing("123456"),
+      () =>
+        reopened.approveGrants({
+          ...mutation,
+          allowedTools: [],
+          allowedScopes: [],
+        }),
+      () => reopened.revoke(mutation),
+      () => reopened.rotateSecret(mutation),
+    ]) {
+      const error = await operation().catch((failure: unknown) => failure);
+      expect(error).toMatchObject({
+        code: "host_grant_store_corrupt",
+        reason: expect.stringContaining("allowedScopes"),
+      });
+      expect(error).not.toHaveProperty("cause");
+    }
+
+    // The refusal is structural only: no value the file supplied, and the
+    // broken store is left exactly as it was, never reset.
+    expect(inspect(reopened)).not.toContain("chat");
+    expect(inspect(reopened)).not.toContain(issued.secret);
+    expect(await readFile(file, "utf8")).toBe(JSON.stringify(corrupt));
   });
 
   it("rejects malformed grants, duplicate identities, and unsupported store versions", async () => {

@@ -629,9 +629,25 @@ describe.skipIf(process.platform === "win32")(
           await rm(file);
           await symlink(elsewhere, file);
         }
-        await expect(
-          HostPermissions.open(context.dataDir, context.runtime),
-        ).rejects.toThrow();
+        if (kind === "corrupt") {
+          // #387: a store that does not validate no longer refuses startup.
+          // It opens quarantined -- every grant operation fails closed --
+          // and the file is never reset.
+          const reopened = await HostPermissions.open(
+            context.dataDir,
+            context.runtime,
+          );
+          expect(reopened.hostGrantStore.quarantined).toBe(
+            "the store is not valid JSON",
+          );
+          await expect(
+            reopened.hostGrantStore.listInstallations(),
+          ).rejects.toMatchObject({ code: "host_grant_store_corrupt" });
+        } else {
+          await expect(
+            HostPermissions.open(context.dataDir, context.runtime),
+          ).rejects.toThrow();
+        }
         if (kind === "missing")
           await expect(lstat(file)).rejects.toMatchObject({ code: "ENOENT" });
         if (kind === "corrupt")
