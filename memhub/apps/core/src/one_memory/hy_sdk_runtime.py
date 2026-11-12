@@ -78,12 +78,14 @@ GRAPH_SYNC_HEADER = "X-Memory-Graph-Sync"
 def sdk_edit_embedding_failed(error: BaseException) -> bool:
     """Whether an SDK edit was refused because its new text could not be embedded.
 
-    hy-memory 2.0.16 raises `CodingWriteError("EMBEDDING_FAILED")` from a
-    Coding/Working `update` instead of storing the edit without a vector.
+    hy-memory 2.0.16 raises `CodingWriteError` with the stable
+    `error_code="EMBEDDING_FAILED"` from a Coding/Working `update` instead of
+    storing the edit without a vector. The class is not exported from the
+    package root, so the stable code is what is read.
     """
-    from hy_memory.coding.types import CodingWriteError  # type: ignore[import-untyped]
-
-    return isinstance(error, CodingWriteError) and error.error_code == "EMBEDDING_FAILED"
+    return isinstance(error, RuntimeError) and getattr(error, "error_code", None) == (
+        "EMBEDDING_FAILED"
+    )
 
 
 #: The SDK's memory modes. A mode never changes a collection name: the space
