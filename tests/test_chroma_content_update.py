@@ -83,7 +83,10 @@ async def stores(request, tmp_path):
         yield opened
     finally:
         for store in opened:
+            client = store._client
             await store.close()
+            if client is not None:
+                client.close()
 
 
 def forbid_embedding(*_args, **_kwargs):
