@@ -1,4 +1,5 @@
 import type {
+  HomeProjectionCapabilities,
   ImportIssue,
   ImportJob,
   SourceResponse,
@@ -68,6 +69,7 @@ export interface ImportProgressStripProps {
   showSourceLink?: boolean;
   showProgressDetails?: boolean;
   userFacing?: boolean;
+  modeCapabilities?: HomeProjectionCapabilities | null;
 }
 
 /** Named sources and confirmed counts, without claiming cached jobs are live. */
@@ -85,6 +87,7 @@ export function ImportProgressStrip({
   showSourceLink = true,
   showProgressDetails = true,
   userFacing = false,
+  modeCapabilities,
 }: ImportProgressStripProps) {
   const { t, tn } = useGuiLanguage();
   const [refreshing, setRefreshing] = useState(false);
@@ -212,7 +215,13 @@ export function ImportProgressStrip({
     ),
   );
   const currentArrival = arrival
-    ? resolveMemoryArrival({ arrival, processing: null, sources, loaded: true })
+    ? resolveMemoryArrival({
+        arrival,
+        processing: null,
+        sources,
+        loaded: true,
+        capabilities: modeCapabilities,
+      })
     : null;
   const needsAction =
     currentArrival &&
@@ -253,11 +262,14 @@ export function ImportProgressStrip({
       (sum, source) => sum + source.imported_conversations,
       0,
     );
-    const message = firstImport
-      ? tn("importUserProgress", imported)
-      : currentArrival?.phase === "model-required"
-        ? t("importUserModel")
-        : t("importUserIncomplete");
+    const message =
+      modeCapabilities?.generation_required === false
+        ? t("apps.rawSaving")
+        : firstImport
+          ? tn("importUserProgress", imported)
+          : currentArrival?.phase === "model-required"
+            ? t("importUserModel")
+            : t("importUserIncomplete");
     return (
       <div
         className="import-strip"
@@ -272,16 +284,18 @@ export function ImportProgressStrip({
             )}
             <strong>{message}</strong>
           </div>
-          {!firstImport && onConfigureModel && (
-            <button
-              type="button"
-              className="secondary"
-              onClick={onConfigureModel}
-            >
-              <Settings2 size={15} aria-hidden="true" />
-              {t("importUserSettings")}
-            </button>
-          )}
+          {!firstImport &&
+            modeCapabilities?.generation_required !== false &&
+            onConfigureModel && (
+              <button
+                type="button"
+                className="secondary"
+                onClick={onConfigureModel}
+              >
+                <Settings2 size={15} aria-hidden="true" />
+                {t("importUserSettings")}
+              </button>
+            )}
         </div>
       </div>
     );
@@ -322,19 +336,21 @@ export function ImportProgressStrip({
     ? updating
       ? "已保存内容保留，正在核对进度"
       : "进度待更新"
-    : currentArrival && needsAction
-      ? currentArrival.phase === "model-required"
-        ? "待继续"
-        : memoryArrivalTitle(currentArrival)
-      : generating
-        ? "正在沉淀记忆"
-        : importing || currentArrival?.phase === "importing"
-          ? running.length > 0 && running.every(isSyncJob)
-            ? "正在检查新增对话"
-            : "正在导入对话"
-          : backfilling
-            ? "正在准备整理"
-            : "待继续";
+    : modeCapabilities?.generation_required === false
+      ? t("apps.rawSaving")
+      : currentArrival && needsAction
+        ? currentArrival.phase === "model-required"
+          ? "待继续"
+          : memoryArrivalTitle(currentArrival)
+        : generating
+          ? "正在沉淀记忆"
+          : importing || currentArrival?.phase === "importing"
+            ? running.length > 0 && running.every(isSyncJob)
+              ? "正在检查新增对话"
+              : "正在导入对话"
+            : backfilling
+              ? "正在准备整理"
+              : "待继续";
 
   return (
     <div
@@ -645,6 +661,7 @@ export function ImportProgressStrip({
           </button>
         )}
         {!stale &&
+          modeCapabilities?.generation_required !== false &&
           currentArrival?.phase === "model-required" &&
           onConfigureModel && (
             <button type="button" className="quiet" onClick={onConfigureModel}>

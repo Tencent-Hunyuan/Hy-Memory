@@ -8,7 +8,10 @@
 
 ## Architecture Principles
 
-1. Memory 读写与存储 backend **只经 SDK**（config / env）。
+1. Memory 读写与存储 backend **只经 SDK config**（由 `build_sdk_config` 构造；SDK
+   的环境变量默认值在产品里不生效）。图 / 向量后端默认 Kuzu + Chroma，可用
+   `memhub settings backends` 改为 Neo4j/Memgraph、Qdrant 服务器，见
+   [`docs/contracts/storage-backends-v1.md`](docs/contracts/storage-backends-v1.md)。
 2. MemHub 运行时对 memory 的原子操作 **只经 SDK 公共 Client**；缺正常业务
    接口先补 SDK。Runtime writers 停止后的 App 启动迁移可直接操作底层存储，
    但不得把迁移专用方法加入公共 Client。
@@ -39,7 +42,10 @@ reader:       hybrid
 
 MemHub 通过公开 `HyMemoryClient` 配置使用可复现的本地策略：
 
-- vector / graph / cache / history / coding 等 **一律 SDK config/env**；
+- vector / graph / cache / history / coding 等 **一律 SDK config**，由 MemHub 显式
+  构造：图 / 向量后端来自持久化设置 `storage_backends`（默认 Kuzu + Chroma，只能
+  用 CLI / API 修改，密钥进安全存储），cache / history / coding / raw 始终是本 home
+  的 SQLite；SDK 自身的 `MEMORY_*` 环境变量不改变产品配置；
 - 模型与 embedding 来自版本化 Model Profile；密钥进安全存储；
 - MemHub 管理库可存 harness/model/队列状态与 **`memory_id` 引用**。
 
@@ -136,6 +142,15 @@ memhub profile
 `memory_write_jobs`，worker 对 SDK 执行一次 `add()`，成功后清除队列正文。
 `user-profile` / `memhub profile` 调用 SDK `get_user_profile()`，返回组装后的
 用户长期画像，不通过普通 Search 拼装。
+
+读接口都回显 `user_id`（实际读的用户，未指定时为 `local`）：
+`GET /api/v2/memory-library`、`/memory-library/layers`、`/user-profile`、
+`/user-profile/versions`、`/home-summary`、`/memories/graph`、`/raw`，
+`POST /api/v2/context/search`、`/api/v1/recall`、`/api/v2/memories/ask`；
+`/memories/ask/stream` 写在第一个 `recall` 事件上。
+`DELETE /api/v2/memories/{id}` 只在删掉调用者自己的记忆时回 204；另一个用户的
+记忆和不存在的 ID 一律回 404 `memory_not_found`（不暴露是否存在），调用方按
+「已不存在」处理。
 
 返回值：
 

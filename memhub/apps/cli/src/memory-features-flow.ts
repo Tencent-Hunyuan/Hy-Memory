@@ -2,11 +2,12 @@
  * `memhub settings features [set <name>=<true|false> ... | reset [<name> ...]]`.
  *
  * The SDK's optional retrieval and extraction features (graph rerank, episode
- * recall, the episode write side, intention, few-shot). One global setting in
- * the Runtime; an unset feature keeps the SDK default, so an install nobody
- * touched behaves as before. `set` prints its plan first and needs `--yes`,
- * like `settings mode`, because some features spend model calls; `reset`
- * only returns features to their defaults and applies at once.
+ * recall, the episode write side, intention and its dedup, few-shot), plus the
+ * numeric settings (the intention dedup threshold and agent_max_tokens). One
+ * global setting in the Runtime; an unset feature keeps the SDK default, so an
+ * install nobody touched behaves as before. `set` prints its plan first and
+ * needs `--yes`, like `settings mode`, because some features spend model
+ * calls; `reset` only returns features to their defaults and applies at once.
  */
 
 import type { CoreReader } from "./core-client.js";
@@ -20,9 +21,20 @@ export const MEMORY_FEATURES = [
   "session_episodes",
   "episode_summary",
   "intention",
+  "intention_dedup",
   "few_shot",
 ] as const;
 export type MemoryFeature = (typeof MEMORY_FEATURES)[number];
+
+/** Numeric settings, with the range the Runtime accepts (inclusive). An
+ *  `integer` one takes whole numbers only. */
+export const MEMORY_PARAMETERS = {
+  intention_dedup_threshold: { minimum: 0.8, maximum: 1, integer: false },
+  agent_max_tokens: { minimum: 512, maximum: 32000, integer: true },
+} as const;
+export type MemoryParameter = keyof typeof MEMORY_PARAMETERS;
+export type MemorySetting = MemoryFeature | MemoryParameter;
+type SettingValues = Partial<Record<MemorySetting, boolean | number>>;
 
 const FEATURE_LABEL: Record<MemoryFeature, string> = {
   graph_rerank: "图谱重排（沿知识图谱的边传播支持度；仅 ultra）",
@@ -33,6 +45,8 @@ const FEATURE_LABEL: Record<MemoryFeature, string> = {
   session_episodes: "片段写入（同一会话提取的记忆归入同一片段）",
   episode_summary: "片段摘要（片段结束时总结一次；每个片段一次模型调用）",
   intention: "意图提取（随事实一起提取用户的计划与意图）",
+  intention_dedup:
+    "意图判重（检索时把同一天、相似度达到阈值的意图视为重复，只返回最早一条并删除其余；关闭则不判重、不删除）",
   few_shot: "提取示例（在提取提示里附上示例；不加调用，输入更长）",
 };
 
@@ -41,19 +55,43 @@ const REASON_TEXT: Record<string, string> = {
   requires_pro: "lite 模式下不生效（需要 pro 或 ultra）",
   requires_ultra: "当前模式下不生效（需要 ultra）",
   requires_graph_rerank: "需要先开启并生效 graph_rerank",
+  requires_intention_dedup: "intention_dedup 已关闭，阈值不起作用",
+};
+
+const PARAMETER_LABEL: Record<MemoryParameter, string> = {
+  intention_dedup_threshold: "意图判重阈值（余弦相似度，越高保留越多）",
+  agent_max_tokens:
+    "Agent 输出上限（evolve、System 2 的单次输出 token 数；本地模型输出被截断时调大）",
 };
 
 export type FeaturesCommand =
   | { kind: "show" }
   | {
       kind: "set";
-      values: Partial<Record<MemoryFeature, boolean>>;
+      values: SettingValues;
       confirmed: boolean;
     }
-  | { kind: "reset"; names: MemoryFeature[] };
+  | { kind: "reset"; names: MemorySetting[] };
 
 function isFeature(value: string): value is MemoryFeature {
   return (MEMORY_FEATURES as readonly string[]).includes(value);
+}
+
+function isParameter(value: string): value is MemoryParameter {
+  return Object.hasOwn(MEMORY_PARAMETERS, value);
+}
+
+function isSetting(value: string): value is MemorySetting {
+  return isFeature(value) || isParameter(value);
+}
+
+/** A parameter's value: a plain decimal (a whole number for an integer
+ *  parameter) in its range; null = usage. */
+function parameterValue(name: MemoryParameter, raw: string): number | null {
+  const { minimum, maximum, integer } = MEMORY_PARAMETERS[name];
+  if (!(integer ? /^\d+$/ : /^\d+(\.\d+)?$/).test(raw)) return null;
+  const value = Number(raw);
+  return value >= minimum && value <= maximum ? value : null;
 }
 
 /** Arguments after `settings features`; null = usage. */
@@ -68,18 +106,28 @@ export function parseFeaturesCommand(
   const positional = tail.filter((value) => value !== "--yes");
   if (verb === "set") {
     if (positional.length === 0) return null;
-    const parsed: Partial<Record<MemoryFeature, boolean>> = {};
+    const parsed: SettingValues = {};
     for (const item of positional) {
-      const match = /^([a-z_]+)=(true|false)$/.exec(item);
-      if (!match || !isFeature(match[1]) || match[1] in parsed) return null;
-      parsed[match[1]] = match[2] === "true";
+      const match = /^([a-z_]+)=(.+)$/.exec(item);
+      if (!match || match[1] in parsed) return null;
+      const [, name, raw] = match;
+      if (isFeature(name)) {
+        if (raw !== "true" && raw !== "false") return null;
+        parsed[name] = raw === "true";
+      } else if (isParameter(name)) {
+        const value = parameterValue(name, raw);
+        if (value === null) return null;
+        parsed[name] = value;
+      } else {
+        return null;
+      }
     }
     return { kind: "set", values: parsed, confirmed: yes === 1 };
   }
   if (verb === "reset") {
     if (new Set(positional).size !== positional.length) return null;
-    if (!positional.every(isFeature)) return null;
-    return { kind: "reset", names: positional as MemoryFeature[] };
+    if (!positional.every(isSetting)) return null;
+    return { kind: "reset", names: positional as MemorySetting[] };
   }
   return null;
 }
@@ -96,11 +144,26 @@ export interface FeatureState {
   description: string;
 }
 
+export interface ParameterState {
+  name: MemoryParameter;
+  value: number;
+  configured: number | null;
+  default: number;
+  minimum: number;
+  maximum: number;
+  active: boolean;
+  reason: string | null;
+  requires_feature: string | null;
+  description: string;
+}
+
 export interface FeaturesState {
   mode: string;
   features: FeatureState[];
-  non_default: Partial<Record<MemoryFeature, boolean>>;
-  changed?: MemoryFeature[];
+  /** Absent from a Runtime older than the intention dedup threshold. */
+  parameters?: ParameterState[];
+  non_default: SettingValues;
+  changed?: MemorySetting[];
 }
 
 function featuresState(value: unknown): FeaturesState | null {
@@ -125,6 +188,20 @@ function featuresState(value: unknown): FeaturesState | null {
       return null;
     }
   }
+  if (item.parameters !== undefined) {
+    if (!Array.isArray(item.parameters)) return null;
+    for (const parameter of item.parameters) {
+      if (
+        !parameter ||
+        typeof parameter !== "object" ||
+        typeof (parameter as ParameterState).name !== "string" ||
+        typeof (parameter as ParameterState).value !== "number" ||
+        typeof (parameter as ParameterState).active !== "boolean"
+      ) {
+        return null;
+      }
+    }
+  }
   return item as unknown as FeaturesState;
 }
 
@@ -137,12 +214,12 @@ export type FeaturesDocument = {
   | {
       state: "preview";
       features: FeaturesState;
-      target: Partial<Record<MemoryFeature, boolean>>;
+      target: SettingValues;
       applied: false;
       next_step: string;
     }
   | { state: "unchanged"; features: FeaturesState }
-  | { state: "committed"; features: FeaturesState; changed: MemoryFeature[] }
+  | { state: "committed"; features: FeaturesState; changed: MemorySetting[] }
   | { state: "rejected" | "unknown" | "unavailable"; code: string }
 );
 
@@ -170,13 +247,23 @@ export async function runFeaturesCommand(
   if (command.kind === "show") {
     return { ...BASE, state: "ok", features: current };
   }
+  // What a person set, per name this Runtime lists; null = the default.
+  const configured = new Map<string, boolean | number | null>([
+    ...current.features.map(
+      (feature) => [feature.name, feature.configured] as const,
+    ),
+    ...(current.parameters ?? []).map(
+      (parameter) => [parameter.name, parameter.configured] as const,
+    ),
+  ]);
   let body: Record<string, unknown>;
   if (command.kind === "set") {
-    const configured = new Map(
-      current.features.map((feature) => [feature.name, feature.configured]),
-    );
+    if (Object.keys(command.values).some((name) => !configured.has(name))) {
+      // An older Runtime does not know the name; it would answer 422.
+      return { ...BASE, state: "rejected", code: "memory_feature_unsupported" };
+    }
     const differs = Object.entries(command.values).some(
-      ([name, value]) => configured.get(name as MemoryFeature) !== value,
+      ([name, value]) => configured.get(name) !== value,
     );
     if (!differs) return { ...BASE, state: "unchanged", features: current };
     if (!command.confirmed) {
@@ -197,16 +284,10 @@ export async function runFeaturesCommand(
     const names =
       command.names.length > 0
         ? command.names
-        : current.features
-            .filter((feature) => feature.configured !== null)
-            .map((feature) => feature.name);
-    if (
-      names.every(
-        (name) =>
-          current.features.find((feature) => feature.name === name)
-            ?.configured === null,
-      )
-    ) {
+        : [...configured]
+            .filter(([, value]) => value !== null)
+            .map(([name]) => name as MemorySetting);
+    if (names.every((name) => (configured.get(name) ?? null) === null)) {
       return { ...BASE, state: "unchanged", features: current };
     }
     body = Object.fromEntries(names.map((name) => [name, null]));
@@ -233,6 +314,16 @@ export function featuresExitCode(document: FeaturesDocument): number {
     : 1;
 }
 
+function parameterLine(parameter: ParameterState): string {
+  const label = PARAMETER_LABEL[parameter.name] ?? parameter.name;
+  const origin = parameter.configured === null ? "默认" : "已设置";
+  const activity =
+    !parameter.active && parameter.reason
+      ? `，${REASON_TEXT[parameter.reason] ?? parameter.reason}`
+      : "";
+  return `${parameter.name}：${parameter.value}（${origin}${activity}，可设 ${parameter.minimum}–${parameter.maximum}）— ${label}`;
+}
+
 function featureLine(feature: FeatureState): string {
   const label = FEATURE_LABEL[feature.name] ?? feature.name;
   const value = feature.enabled ? "开" : "关";
@@ -251,6 +342,8 @@ export function renderFeaturesText(document: FeaturesDocument): string {
   const state = document.features;
   const lines = [`当前模式：${state.mode}`];
   for (const feature of state.features) lines.push(featureLine(feature));
+  for (const parameter of state.parameters ?? [])
+    lines.push(parameterLine(parameter));
   lines.push(
     "片段召回（episode_recall）只对带片段的记忆有用：先开启 session_episodes，之后提取的记忆才会带片段。",
   );
@@ -258,7 +351,9 @@ export function renderFeaturesText(document: FeaturesDocument): string {
   if (document.state === "preview") {
     lines.push("将设置：");
     for (const [name, value] of Object.entries(document.target)) {
-      lines.push(`- ${name} = ${value ? "开" : "关"}`);
+      lines.push(
+        `- ${name} = ${typeof value === "number" ? value : value ? "开" : "关"}`,
+      );
     }
     lines.push(`未执行任何改动。确认后运行：${document.next_step}`);
   }

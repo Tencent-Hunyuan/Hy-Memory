@@ -101,6 +101,74 @@ describe("OpenCode recall installer", () => {
     expect(await readFile(configPath, "utf8")).toBe(original);
   });
 
+  it("writes the nested V2 map when the config already uses it", async () => {
+    const { layout, configPath } = await fixture();
+    const original = {
+      $schema: "https://opencode.ai/config.json",
+      mcp: {
+        servers: {
+          weather: {
+            type: "remote",
+            url: "https://example.invalid",
+          },
+        },
+      },
+    };
+    const text = `${JSON.stringify(original, null, 2)}\n`;
+    await writeFile(configPath, text);
+
+    await applyRecallInstall(await planRecallInstall(layout, runtime()));
+    const merged = JSON.parse(await readFile(configPath, "utf8"));
+    // V2 groups servers one level deeper and enables with the inverse flag.
+    // The flat map stays untouched: writing both would let V2 read the same
+    // server twice.
+    expect(merged.mcp["one-memory"]).toBeUndefined();
+    expect(merged.mcp.servers["one-memory"]).toEqual({
+      type: "local",
+      command: [
+        "/opt/one-memory/bin/one-memory",
+        "/opt/one-memory/mcp/entry.mjs",
+      ],
+      environment: {
+        ELECTRON_RUN_AS_NODE: "1",
+        ONE_MEMORY_MANAGED_BY: "one-memory",
+        ONE_MEMORY_BROKER_DISCOVERY: "/opt/one-memory/runtime.json",
+        ONE_MEMORY_MCP_TOOLSET: MCP_TOOLSET_VERSION,
+      },
+      disabled: false,
+    });
+    expect(merged.mcp.servers.weather).toEqual(original.mcp.servers.weather);
+
+    await rollbackRecallInstall(layout);
+    expect(JSON.parse(await readFile(configPath, "utf8"))).toEqual(original);
+  });
+
+  it("removes a flat entry after the config gains the nested map", async () => {
+    const { layout, configPath } = await fixture();
+    const original = {
+      $schema: "https://opencode.ai/config.json",
+      model: "anthropic/claude-sonnet-4",
+    };
+    await writeFile(configPath, `${JSON.stringify(original, null, 2)}\n`);
+    // A config without `mcp.servers` is written flat, which both hosts read.
+    await applyRecallInstall(await planRecallInstall(layout, runtime()));
+
+    const edited = JSON.parse(await readFile(configPath, "utf8"));
+    edited.mcp.servers = {
+      later: { type: "remote", url: "https://example.invalid" },
+    };
+    await writeFile(configPath, `${JSON.stringify(edited, null, 2)}\n`);
+
+    await rollbackRecallInstall(layout);
+    const restored = JSON.parse(await readFile(configPath, "utf8"));
+    expect(restored.mcp["one-memory"]).toBeUndefined();
+    expect(restored.mcp.servers.later).toEqual({
+      type: "remote",
+      url: "https://example.invalid",
+    });
+    expect(restored.model).toBe(original.model);
+  });
+
   it("leaves no trace of itself in the host directory after uninstall", async () => {
     const { layout, configDir } = await fixture();
     // OpenCode's own file, which must survive: the check is "nothing of ours

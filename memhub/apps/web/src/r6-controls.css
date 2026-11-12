@@ -11,6 +11,144 @@
   --r6-fast: 140ms;
 }
 
+.memory-mode-choice-list {
+  min-width: 0;
+  overflow: hidden;
+  border: 1px solid #d8e2ea;
+  border-radius: 10px;
+  background: #fff;
+}
+
+.memory-mode-choice {
+  display: grid;
+  grid-template-columns: 20px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 12px;
+  min-height: 74px;
+  padding: 12px 16px;
+  color: var(--r6-text);
+  cursor: pointer;
+  transition:
+    background-color var(--r6-fast),
+    border-color var(--r6-fast);
+}
+
+.memory-mode-choice + .memory-mode-choice {
+  border-top: 1px solid #d8e2ea;
+}
+
+.memory-mode-choice:hover:not([data-disabled="true"]) {
+  background: #f6f9fa;
+}
+
+.memory-mode-choice[data-selected="true"] {
+  background: #edf3f6;
+}
+
+.memory-mode-choice[data-disabled="true"] {
+  color: #71808b;
+  cursor: default;
+}
+
+.memory-mode-choice:focus-within {
+  outline: 2px solid var(--r6-focus);
+  outline-offset: -2px;
+}
+
+.memory-mode-choice input {
+  width: 16px;
+  height: 16px;
+  margin: 0;
+  accent-color: var(--r6-action);
+}
+
+.memory-mode-choice input:focus-visible {
+  outline: 0;
+}
+
+.memory-mode-choice-copy {
+  display: grid;
+  min-width: 0;
+  gap: 2px;
+}
+
+.memory-mode-choice-heading {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  min-width: 0;
+}
+
+.memory-mode-choice-copy strong {
+  color: var(--r6-text);
+  font-size: 14px;
+  font-weight: 600;
+  line-height: 22px;
+}
+
+.memory-mode-choice-copy small {
+  color: var(--r6-muted);
+  font-size: 12px;
+  line-height: 20px;
+  overflow-wrap: normal;
+  word-break: normal;
+}
+
+.memory-mode-choice-badge {
+  padding: 1px 7px;
+  border-radius: 999px;
+  color: #41677e;
+  background: #dceaf2;
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 18px;
+}
+
+.memory-mode-choice-current {
+  align-self: start;
+  color: #405e75;
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 22px;
+  white-space: nowrap;
+}
+
+.r6-settings-dialog-layer {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  display: grid;
+  place-items: center;
+  background: rgb(46 66 82 / 18%);
+  backdrop-filter: blur(8px);
+}
+
+.r6-settings-dialog {
+  width: min(420px, calc(100vw - 40px));
+  padding: 28px;
+  border: 1px solid white;
+  border-radius: 16px;
+  background: #f3f7f9;
+  box-shadow: 0 24px 64px rgb(38 59 74 / 18%);
+}
+
+.r6-settings-dialog h2 {
+  margin: 0 0 10px;
+  font-size: 20px;
+}
+
+.r6-settings-dialog p {
+  margin: 0 0 24px;
+  color: #63707b;
+}
+
+.r6-settings-dialog footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: 12px;
+}
+
 button.r6-button {
   position: relative;
   display: inline-flex;
@@ -21,7 +159,7 @@ button.r6-button {
   min-height: 44px;
   height: 44px;
   padding: 0 20px;
-  gap: 0;
+  gap: 8px;
   border: 1px solid var(--r6-control-edge);
   border-radius: 8px;
   background: rgb(255 255 255 / 20%);
@@ -52,6 +190,10 @@ button.r6-button[data-variant="primary"] {
     0 3px 8px -2px rgb(64 87 102 / 12%);
 }
 
+button.r6-button[data-pending-capable="true"] {
+  padding-inline: 32px;
+}
+
 button.r6-button[data-variant="quiet"] {
   height: 36px;
   min-height: 36px;
@@ -64,6 +206,10 @@ button.r6-button[data-variant="quiet"] {
   font-weight: 400;
   line-height: 26px;
   color: var(--r6-muted);
+}
+
+button.r6-button[data-variant="quiet"][data-pending-capable="true"] {
+  padding-inline: 24px;
 }
 
 button.r6-button:hover:not(:disabled) {
@@ -104,16 +250,26 @@ button.r6-button[data-variant="quiet"]:disabled {
 }
 .r6-button-label {
   min-width: 0;
+  text-align: center;
 }
 .r6-button-spinner {
   position: absolute;
-  right: 5px;
+  top: 50%;
+  right: 12px;
+  flex: 0 0 auto;
   width: 12px;
   height: 12px;
+  margin-top: -6px;
   border: 1.5px solid currentColor;
   border-right-color: transparent;
   border-radius: 50%;
+  visibility: hidden;
   animation: r6-spin 1.8s linear infinite;
+  animation-play-state: paused;
+}
+.r6-button-spinner[data-visible="true"] {
+  visibility: visible;
+  animation-play-state: running;
 }
 
 .r6-stepper {
@@ -305,6 +461,7 @@ button.r6-switch:focus-visible,
   .r6-button-spinner {
     animation: none;
   }
+  .memory-mode-choice,
   button.r6-button,
   .r6-switch-track,
   .r6-switch-thumb {
@@ -318,9 +475,29 @@ button.r6-switch:focus-visible,
 [data-native-reduce-motion="true"] .r6-button-spinner {
   animation: none;
 }
+
+@media (prefers-reduced-transparency: reduce) {
+  .r6-settings-dialog-layer {
+    background: rgb(46 66 82 / 28%);
+    backdrop-filter: none;
+  }
+}
+
+[data-native-reduce-transparency="true"] .r6-settings-dialog-layer {
+  background: rgb(46 66 82 / 28%);
+  backdrop-filter: none;
+}
 [data-native-reduce-motion="true"]
-  :is(.r6-button, .r6-switch-track, .r6-switch-thumb) {
+  :is(.memory-mode-choice, .r6-button, .r6-switch-track, .r6-switch-thumb) {
   transition: none;
+}
+@media (max-width: 700px) {
+  .memory-mode-choice {
+    grid-template-columns: 20px minmax(0, 1fr);
+  }
+  .memory-mode-choice-current {
+    grid-column: 2;
+  }
 }
 [data-native-reduce-motion="true"] :is(.r6-stepper li, .r6-stepper li::after) {
   transition: none;

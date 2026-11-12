@@ -71,6 +71,17 @@ class Harness:
     #: case rather than having the assertion weakened for everyone.
     single_filename_only: bool = False
 
+    @property
+    def sibling_filename(self) -> str:
+        """A second file beside `filename`, in the same host directory.
+
+        Prefixing the whole relative path would move a nested layout (Cursor's
+        `projects/<slug>/agent-transcripts/...`) to a directory the host never
+        writes, which tests discovery pruning rather than the second file.
+        """
+        path = Path(self.filename)
+        return str(path.with_name("second-" + path.name))
+
 
 def _write_lines(path: Path, lines: list[dict]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -193,7 +204,7 @@ def _qwenwork() -> Harness:
 
 def _deepseek() -> Harness:
     def write(path: Path, turns: list[Turn]) -> None:
-        # deepseek only accepts a file literally named session.jsonl, and nests
+        # deepseek only accepts files named session[.vN].jsonl[.zstd], and nests
         # the turn under "data".
         lines: list[dict] = [{"type": "session", "version": 0, "id": "s1", "cwd": "/w"}]
         for index, (role, text, _session) in enumerate(turns):
@@ -225,7 +236,7 @@ def _deepseek() -> Harness:
 
     from one_memory.imports.sources.deepseek_harness import create_deepseek_harness_adapter
 
-    # deepseek accepts only a file literally named session.jsonl.
+    # deepseek accepts only session[.vN].jsonl[.zstd]; the first format is used here.
     return Harness(
         "deepseek-harness",
         write,
@@ -302,7 +313,7 @@ def test_corrupt_records_do_not_stop_the_scan(tmp_path: Path, name: str) -> None
     with target.open("a", encoding="utf-8") as handle:
         handle.write("{not valid json\n")
     # A second file keeps valid data the scan must still reach.
-    sibling = root / ("second-" + harness.filename)
+    sibling = root / harness.sibling_filename
     harness.write(sibling, [("user", "second", "s1")])
 
     adapter = harness.create(grant(harness.source_id, root))
@@ -437,7 +448,7 @@ def test_cross_file_session_keeps_one_conversation(tmp_path: Path, name: str) ->
 
     root = tmp_path / name
     harness.write(root / harness.filename, [("user", "in first file", "shared")])
-    harness.write(root / ("second-" + harness.filename), [("user", "in second file", "shared")])
+    harness.write(root / harness.sibling_filename, [("user", "in second file", "shared")])
     adapter = harness.create(grant(harness.source_id, root))
 
     events = asyncio.run(scan(adapter))

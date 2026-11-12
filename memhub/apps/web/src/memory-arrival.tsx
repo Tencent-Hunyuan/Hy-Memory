@@ -39,12 +39,14 @@ export function MemoryArrivalPanel({
     processing: null,
     sources: [],
     loaded: true,
+    capabilities: providedArrival.capabilities,
   });
   if (hasMemories && arrival.phase === "idle" && !arrival.importing)
     return null;
   const active =
     arrival.phase === "processing" || arrival.phase === "importing";
-  const hasOriginals = arrival.importedMessages > 0;
+  const hasOriginals =
+    arrival.importedMessages > 0 || arrival.importedConversations > 0;
   const title =
     hasMemories && arrival.phase === "idle"
       ? t("arrival.importing")

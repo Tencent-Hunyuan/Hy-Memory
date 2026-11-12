@@ -1,7 +1,11 @@
 import type { MessageKey } from "../gui-i18n.js";
+import { embeddingSwitchGermanMessages } from "../gui-i18n-embedding-switch.js";
+import { modeGermanMessages } from "../gui-i18n-mode.js";
 
 /** German (de, formal Sie) GUI copy. Machine-assisted; native-speaker review recommended. */
 export const germanMessages: Record<MessageKey, string> = {
+  ...modeGermanMessages,
+  ...embeddingSwitchGermanMessages,
   "connectionFallback.title": "Andere Tools verbinden",
   "connectionFallback.desktopOnly":
     "Lokale Kopplung ist nur in der Desktop-App verfügbar.",
@@ -80,6 +84,16 @@ export const germanMessages: Record<MessageKey, string> = {
   "sdk.raw.searchFailed":
     "Originalunterhaltungen konnten nicht durchsucht werden. Bitte wiederholen Sie den Vorgang.",
   "sdk.raw.recent": "Letzte Originalunterhaltungen",
+  "sdk.raw.empty":
+    "Noch keine Originalunterhaltungen. Verbinde eine Quelle, damit sie hier erscheinen.",
+  "sdk.raw.total": "{count} Originalunterhaltungen",
+  "sdk.raw.total.one": "{count} Originalunterhaltung",
+  "memory:当前使用基础记忆。新对话会保存为原始记录，不会生成高级记忆；以前生成的高级记忆仍会保留，但当前不会显示或参与记忆召回。":
+    "Der Basisspeicher ist aktiv. Neue Unterhaltungen werden als Originale gespeichert und erzeugen keine erweiterten Erinnerungen. Vorhandene erweiterte Erinnerungen bleiben gespeichert, werden aber nicht angezeigt oder abgerufen.",
+  "memory:当前使用智能记忆。新对话会由模型整理为高级记忆。":
+    "Der intelligente Speicher ist aktiv. Das Modell verarbeitet neue Unterhaltungen zu erweiterten Erinnerungen.",
+  "memory:当前使用深度记忆。新对话会生成高级记忆，并由知识图谱和 evolve 继续整合。":
+    "Der tiefe Speicher ist aktiv. Neue Unterhaltungen erzeugen erweiterte Erinnerungen, die Wissensgraph und evolve weiter zusammenführen.",
   "sdk.raw.found": "{count} Ergebnisse",
   "sdk.raw.found.one": "{count} Ergebnis",
   "memoryInspector.emptyHint":
@@ -146,6 +160,7 @@ export const germanMessages: Record<MessageKey, string> = {
   "selectedMemory.save": "Speichern",
   "selectedMemory.author.user": "Sie",
   "selectedMemory.author.agent": "Assistent",
+  "selectedMemory.author.tool": "Tool",
   "selectedMemory.sourceUnavailable":
     "Quellberechtigungen haben sich geändert oder der Originaltext ist nicht verfügbar.",
   "selectedMemory.related": "Zugehörige Erinnerung",
@@ -222,7 +237,6 @@ export const germanMessages: Record<MessageKey, string> = {
   "memory:整理需要处理": "Verarbeitung erfordert Aufmerksamkeit",
   "memory:正在整理记忆": "Erinnerungen werden verarbeitet",
   "memory:整理状态": "Verarbeitungsstatus",
-  "memory:重新整理": "Neu verarbeiten",
   "memory:自动提炼范围": "Automatisches Extraktionsfenster",
   "memory:手动提炼下一批": "Nächsten Stapel manuell extrahieren",
   "memory:刷新核对": "Aktualisieren und prüfen",
@@ -249,10 +263,6 @@ export const germanMessages: Record<MessageKey, string> = {
   "memory:处理（操作）": "Verarbeiten",
   "memory:{count} 条原话": "{count} Originalauszüge",
   "memory:{count} 条原话.one": "{count} Originalauszug",
-  "memory:有 {count} 段对话的整理结果不确定":
-    "Verarbeitungsergebnisse für {count} Unterhaltungen sind unklar",
-  "memory:有 {count} 段对话的整理结果不确定.one":
-    "Verarbeitungsergebnis für {count} Unterhaltung ist unklar",
   "memory:{count} 次整理已完成": "{count} Verarbeitungsläufe abgeschlossen",
   "memory:{count} 次整理已完成.one": "{count} Verarbeitungslauf abgeschlossen",
   "memory: · {count} 条在窗口外（原文可搜）":
@@ -713,6 +723,8 @@ export const germanMessages: Record<MessageKey, string> = {
   nativeDevelopmentUnavailable: " (in Entwicklung nicht verfügbar)",
   nativeOpen: "{product} öffnen",
   nativeQuit: "{product} beenden (Hintergrunddienst läuft weiter)",
+  nativeQuitStopsService:
+    "{product} beenden (Gedächtnisdienst wird ebenfalls beendet)",
   nativeLoginError:
     "Starteinstellung bei Anmeldung konnte nicht geändert werden. Bitte wiederholen Sie den Vorgang.",
   nativeMoveTitle: "Verschieben Sie MemHub zuerst nach „Programme“",
@@ -979,6 +991,19 @@ export const germanMessages: Record<MessageKey, string> = {
   设置分组: "Einstellungsbereiche",
   记忆模型: "Erinnerungsmodell",
   当前模型: "Aktuelles Modell",
+  "分别管理记忆整理与搜索所使用的模型。":
+    "Verwalten Sie die Modelle für die Aufbereitung und Suche von Erinnerungen getrennt.",
+  记忆整理: "Erinnerungen aufbereiten",
+  "把会话理解并整理成可长期使用的记忆。":
+    "Verarbeitet Unterhaltungen zu langfristig nutzbaren Erinnerungen.",
+  记忆搜索: "Erinnerungen durchsuchen",
+  "在需要时找到与你的问题最相关的记忆。":
+    "Findet bei Bedarf die Erinnerungen, die für Ihre Frage am relevantesten sind.",
+  "本地内置（推荐）": "Lokal integriert (empfohlen)",
+  "Embedding · 配置记忆整理后可自定义":
+    "Embedding · Nach Einrichtung der Erinnerungsaufbereitung anpassbar",
+  "Embedding · 本机处理，无需额外配置":
+    "Embedding · Lokale Verarbeitung, keine zusätzliche Einrichtung erforderlich",
   "正在读取模型…": "Modell wird geladen…",
   模型状态暂不可读: "Modellstatus nicht verfügbar",
   尚未配置模型: "Kein Modell eingerichtet",
@@ -1043,7 +1068,7 @@ export const germanMessages: Record<MessageKey, string> = {
     "Erinnerungen weiter synchronisieren, verarbeiten und bereitstellen, ohne die App zu öffnen.",
   导出日志: "Protokolle exportieren",
   "把本机运行日志打包成一个文件，发给开发排查。":
-    "Packen Sie lokale Diagnoseprotokolle in eine Datei, um sie an den Support zu senden.",
+    "Packt alle lokalen Protokolle. Sie können Gesprächsinhalte oder lokale Pfade enthalten; nur mit vertrauenswürdigen Entwicklern teilen.",
   "确定退出 One Memory 界面吗？": "MemHub-Fenster beenden?",
   "后台服务会继续同步、整理和提供记忆。":
     "Der Hintergrunddienst synchronisiert, verarbeitet und liefert Erinnerungen weiter.",
@@ -1103,6 +1128,23 @@ export const germanMessages: Record<MessageKey, string> = {
     "Der Erinnerungszugriff wurde widerrufen; {name} kann keine Erinnerungen mehr abfragen. Die vollständige Entfernung konnte nicht bestätigt werden; prüfen Sie diese Pfade manuell: {paths}.",
   appRemovalReview:
     "Vollständige Entfernung der Verbindung konnte nicht bestätigt werden. Prüfen Sie diese Pfade manuell: {paths}.",
+  appProfilesLabel: "Profile von {name}",
+  appProfileOn: "{profile}: verbunden",
+  appProfileOff: "{profile}: nicht verbunden",
+  appProfilesHint:
+    "Der Schalter installiert für jedes erkannte Profil die Erinnerungsverbindung und erteilt den Zugriff; beim Ausschalten wird er für alle widerrufen. Solange er eingeschaltet ist, werden neue Profile automatisch verbunden.",
+  appProfilesNone:
+    "Es wurde kein Profil von {name} erkannt. Legen Sie ein Profil an und kehren Sie dann zu dieser Seite zurück.",
+  appProfilesConnectFailed:
+    "Diese Profile konnten nicht verbunden werden: {profiles}. Die übrigen Profile bleiben erhalten. {reason}",
+  appProfilesDisconnectFailed:
+    "Diese Profile konnten nicht getrennt werden und können weiterhin Erinnerungen nutzen: {profiles}. Bitte versuchen Sie es erneut. {reason}",
+  appProfilesRevokedRetained:
+    "Der Erinnerungszugriff dieser Profile wurde widerrufen, aber nicht alle Verbindungsdateien wurden entfernt; prüfen Sie sie: {profiles}.",
+  appProfileNameUnsupported:
+    "Profilnamen dürfen nur Kleinbuchstaben, Ziffern und Bindestriche enthalten, höchstens 32 Zeichen",
+  "apps.autoHostProfilesFailed":
+    "Diese Profile von {name} konnten nicht automatisch verbunden werden ({profiles}){reason}.",
   "Cursor 的连接凭证已更新。请完全退出并重新打开 Cursor，再开始新对话。":
     "Die Verbindungs-Anmeldedaten von Cursor haben sich geändert. Beenden Sie Cursor vollständig und öffnen Sie es erneut, bevor Sie eine neue Unterhaltung beginnen.",
   连接其他工具: "Andere Tools verbinden",
@@ -1213,6 +1255,9 @@ export const germanMessages: Record<MessageKey, string> = {
   "少一些重复交代，多一些理解。": "Weniger Wiederholung. Mehr Verständnis.",
   onboardingMoreApps: "Für mehr scrollen · {count} Apps verbleibend",
   "onboardingMoreApps.one": "Für mehr scrollen · {count} App verbleibend",
+  onboardingMoreImportApps: "Horizontal scrollen · Noch {count} Apps",
+  onboardingImportChecking:
+    "Importergebnis wird geprüft; Ihre Auswahl bleibt erhalten",
   onboardingAllApps: "Alle {count} Apps angezeigt",
   默认位置: "Standardort",
   自定义位置: "Eigener Ort",
@@ -1434,6 +1479,16 @@ export const germanMessages: Record<MessageKey, string> = {
     "Verbindung fehlgeschlagen. Prüfen Sie Modell, Schlüssel und Empfänger.",
   "配置或测试结果暂未确认，请核对后重试。":
     "Konfiguration oder Testergebnis konnte nicht bestätigt werden. Prüfen Sie sie vor dem erneuten Versuch.",
+  "索引更新没有完成，仍在使用原来的搜索模型。请检查连接后重试。":
+    "Die Indexaktualisierung wurde nicht abgeschlossen. Das bisherige Suchmodell wird weiterhin verwendet. Prüfen Sie die Verbindung und versuchen Sie es erneut.",
+  "上次模型测试结果仍待核对，请稍后重试。":
+    "Das Ergebnis des letzten Modelltests muss noch geprüft werden. Versuchen Sie es später erneut.",
+  "模型写入暂时关闭。请等待索引维护完成后重试。":
+    "Modellschreibvorgänge sind vorübergehend pausiert. Warten Sie, bis die Indexwartung abgeschlossen ist, und versuchen Sie es erneut.",
+  "模型未能确认启用，请在设置中核对。":
+    "Die Aktivierung des Modells konnte nicht bestätigt werden. Prüfen Sie dies in den Einstellungen.",
+  "已保存的模型配置暂时无法读取，不会重复创建。请重试刷新。":
+    "Die gespeicherte Modellkonfiguration kann vorübergehend nicht gelesen werden. Es wird kein Duplikat erstellt. Aktualisieren Sie erneut.",
   所选连接已启用: "Ausgewählte App-Verbindungen sind aktiviert",
   本次未选择应用连接: "Diesmal keine App-Verbindung ausgewählt",
   尚未填写接收方: "Kein Empfänger eingegeben",
@@ -1493,11 +1548,35 @@ export const germanMessages: Record<MessageKey, string> = {
   "apps.back": "Zurück zur Startseite",
   "apps.overview": "Erinnerungsübersicht",
   "apps.memories": "Gespeicherte Erinnerungen",
+  "apps.rawConversations": "Originalunterhaltungen",
+  "apps.rawSaving": "Wird gespeichert",
+  "apps.rawSavingCompact": "Wird gespeichert",
+  "apps.rawSavingStatus": "Speicherstatus",
+  "apps.rawSavingDetail":
+    "Originalunterhaltungen werden ohne generatives Modell gespeichert",
+  "apps.rawNoExcerpt": "Kein anzeigbarer Benutzertext in dieser Unterhaltung",
+  "apps.rawConversation": "Originalunterhaltung",
+  "apps.rawSaved": "Originalunterhaltung gespeichert",
+  "apps.rawEmpty": "Noch keine Originalunterhaltungen gespeichert",
+  "apps.rawCheckedEmpty":
+    "Geprüft: keine anzeigbaren Aktualisierungen der Originalunterhaltungen",
+  "apps.memoryCheckedEmpty":
+    "Geprüft: keine anzeigbaren Erinnerungsaktualisierungen",
+  "apps.recentEmptyCompact": "Keine Updates",
+  "apps.rawWaiting": "Gespeicherte Originalunterhaltungen erscheinen hier",
+  "apps.checkedRecent": "Aktueller Inhalt geprüft",
+  "apps.currentMode": "Aktueller Modus",
+  "apps.mode.lite": "Basisspeicher (lite)",
+  "apps.mode.pro": "Intelligenter Speicher (pro)",
+  "apps.mode.ultra": "Tiefenspeicher (ultra)",
   "apps.readingCount": "Lokale Erinnerungen werden geprüft…",
+  "apps.rawReadingCount": "Originalunterhaltungen werden geprüft…",
   "apps.startingRetry":
     "Der Hintergrunddienst startet; die Anzeige wird automatisch aktualisiert",
   "apps.countWillUpdate":
     "Die Anzahl der Erinnerungen wird automatisch aktualisiert",
+  "apps.rawCountWillUpdate":
+    "Die Anzahl der Originalunterhaltungen wird automatisch aktualisiert",
   "apps.showingPrevious":
     "Vorherige Daten werden angezeigt; die Anzeige wird automatisch aktualisiert",
   "apps.unreadable": "Nicht verfügbar",
@@ -1598,6 +1677,8 @@ export const germanMessages: Record<MessageKey, string> = {
   "apps.revision": "Version {count}",
   "apps.conversationTime": "Unterhaltungszeit",
   "apps.importTime": "Importzeit",
+  "apps.writeTime": "Schreibzeit",
+  "apps.updateTime": "Aktualisierungszeit",
   "apps.incompleteCalls":
     " · Einige Aufrufe wurden nicht aufgezeichnet; die Liste ist möglicherweise unvollständig",
   "apps.timeoutWarning":
@@ -1605,6 +1686,8 @@ export const germanMessages: Record<MessageKey, string> = {
   "apps.autoHostFailed":
     "{name} konnte nicht automatisch verbunden werden{reason}.",
   "apps.failureReason": ": {reason}",
+  "apps.desktopBridgeUnavailable":
+    "Die Ein-Klick-Verbindung muss in der MemHub-Desktop-App erfolgen",
   "apps.autoSyncFailed":
     "Fortlaufende Synchronisierung konnte für {name} nicht automatisch aktiviert werden. {reason}",
   "apps.noAutoRetry": "Es erfolgt kein automatischer neuer Versuch.",
@@ -1684,8 +1767,6 @@ export const germanMessages: Record<MessageKey, string> = {
     "Ergebnisse der Stapelaktion bleiben erhalten, aber die Liste konnte nicht aktualisiert werden. Sie wird später automatisch neu geladen.",
   "memory:召回范围已保存，但列表刷新失败。请稍后重新打开记忆页。":
     "Abrufbereich gespeichert, aber die Liste konnte nicht aktualisiert werden. Öffnen Sie „Erinnerungen“ später erneut.",
-  "memory:重新整理可能再次调用模型。只会重跑结果不确定的对话，是否继续？":
-    "Eine erneute Verarbeitung kann das Modell aufrufen. Nur Unterhaltungen mit unklaren Ergebnissen werden wiederholt. Fortfahren?",
   "memory:原始对话暂时无法读取":
     "Originalunterhaltungen konnten nicht geladen werden",
   "memory:没有匹配的原始对话": "Keine passenden Originalunterhaltungen",
@@ -2032,6 +2113,20 @@ export const germanMessages: Record<MessageKey, string> = {
   "memory:还没有开始生成记忆：{reason}（{count} 条待处理）":
     "Es werden keine Erinnerungen erstellt: {reason} ({count} ausstehend)",
   "memory:去配置生成模型": "Generierungsmodell einrichten",
+  "memory:模型暂停处理": "Modell pausiert",
+  "memory:模型配置有问题（{reason}），记忆暂停处理，已有 {count} 条在排队":
+    "Problem mit der Modellkonfiguration ({reason}). Die Verarbeitung ist pausiert; {count} Einträge warten",
+  "memory:模型配置有问题（{reason}），记忆暂停处理，已有 {count} 条在排队.one":
+    "Problem mit der Modellkonfiguration ({reason}). Die Verarbeitung ist pausiert; {count} Eintrag wartet",
+  "memory:API Key 无效或没有权限":
+    "API-Schlüssel ungültig oder ohne Berechtigung",
+  "memory:找不到模型或地址": "Modell oder Adresse nicht gefunden",
+  "memory:请求过于频繁，被服务商限流":
+    "zu viele Anfragen, vom Anbieter gedrosselt",
+  "memory:模型响应超时": "Zeitüberschreitung bei der Modellantwort",
+  "memory:模型服务出错": "Fehler im Modelldienst",
+  "memory:无法连接模型服务": "Modelldienst nicht erreichbar",
+  "memory:连接模型服务失败": "Verbindung zum Modelldienst fehlgeschlagen",
   "calls.directHost": "Direkter Aufruf (Diagnose)",
   "calls.headline.timedOut":
     "{host} konnte Erinnerungen nicht rechtzeitig abfragen",
@@ -2041,6 +2136,17 @@ export const germanMessages: Record<MessageKey, string> = {
   "calls.headline.empty": "{host} hat keine passenden Erinnerungen gefunden",
   "calls.headline.found": "{host} hat {count} verwandte Einträge gefunden",
   "calls.headline.found.one": "{host} hat {count} verwandten Eintrag gefunden",
+  "calls.headline.rawOnly":
+    "{host} hat {count} ursprüngliche Unterhaltungen gefunden",
+  "calls.headline.rawOnly.one":
+    "{host} hat {count} ursprüngliche Unterhaltung gefunden",
+  "calls.headline.memoryOnly": "{host} hat {count} Erinnerungen gefunden",
+  "calls.headline.memoryOnly.one": "{host} hat {count} Erinnerung gefunden",
+  "calls.headline.mixed":
+    "{host} hat {memories} Erinnerungen · {raw} ursprüngliche Unterhaltungen gefunden",
+  "calls.headline.mixed.one":
+    "{host} hat {memories} Erinnerung · {raw} ursprüngliche Unterhaltungen gefunden",
+  "calls.headline.completed": "Aufruf von {host} abgeschlossen",
   "calls.detail.timedOut":
     "Erinnerungen werden verarbeitet. Bei der Abfrage kam es zu einer Zeitüberschreitung, daher enthielt diese Antwort keine Erinnerungen.",
   "calls.detail.unavailable":

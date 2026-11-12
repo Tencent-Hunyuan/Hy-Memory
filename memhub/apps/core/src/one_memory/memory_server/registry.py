@@ -57,6 +57,11 @@ class WriteRecord:
     detail: str = ""
     raw_ids: tuple[str, ...] = ()
     memory_ids: tuple[str, ...] = ()
+    #: The stable code of the last failure of a job still being worked on
+    #: (or of a failed one).
+    error_code: str | None = None
+    #: When a waiting job is next tried, if a retry wait holds it.
+    next_retry_at: str | None = None
 
 
 def _now() -> str:

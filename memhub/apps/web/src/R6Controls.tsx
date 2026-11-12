@@ -13,24 +13,33 @@ type ButtonProps = ButtonHTMLAttributes<HTMLButtonElement> & {
 
 export function R6Button({
   variant = "secondary",
-  pending = false,
+  pending,
   disabled,
   children,
   className = "",
   type = "button",
   ...props
 }: ButtonProps) {
+  const supportsPending = pending !== undefined;
+  const busy = pending === true;
   return (
     <button
       {...props}
       type={type}
       className={`r6-button ${className}`}
       data-variant={variant}
-      disabled={disabled || pending}
-      aria-busy={pending || undefined}
+      data-pending-capable={supportsPending || undefined}
+      disabled={disabled || busy}
+      aria-busy={busy || undefined}
     >
       <span className="r6-button-label">{children}</span>
-      {pending && <span className="r6-button-spinner" aria-hidden="true" />}
+      {supportsPending ? (
+        <span
+          className="r6-button-spinner"
+          data-visible={busy || undefined}
+          aria-hidden="true"
+        />
+      ) : null}
     </button>
   );
 }
@@ -40,7 +49,7 @@ export function R6Stepper({ active }: { active: 1 | 2 | 3 }) {
   return (
     <nav className="r6-stepper" aria-label={text("首次设置进度")}>
       <ol>
-        {["导入历史", "连接应用", "沉淀记忆"].map((label, index) => (
+        {["导入历史", "连接应用", "记忆模式"].map((label, index) => (
           <li
             key={label}
             aria-current={active === index + 1 ? "step" : undefined}

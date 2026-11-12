@@ -28,6 +28,22 @@ permissions:
 jobs:
   sdk:
     runs-on: ubuntu-24.04
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_DB: hy_memory_test
+          POSTGRES_USER: hy_memory
+          POSTGRES_PASSWORD: hy_memory_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U hy_memory -d hy_memory_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      HY_MEMORY_TEST_POSTGRES_DSN: postgresql://hy_memory:hy_memory_test@localhost:5432/hy_memory_test
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
@@ -36,11 +52,14 @@ jobs:
         with:
           python-version: "3.12"
           enable-cache: true
-      - run: uv sync --extra dev --extra faiss --extra qdrant
+      - run: uv sync --extra dev --extra faiss --extra qdrant --extra postgres
+      - name: Test Chroma content updates with an isolated HTTP server
+        run: uv run pytest tests/test_chroma_content_update.py -q -o log_cli=false -m "integration or not integration"
       - run: uv run pytest tests/ -q -o log_cli=false
 
   memhub:
     runs-on: ubuntu-latest
+    timeout-minutes: 45
     defaults:
       run:
         working-directory: memhub
@@ -78,11 +97,7 @@ jobs:
           pnpm fetch:embedding-model
           uv run --directory apps/core python -c \
             "from one_memory.embedding_assets import assets_present, verify_assets; assert assets_present(); verify_assets()"
-      - name: Test public Core smoke suite
-        run: >-
-          bash scripts/run-tests-isolated.sh core-pr
-          tests/test_core_test_reporting.py
-          tests/test_import_api.py
-          tests/test_recent_first_import.py
-          tests/test_source_session_count_api.py
-          tests/test_schema_migrations.py
+      # The whole PR suite, not a hand-picked smoke list: files left out of a
+      # named list broke on main unnoticed. ~4.8k tests, about 5 minutes.
+      - name: Test Core (full core-pr suite)
+        run: bash scripts/run-tests-isolated.sh core-pr -q

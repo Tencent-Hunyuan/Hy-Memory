@@ -258,7 +258,7 @@ export const COMMANDS: readonly CommandDescriptor[] = [
   {
     name: "sources",
     summary:
-      "列出来源，直接接入来源，或按 request id 查接入回执。connect 不加 --import 只授权（处理保持冻结：不导入历史、不扫描新会话）；加 --import 同时导入历史并开启持续同步，返回 request id。目录来自环境变量覆盖的来源必须加 --confirm-overrides。Hermes 的每个 profile 是一个独立用户：用 --user-id 和 --root 接入，授权并导入历史（会自动排除 ~/.hermes/profiles/**，各用户互不读取）。",
+      "列出来源，直接接入来源，或按 request id 查接入回执。connect 不加 --import 只授权（处理保持冻结：不导入历史、不扫描新会话）；加 --import 同时导入历史并开启持续同步，返回 request id。目录来自环境变量覆盖的来源必须加 --confirm-overrides。Hermes 的每个 profile 是一个独立用户：用 --user-id 和 --root 接入，授权并导入历史（任何层级的 profiles/ 目录都会被排除，各用户互不读取）。--root 不能是 profiles 目录本身，也不能与另一个用户的 Hermes 目录相同或互相包含（~/.hermes 与 ~/.hermes/profiles/<name> 除外）。",
     usage:
       "memhub sources list [--json]\n            memhub sources connect <id> [<id> ...] [--import] [--confirm-overrides] [--request-id <uuid>] [--json]\n            memhub sources connect hermes --user-id <id> --root <path> [--import] [--request-id <uuid>] [--json]\n            memhub sources connect --all-detected [--import] [--confirm-overrides] [--json]\n            memhub sources receipt <request-id> [--json]",
     options: [
@@ -270,7 +270,7 @@ export const COMMANDS: readonly CommandDescriptor[] = [
       {
         flag: "--user-id <id>",
         summary:
-          "只用于 hermes：这条接入属于哪个用户（默认 local）。和 --root 一起接入一个 Hermes profile，例如 --user-id wife --root ~/.hermes/profiles/wife；其他来源只能是 local。",
+          "只用于 hermes：这条接入属于哪个用户（默认 local）。和 --root 一起接入一个 Hermes profile，例如 --user-id wife --root ~/.hermes/profiles/wife；用户 ID 不必等于 profile 名，例如 --user-id wife-work --root ~/.hermes/profiles/wife:work。其他来源只能是 local。",
       },
       {
         flag: "--root <path>",
@@ -369,7 +369,7 @@ export const COMMANDS: readonly CommandDescriptor[] = [
       {
         flag: "--config-file <path>",
         summary:
-          "有界 JSON 模型配置，不能含 api_key；edit 的补丁必须带 expected_revision。",
+          '有界 JSON 模型配置，不能含 api_key；edit 的补丁必须带 expected_revision。服务拒绝 max_tokens（检测结果 output_token_parameter_rejected）时设 "output_token_parameter": "max_completion_tokens"。',
       },
       {
         flag: "--api-key-file <path>",
@@ -397,7 +397,7 @@ export const COMMANDS: readonly CommandDescriptor[] = [
   {
     name: "memories",
     summary:
-      "列出、搜索、查看、添加、修改或物理删除记忆（对话、工作、编码三个场景）。add 和 App 的「添加记忆」是同一个入口；delete 不可逆，需 --yes。",
+      "列出、搜索、查看、添加、修改或物理删除记忆（对话、工作、编码三个场景）。add 和 App 的「添加记忆」是同一个入口；delete 不可逆，需 --yes；要删的记忆已不存在（或不属于该用户）时提示未找到，按已删除处理并退出 0。",
     usage:
       "memhub memories list [--scene <all|chat|working|coding>] [--source <id>] [--query <text>] [--status <state>] [--offset <n>] [--limit <n>] [--user-id <id>] [--json]\n            memhub memories show <memory-id> [--kind <kind>] [--variant <variant>] [--user-id <id>] [--json]\n            memhub memories add <text> [--request-id <uuid>] [--user-id <id>] [--json]\n            memhub memories add --content-file <path> [--request-id <uuid>] [--user-id <id>] [--json]\n            memhub memories add-status <request-id> [--user-id <id>] [--json]\n            memhub memories update <memory-id> --content-file <path> [--kind <kind>] [--variant <variant>] [--task <text>] [--user-id <id>] [--json]\n            memhub memories delete <memory-id> [--kind <kind>] [--variant <variant>] [--yes] [--user-id <id>] [--json]",
     options: [
@@ -461,13 +461,19 @@ export const COMMANDS: readonly CommandDescriptor[] = [
   {
     name: "settings",
     summary:
-      "查看或切换记忆模式（lite / pro / ultra）。lite 不调用模型，只在原始对话里检索；pro 由模型提取记忆（System 1）；ultra 在 pro 之上每晚自动进化（System 2，使用知识图谱）。任何模式都保留全部原始对话。切换不迁移数据：已处理的不会重做，排队中的和新的按新模式处理；需 --yes，不加时只显示计划。环境变量 ONE_MEMORY_GRAPH_STORE 会强制 ultra。settings features 查看或开关 SDK 的可选检索与提取功能（全局设置，默认全部保持 SDK 默认值）：graph_rerank 图谱重排（仅 ultra）、same_series_timeline 同系列时间线（需 graph_rerank）、episode_recall 片段召回（pro / ultra，需先开 session_episodes 写入片段）、session_episodes 片段写入、episode_summary 片段摘要（每个片段一次模型调用）、intention 意图提取（默认开）、few_shot 提取示例；set 需 --yes，不加时只显示计划；reset 恢复默认值。settings language 查看或设置界面语言（App 切换语言时会自动设置）：简体中文（zh-Hans）和 system 不指定 SDK 语言，SDK 照旧自动识别中文或英文；其余语言（en、zh-Hant、ja、es、de、pt、fr、ko、ru、id）会让提取等 SDK 提示使用该语言，立即生效。",
+      "查看或切换记忆模式（lite / pro / ultra）。lite 不调用模型，只在原始对话里检索；pro 由模型提取记忆（System 1）；ultra 在 pro 之上每晚自动进化（System 2，使用知识图谱）。任何模式都保留全部原始对话。切换不迁移数据：已处理的不会重做，排队中的和新的按新模式处理；需 --yes，不加时只显示计划。环境变量 ONE_MEMORY_GRAPH_STORE 会强制 ultra。settings features 查看或开关 SDK 的可选检索与提取功能（全局设置，默认全部保持 SDK 默认值）：graph_rerank 图谱重排（仅 ultra）、same_series_timeline 同系列时间线（需 graph_rerank）、episode_recall 片段召回（pro / ultra，需先开 session_episodes 写入片段）、session_episodes 片段写入、episode_summary 片段摘要（每个片段一次模型调用）、intention 意图提取（默认开）、intention_dedup 意图判重（默认开；关闭则检索与写入都不判重、不删除意图）、few_shot 提取示例，以及数值 intention_dedup_threshold 意图判重阈值（默认 0.95，可设 0.8–1.0）；set 需 --yes，不加时只显示计划；reset 恢复默认值。settings language 查看或设置界面语言（App 切换语言时会自动设置）：简体中文（zh-Hans）和 system 不指定 SDK 语言，SDK 照旧自动识别中文或英文；其余语言（en、zh-Hant、ja、es、de、pt、fr、ko、ru、id）会让提取等 SDK 提示使用该语言，立即生效。settings backends 查看或更换记忆存储后端（默认 Kuzu 图数据库 + Chroma 向量库，都是本机文件）：图数据库可选 kuzu、neo4j、memgraph，向量库可选 chroma、qdrant（需服务器）；FAISS 不支持。更换前先做连接测试，set / reset 需 --yes，不加时只显示计划；已有记忆留在原后端，不会迁移到新后端，也不会被删除，改回原后端即可再次看到。密码和 API key 只从文件读取（- 表示从管道读），保存在系统钥匙串里。",
     usage:
       "memhub settings mode [lite|pro|ultra] [--yes] [--json]\n" +
       "            memhub settings features [--json]\n" +
       "            memhub settings features set <name>=<true|false> [...] [--yes] [--json]\n" +
+      "            memhub settings features set intention_dedup_threshold=<0.8-1.0> [--yes] [--json]\n" +
+      "            memhub settings features set agent_max_tokens=<512-32000> [--yes] [--json]\n" +
       "            memhub settings features reset [<name> ...] [--json]\n" +
-      "            memhub settings language [<code>|system] [--json]",
+      "            memhub settings language [<code>|system] [--json]\n" +
+      "            memhub settings backends [show] [--json]\n" +
+      "            memhub settings backends set [--graph <kuzu|neo4j|memgraph>] [--graph-url <bolt-url>] [--graph-user <name>] [--graph-database <name>] [--graph-password-file <path|->] [--vector <chroma|qdrant>] [--vector-host <host>] [--vector-port <port>] [--vector-prefix <prefix>] [--vector-api-key-file <path|->] [--adopt-existing-graph] [--yes] [--json]\n" +
+      "            memhub settings backends test [同 set 的后端参数] [--json]\n" +
+      "            memhub settings backends reset [--yes] [--json]",
     options: [
       {
         flag: "mode [lite|pro|ultra]",
@@ -476,7 +482,7 @@ export const COMMANDS: readonly CommandDescriptor[] = [
       {
         flag: "features set <name>=<true|false>",
         summary:
-          "开关一个或多个 SDK 功能；功能在当前模式下不生效时会注明原因（例如 graph_rerank 需要 ultra）。",
+          "开关一个或多个 SDK 功能；功能在当前模式下不生效时会注明原因（例如 graph_rerank 需要 ultra）。intention_dedup_threshold 取 0.8–1.0 的数值；agent_max_tokens 取 512–32000 的整数（evolve、System 2 的输出上限，默认 2000）。",
       },
       {
         flag: "features reset [<name> ...]",
@@ -486,6 +492,31 @@ export const COMMANDS: readonly CommandDescriptor[] = [
         flag: "language [<code>|system]",
         summary:
           "不带参数显示界面语言和 SDK 提示语言；带语言代码（en、zh-Hans、zh-Hant、ja、es、de、pt、fr、ko、ru、id）或 system 时设置。",
+      },
+      {
+        flag: "backends [show|set|test|reset]",
+        summary:
+          "show 显示当前存储后端、连接状态和在这些后端上哪些功能可用；test 只做连接测试、不保存；set 先测试连接再显示计划，加 --yes 后保存；reset 恢复 Kuzu + Chroma（加 --yes）。只写一侧时另一侧保持不变。",
+      },
+      {
+        flag: "--graph <kuzu|neo4j|memgraph>",
+        summary:
+          "图数据库（只在 ultra 模式使用）。neo4j / memgraph 需要 --graph-url bolt://<host>:7687，可选 --graph-user、--graph-database 和 --graph-password-file。",
+      },
+      {
+        flag: "--vector <chroma|qdrant>",
+        summary:
+          "向量库。qdrant 需要 --vector-host（可选 --vector-port，默认 6333；--vector-prefix 默认使用本资料空间的命名，避免多个 MemHub 共用一台服务器时互相读写；--vector-api-key-file）。",
+      },
+      {
+        flag: "--graph-password-file / --vector-api-key-file <path|->",
+        summary:
+          "从文件读取密码或 API key（必须是自己拥有、权限 600 的普通文件；- 表示从管道读入）；不写则保留已保存的值。",
+      },
+      {
+        flag: "--adopt-existing-graph",
+        summary:
+          "图数据库里已经有记忆图谱时（图谱没有按资料空间隔离，可能属于另一个 MemHub），确认接管它。",
       },
       CONFIRM_OPTION,
       JSON_OPTION,
@@ -767,24 +798,25 @@ export const COMMANDS: readonly CommandDescriptor[] = [
   {
     name: "backup",
     summary:
-      "备份与恢复主库（来源、写入队列、配置）。注意：不包含记忆本身——SDK 记忆库 hy-memory/ 不在备份里，restore 也不会替换它。create 的目标要放在 <数据目录>/backups/ 下才能被 restore 使用；restore 覆盖现有主库，需 Runtime 已停止，并加 --yes 与 --confirm <同一个备份路径>。",
+      "备份与恢复主库（来源、写入队列、配置）和全部记忆（记忆库 hy-memory/；Qdrant 上的记忆经 SDK 导出）。create 先显示预计大小，加 --yes 才写入；备份期间记忆写入短暂暂停后自动恢复。目标要放在 <数据目录>/backups/ 下才能被 restore 使用。restore 替换主库和记忆、核对条数、不一致整体回滚，需 Runtime 已停止，并加 --yes 与 --confirm <同一个备份路径>。旧格式备份（单个 .sqlite3）不包含记忆本身，只恢复主库。",
     usage:
-      "memhub backup create --target <path> [--json]\n" +
+      "memhub backup create --target <path> [--yes] [--json]\n" +
       "            memhub backup restore --source <path> [--yes --confirm <path>] [--json]",
     options: [
       {
         flag: "--target <path>",
-        summary: "create 的备份文件路径，必须在数据目录内。",
+        summary:
+          "create 的备份目录：<数据目录>/backups/ 下尚不存在的名字（backups/x 写成 backups/x.memhub-backup）。",
       },
       {
         flag: "--source <path>",
         summary:
-          "restore 的备份文件，必须是 <数据目录>/backups/ 下的受管备份。",
+          "restore 的备份：<数据目录>/backups/ 下的 .memhub-backup 目录（含记忆），或旧格式 .sqlite3 文件（只含主库）。",
       },
       {
         ...DESTRUCTIVE_CONFIRM_OPTION,
         summary:
-          "restore 必须加，且要同时给出 --confirm <path>；create 不需要。",
+          "create 加了才写入（不加只显示预计大小）；restore 必须加，且要同时给出 --confirm <path>。",
       },
       {
         flag: "--confirm <path>",

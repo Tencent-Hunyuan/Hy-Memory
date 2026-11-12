@@ -24,6 +24,7 @@
 | `MEMORY_LLM_MODEL` | `gpt-4.1-nano` | 模型名 |
 | `MEMORY_LLM_API_KEY` | — | 回退：`LLM_API_KEY`、`OPENAI_API_KEY` |
 | `MEMORY_LLM_BASE_URL` | — | 回退到 `LLM_BASE_URL` |
+| `MEMORY_LLM_OUTPUT_TOKEN_PARAMETER` | `max_tokens` | Chat Completions output limit field; set to `max_completion_tokens` for endpoints that require it. Applies to the SDK LLM provider. `MEMORY_LLM_EXTRA_BODY` is merged afterwards and may override or add either limit field; omit those keys when using this setting. |
 | `MEMORY_LLM_TEMPERATURE` | `0.1` | 统一温度；`none` / `omit` / 空值表示不发送 |
 | `MEMORY_LLM_OMIT_TEMPERATURE` | `false` | `true` 时完全不发送 `temperature` |
 | `MEMORY_LLM_MAX_TOKENS` | `1024` | 通用生成上限 |
@@ -93,6 +94,17 @@ Graph 写入和读侧 Rerank 的高级开关见 [pro_graph_design.md](pro_graph_
 | `MEMORY_MYSQL_DATABASE` | `hy_memory` | MySQL 数据库 |
 | `MEMORY_MYSQL_POOL_SIZE` | `10` | 连接池大小 |
 | `MEMORY_MYSQL_POOL_RECYCLE` | `3600` | 连接回收周期，秒 |
+
+## Working / Coding 业务存储
+
+| 变量 | 默认值 | 说明 |
+|---|---|---|
+| `MEMORY_BUSINESS_STORE` | `sqlite` | `sqlite` / `postgres`；不改变向量库或审计缓存后端 |
+| `MEMORY_POSTGRES_DSN` | — | PostgreSQL 连接串，仅 postgres 后端需要 |
+| `MEMORY_POSTGRES_SCHEMA` | `hy_memory` | schema 前缀，1–48 个小写字母、数字或下划线，不能以数字开头 |
+| `MEMORY_POSTGRES_CONNECT_TIMEOUT` | `10` | 建连超时秒数，必须为正整数 |
+
+详见[业务存储后端](business_storage.md)。切换配置不自动迁移已有 SQLite 数据。
 
 ## 写入、场景与 Query Rewrite
 
@@ -182,8 +194,28 @@ SDK 不设置 Rerank Search 并发上限。开启后模型在 `HyMemoryClient` �
 | `MEMORY_RECALL_STRENGTH_TAU` | `180` | 衰减时间常数，天 |
 | `MEMORY_RECALL_ACCESS_TRACKING` | `true` | Strength 开启时是否回写访问信息 |
 | `MEMORY_ENTITY_STORE_ENABLED` | `false` | 是否维护独立 entity collection；当前 Reader 不直接读取 |
+| `MEMORY_INTENTION_DEDUP_ENABLED` | `true` | 是否对 L7 Intention 判重（读侧和写入侧批内）；见下文 |
+| `MEMORY_INTENTION_DEDUP_THRESHOLD` | `MEMORY_DEDUP_THRESHOLD`，再缺省为 `0.95` | Intention 读侧判重的 cosine 阈值 |
 
 旧数据可调用当前公开方法 `client.build_entity_store(user_id)` 补建 Entity Store。
+
+Intention 判重：开启时（默认，与以往行为一致），Search 召回的 L7 Intention 中，
+同 `user_id` + 同 `agent_id` + `memory_at` 同一天 + `valid_until` 相同、且 cosine ≥ 阈值的
+条目视为复本，只返回最早写入的一条，其余在后台从向量库**删除**。判重不区分内容中的项目、
+对象等语义差异，内容高度相似但对象不同的意图可能被误删；写入时同一批抽取结果也会做一次
+批内判重。关闭后这两处都不判重，不隐藏、不丢弃、也不删除意图。两项对应
+`MemoryConfig.recall.intention_dedup_enabled` /
+`recall.intention_dedup_threshold`，按 client 生效，环境变量只提供默认值：
+
+```python
+client = HyMemoryClient.from_config({
+    "recall": {"intention_dedup_enabled": False},
+})
+```
+
+`MEMORY_DEDUP_THRESHOLD` 同时被写入侧批内意图判重和 dedup 内核使用；
+`MEMORY_INTENTION_DEDUP_THRESHOLD` 只影响读侧 Intention 判重，写入侧批内判重的阈值
+仍取 `MEMORY_DEDUP_THRESHOLD`。
 
 ## 日志、Trace 与历史
 
@@ -191,6 +223,7 @@ SDK 不设置 Rerank Search 并发上限。开启后模型在 `HyMemoryClient` �
 |---|---|---|
 | `MEMORY_LOG_LEVEL` | `INFO` | 运行日志级别 |
 | `MEMORY_LOG_FORMAT` | `text` | `text` / `json` |
+| `MEMORY_LOG_STREAM` | `stdout` | 控制台 DEBUG/INFO 日志的输出流：`stdout`（默认，双流分离）/ `stderr`（stdio 传输宿主设置，避免 SDK 日志破坏 stdout 上的协议帧）|
 | `MEMORY_LOG_DIR` | — | 统一日志根目录 |
 | `MEMORY_TRACE_LOG_DIR` | — | JSONL 日志目录的兼容旧名；优先使用 `MEMORY_LOG_DIR` |
 | `MEMORY_PIPELINE_LOG_ENABLED` | `true` | 是否写 pipeline JSONL 日志（`{MEMORY_LOG_DIR}/<subdir>/<date>.log`）；`false` 完全不写 |

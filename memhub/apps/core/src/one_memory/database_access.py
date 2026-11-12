@@ -111,9 +111,25 @@ MAIN_DATABASE_CHECKPOINT_WRITE_INTERVAL = 64
 MAIN_DATABASE_CHECKPOINT_SECONDS = 30.0
 
 # Advisory only: PASSIVE cannot force a frame past a long reader. Crossing this
-# threshold is a signal that the WAL is not converging and that read snapshots
-# or write volume need investigation.
+# threshold with frames still waiting to be copied back is a signal that the
+# WAL is not converging and that read snapshots or write volume need
+# investigation. A large file whose frames are all checkpointed is not: the
+# idle TRUNCATE below gives that space back.
 MAIN_DATABASE_WAL_WARN_BYTES = 512 * 1024 * 1024
+
+# What a WAL file is cut back to once a checkpoint has copied every frame and
+# the writer starts it over. Without a limit SQLite reuses the file in place
+# and never shrinks it, so one import peak left a 639 MB WAL behind for good
+# (#245). 64 MiB is about sixteen times what the default autocheckpoint (1000
+# pages) lets build up between checkpoints, so ordinary write bursts reuse the
+# file without growing and shrinking it each time, and it is still a tenth of
+# what that user's disk was left holding.
+MAIN_DATABASE_JOURNAL_SIZE_LIMIT_BYTES = 64 * 1024 * 1024
+
+# How long an idle TRUNCATE may wait for the writer or for a reader to leave.
+# It runs only when nothing holds the database; anyone arriving in the
+# meantime wins, and the checkpoint is tried again on the next pass.
+MAIN_DATABASE_IDLE_CHECKPOINT_WAIT_MS = 50
 
 
 def checkpoint_write_interval() -> int:
@@ -226,6 +242,75 @@ class _InTurn:
             self._line.remove(place)
 
 
+class _Checkpointer:
+    """The one thread that runs cadence checkpoints, for every main database.
+
+    A database asks for at most one checkpoint at a time: a request made
+    while one is already waiting is the same request. The checkpoint goes
+    through the database's own writer, in its line, like any other write.
+    A waiting request holds the database weakly: it must not keep alive a
+    database nobody else holds any more.
+    """
+
+    def __init__(self) -> None:
+        self._state = threading.Condition()
+        self._due: OrderedDict[int, weakref.ref[MainDatabase]] = OrderedDict()
+        self._running = 0
+        self._thread: threading.Thread | None = None
+
+    def request(self, database: "MainDatabase") -> None:
+        with self._state:
+            self._due.setdefault(id(database), weakref.ref(database))
+            if self._thread is None or not self._thread.is_alive():
+                self._thread = threading.Thread(
+                    target=self._run,
+                    name="one-memory-checkpoint",
+                    daemon=True,
+                )
+                self._thread.start()
+            self._state.notify_all()
+
+    def forget(self, database: "MainDatabase") -> None:
+        with self._state:
+            self._due.pop(id(database), None)
+            self._state.notify_all()
+
+    def wait_idle(self, timeout: float) -> bool:
+        """Whether every requested checkpoint has run within `timeout` seconds."""
+        with self._state:
+            return self._state.wait_for(lambda: not self._due and not self._running, timeout)
+
+    def _run(self) -> None:
+        while True:
+            with self._state:
+                self._state.wait_for(lambda: bool(self._due))
+                _key, reference = self._due.popitem(last=False)
+                database = reference()
+                if database is None:
+                    self._state.notify_all()
+                    continue
+                self._running += 1
+            try:
+                database._cadence_checkpoint()
+            except Exception:  # noqa: BLE001 - maintenance must not end the thread
+                logger.warning(
+                    "main_database_checkpoint_failed file=%s", database.path.name, exc_info=True
+                )
+            finally:
+                del database
+                with self._state:
+                    self._running -= 1
+                    self._state.notify_all()
+
+
+_checkpointer = _Checkpointer()
+
+
+def wait_for_cadence_checkpoints(timeout: float = 5.0) -> bool:
+    """Wait for the cadence checkpoints already requested; for tests and shutdown."""
+    return _checkpointer.wait_idle(timeout)
+
+
 def _locked() -> sqlite3.OperationalError:
     # Callers tell a busy database from a broken one by these, as they would
     # for SQLite's own refusal.
@@ -276,6 +361,8 @@ class MainDatabase:
         self._writes_since_checkpoint = 0
         self._last_checkpoint_at = time.monotonic()
         self._wal_warned_at = 0.0
+        #: Learned from the first checkpoint; turns WAL frames into bytes.
+        self._page_size = 4096
         self._reader_started_at: dict[int, float] = {}
 
     @contextmanager
@@ -542,24 +629,77 @@ class MainDatabase:
     def _checkpoint_from_maintenance(self, mode: str) -> tuple[int, int, int]:
         return self._checkpoint(mode, maintenance=True)
 
-    def _checkpoint(self, mode: str, *, maintenance: bool) -> tuple[int, int, int]:
+    def _checkpoint(
+        self,
+        mode: str,
+        *,
+        maintenance: bool,
+        busy_timeout_ms: int = WRITE_LOCK_WAIT_MS,
+    ) -> tuple[int, int, int]:
         normalized = mode.strip().upper()
         if normalized not in {"PASSIVE", "FULL", "RESTART", "TRUNCATE"}:
             raise ValueError("unsupported WAL checkpoint mode")
-        with self.write(autocommit=True, maintenance=maintenance) as connection:
+        with self.write(
+            autocommit=True, maintenance=maintenance, busy_timeout_ms=busy_timeout_ms
+        ) as connection:
             row = connection.execute(f"PRAGMA wal_checkpoint({normalized})").fetchone()
+            page_size = connection.execute("PRAGMA page_size").fetchone()
         if row is None or len(row) != 3:
             raise sqlite3.DatabaseError("SQLite returned an invalid checkpoint result")
+        if page_size is not None:
+            self._page_size = int(page_size[0])
         return int(row[0]), int(row[1]), int(row[2])
 
+    def idle(self) -> bool:
+        """Nobody holds or waits for a connection to this database right now."""
+        with self._state:
+            return (
+                self._writer_owner is None
+                and not self._reader_holders
+                and not len(self._write_line)
+                and not len(self._read_line)
+            )
+
+    def checkpoint_if_idle(self) -> tuple[int, int, int] | None:
+        """Give the WAL file back to the disk while nothing is using the database.
+
+        PASSIVE copies frames back but leaves the file its size; only TRUNCATE
+        empties it, and TRUNCATE has to wait for every reader to finish, so it
+        is attempted only when this process holds no checkout at all, and with
+        a wait of a few milliseconds. A busy result, or someone arriving in
+        between, is not a failure: the next idle pass tries again. Returns the
+        checkpoint result, or None when it was not attempted or not admitted.
+        """
+        if not self.idle() or self._wal_bytes() == 0:
+            return None
+        try:
+            return self._checkpoint(
+                "TRUNCATE",
+                maintenance=True,
+                busy_timeout_ms=MAIN_DATABASE_IDLE_CHECKPOINT_WAIT_MS,
+            )
+        except sqlite3.Error:
+            logger.debug("main_database_idle_checkpoint_skipped file=%s", self.path.name)
+            return None
+
     def _maybe_checkpoint_after_write(self) -> None:
-        """Checkpoint on a write cadence without opening another connection.
+        """Count a write, and hand a due cadence checkpoint to the checkpointer.
 
         SQLite's default autocheckpoint only runs when the writer itself
         crosses the page threshold. Production hit a state where the WAL grew
         to 13GB, so the main database needs its own bounded, observable
-        maintenance path. This runs after the caller's checkout has been reset
-        and only re-enters the same serialized writer queue.
+        maintenance path: every `checkpoint_write_interval()` writes or
+        `MAIN_DATABASE_CHECKPOINT_SECONDS`, whichever comes first.
+
+        The checkpoint itself used to run right here, on the thread that had
+        just written, as one more turn in the writer's line. That thread was
+        an import heartbeat or a durable lease renewal as often as not, and
+        it then waited behind the whole line a second time before it could
+        return. The idle TRUNCATE (#278) cannot replace the cadence: under a
+        sustained import the database is never idle, and that is exactly when
+        the WAL grows. So the cadence stays, and one checkpointer thread runs
+        it (`_Checkpointer`); the writer stays the only connection that
+        writes, and no caller waits for maintenance it did not ask for.
         """
         now = time.monotonic()
         with self._state:
@@ -571,25 +711,35 @@ class MainDatabase:
             if due:
                 self._writes_since_checkpoint = 0
                 self._last_checkpoint_at = now
-        if not due:
-            return
+        if due:
+            _checkpointer.request(self)
+
+    def _cadence_checkpoint(self) -> None:
+        """One PASSIVE checkpoint through the writer, and the WAL alert after it."""
+        now = time.monotonic()
         try:
             busy, log_frames, checkpointed = self._checkpoint_from_maintenance("PASSIVE")
         except sqlite3.Error:
             logger.warning("main_database_checkpoint_failed file=%s", self.path.name, exc_info=True)
             return
         wal_bytes = self._wal_bytes()
-        if wal_bytes >= MAIN_DATABASE_WAL_WARN_BYTES:
+        # Frames the checkpoint could not copy back yet: what a reader is
+        # holding up. The file size alone also counts space already
+        # checkpointed and only waiting to be reused or truncated, which is
+        # not the WAL failing to converge.
+        pending_bytes = max(0, log_frames - checkpointed) * self._page_size
+        if pending_bytes >= MAIN_DATABASE_WAL_WARN_BYTES:
             with self._state:
                 should_warn = now - self._wal_warned_at >= MAIN_DATABASE_REPORT_SECONDS
                 if should_warn:
                     self._wal_warned_at = now
             if should_warn:
                 logger.warning(
-                    "main_database_wal_high file=%s wal_bytes=%d busy=%d "
+                    "main_database_wal_high file=%s wal_bytes=%d pending_bytes=%d busy=%d "
                     "log_frames=%d checkpointed=%d readers_in_use=%d",
                     self.path.name,
                     wal_bytes,
+                    pending_bytes,
                     busy,
                     log_frames,
                     checkpointed,
@@ -640,6 +790,8 @@ class MainDatabase:
 
     def close(self) -> None:
         """Close every idle connection now; ones in use close when handed back."""
+        # A checkpoint still waiting would open the writer again after this.
+        _checkpointer.forget(self)
         with self._state:
             self._generation += 1
             self._identity = None
@@ -784,6 +936,10 @@ class MainDatabase:
         try:
             if wal:
                 enable_write_ahead_log(connection, wait_ms=busy_timeout_ms)
+            # Only the writer restarts the WAL, so only the writer needs the cap.
+            connection.execute(
+                f"PRAGMA journal_size_limit = {int(MAIN_DATABASE_JOURNAL_SIZE_LIMIT_BYTES)}"
+            )
             _seal(connection)
             if busy_timeout_ms != WRITE_LOCK_WAIT_MS:
                 # Opened at the caller's wait; every checkout starts at the default.
@@ -1027,6 +1183,18 @@ def main_database_transaction(
         yield connection
 
 
+def checkpoint_idle_main_databases() -> int:
+    """TRUNCATE the WAL of every database nobody is using; how many were emptied."""
+    with _databases_lock:
+        databases = list(_alive.values())
+    emptied = 0
+    for database in databases:
+        result = database.checkpoint_if_idle()
+        if result is not None and result[0] == 0:
+            emptied += 1
+    return emptied
+
+
 def close_main_databases() -> None:
     """Close every connection this process holds; used when the Core stops."""
     with _databases_lock:
@@ -1050,6 +1218,9 @@ async def report_main_database(seconds: float) -> None:
     while True:
         await asyncio.sleep(seconds)
         log_main_database_stats("periodic")
+        # The idle signal is this process's own checkouts: none held, none
+        # waiting. Off the loop, since a checkpoint is disk work however short.
+        await asyncio.to_thread(checkpoint_idle_main_databases)
 
 
 def main_database_stats() -> dict[str, float | int]:

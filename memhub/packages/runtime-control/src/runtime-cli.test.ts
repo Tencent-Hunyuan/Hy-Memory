@@ -24,6 +24,7 @@ import {
   resolveRuntimeCliConfig,
   revalidateHostRuntime,
   runRuntimeCli,
+  runtimeBuildIdentity,
   waitForAppRemoval,
 } from "./runtime-cli.js";
 import {
@@ -1031,18 +1032,17 @@ describe("Runtime CLI service plan", () => {
   });
 });
 
-describe("runtime launch lifetime", () => {
-  it("carries the explicit desktop fallback marker into the service config", () => {
+describe("the build a Runtime publishes in its receipt", () => {
+  it("is its build number and commit, and null where it does not know", () => {
     expect(
-      resolveRuntimeCliConfig({ ONE_MEMORY_RUNTIME_LIFETIME: "transient" })
-        .lifetime,
-    ).toBe("transient");
-  });
-  it("defaults ordinary and unrecognized launches to managed lifetime", () => {
-    expect(resolveRuntimeCliConfig({}).lifetime).toBeUndefined();
+      runtimeBuildIdentity({ buildNumber: "38", commit: "ABCDEF1234" }),
+    ).toEqual({ buildNumber: 38, commit: "abcdef1234" });
+    expect(runtimeBuildIdentity(undefined)).toEqual({
+      buildNumber: null,
+      commit: null,
+    });
     expect(
-      resolveRuntimeCliConfig({ ONE_MEMORY_RUNTIME_LIFETIME: "invalid" })
-        .lifetime,
-    ).toBeUndefined();
+      runtimeBuildIdentity({ buildNumber: "dev", commit: "unknown" }),
+    ).toEqual({ buildNumber: null, commit: null });
   });
 });

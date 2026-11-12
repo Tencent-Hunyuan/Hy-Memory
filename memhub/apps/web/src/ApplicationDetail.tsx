@@ -2,15 +2,21 @@ import type { SourceResponse } from "@one-memory/contracts";
 import type { MessageKey } from "@one-memory/i18n";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { AppMark } from "./app-mark";
-import { connectionHostId, preferenceHasSource } from "./connection-hosts";
+import {
+  connectionHostId,
+  isProfileSource,
+  preferenceHasSource,
+  profileName,
+} from "./connection-hosts";
 import {
   readConnectionPreferences,
   writeConnectionPreference,
 } from "./connection-preferences";
 import { noteUserHostChoice } from "./connection-reconcile";
-import type { RecallLinkCheck } from "./global";
+import type { RecallHostStatus, RecallLinkCheck } from "./global";
 import {
   disconnectHost,
+  disconnectProfiles,
   enableHostConnection,
   hostCapabilities,
   hostConnectionApproved,
@@ -19,8 +25,11 @@ import {
   hostWriteReason,
   matchHost,
   probeHost,
+  profileHosts,
+  profileWriteFailures,
   refreshRecallHosts,
   setHostMemoryPermission,
+  sourceConnectionApproved,
   UNSUPPORTED_NOTE,
   useRecallHosts,
 } from "./host-state";
@@ -62,6 +71,24 @@ function connectionLabel(input: {
   if (input.approved || input.insertionOn) return "未接通";
   return "未开启关联";
 }
+
+/** The recorded self-check across the profiles that may use memory: wired
+ * only when every one of them is, otherwise the first one that is not. */
+function profilesProbeState(profiles: RecallHostStatus[]) {
+  const linked = profiles.filter(hostConnectionApproved);
+  if (!linked.length) return null;
+  for (const host of linked) {
+    const state = host.selfCheck?.state ?? null;
+    if (state !== "wired") return state;
+  }
+  return "wired";
+}
+
+function profileList(hosts: readonly ProfileHost[]) {
+  return hosts.map((host) => profileName(host.hostId)).join(", ");
+}
+
+type ProfileHost = Pick<RecallHostStatus, "hostId">;
 
 function SourceIcon({ source }: { source: SourceResponse }) {
   return (
@@ -215,7 +242,10 @@ export function ApplicationDetail({
       if (!mounted.current || version !== epoch.current) return;
       setRead({ sourceId: id, state: "ready" });
       setCheckedAt(new Date().toISOString());
-      if (matched?.installed) void probeLink(matched.hostId);
+      // A per-profile source has no single host to probe; its status comes
+      // from each profile's recorded self-check instead.
+      if (matched?.installed && !isProfileSource(id))
+        void probeLink(matched.hostId);
       else setLink(null);
     } catch {
       if (mounted.current && version === epoch.current)
@@ -292,10 +322,14 @@ export function ApplicationDetail({
   }
   const current = read.sourceId === source.source_id ? read : null;
   const host = matchHost(hosts, source.source_id);
+  const profileSource = isProfileSource(source.source_id);
+  const profiles = profileHosts(hosts, source.source_id);
   const loading = !current || current.state === "loading";
   const readFailed = current?.state === "error";
-  const approved = hostConnectionApproved(host);
-  const unsupported = hostConnectionUnsupported(host);
+  const approved = profileSource
+    ? sourceConnectionApproved(hosts, source.source_id)
+    : hostConnectionApproved(host);
+  const unsupported = !profileSource && hostConnectionUnsupported(host);
   const insertionChecked = insertionIntent ?? approved;
   const memoryChecked = memoryIntent ?? host?.permission?.state === "approved";
   const probing =
@@ -305,9 +339,10 @@ export function ApplicationDetail({
     loading ||
     readFailed ||
     (stale && current?.state !== "ready");
-  const probeState =
-    link?.probe.state ??
-    (linkPending || linkFailed ? null : (host?.selfCheck?.state ?? null));
+  const probeState = profileSource
+    ? profilesProbeState(profiles)
+    : (link?.probe.state ??
+      (linkPending || linkFailed ? null : (host?.selfCheck?.state ?? null)));
   const stateText = connectionLabel({
     approved,
     insertionOn: insertionChecked,
@@ -326,10 +361,43 @@ export function ApplicationDetail({
             ? { reason: failureNote(installError.failure) }
             : {}),
         });
+  async function applyProfiles(enabled: boolean) {
+    if (enabled) {
+      try {
+        await enableHostConnection(source.source_id);
+      } finally {
+        // Each grant records its self-check on the desktop, and the status row
+        // reads those; nothing else re-reads them while this page is open.
+        await refreshRecallHosts().catch(() => {});
+      }
+      return;
+    }
+    const results = await disconnectProfiles(source.source_id);
+    const failed = results.filter((item) => item.outcome.state === "failed");
+    const retained = results.filter(
+      (item) =>
+        item.outcome.state === "revoked" || item.outcome.state === "review",
+    );
+    if (retained.length)
+      setInstallError({
+        key: "appProfilesRevokedRetained",
+        params: { profiles: profileList(retained) },
+      });
+    const first = failed[0]?.outcome;
+    if (first?.state === "failed")
+      throw Object.assign(Error("disconnect_failed"), {
+        profiles: failed.map((item) => profileName(item.hostId)),
+        failure: {
+          reason: first.reason,
+          rereadFailed: first.rereadFailed,
+        } satisfies HostFailure,
+      });
+  }
   async function applyInsertion(enabled: boolean) {
     const bridge = window.oneMemory;
     if (!bridge) return;
     setInstallError("");
+    if (profileSource) return applyProfiles(enabled);
     if (enabled) {
       await enableHostConnection(source.source_id);
       void probeLink(hostId);
@@ -385,6 +453,30 @@ export function ApplicationDetail({
           }
           // A failed turn-on keeps the stored choice on; a failed turn-off
           // shows the grant that is really still there after the re-read.
+          // Per-profile sources name the profiles that failed; the others
+          // keep what they got.
+          const failedProfiles =
+            profileWriteFailures(error) ??
+            (error as { profiles?: string[] }).profiles ??
+            null;
+          if (failedProfiles) {
+            setInstallError({
+              key: wanted
+                ? "appProfilesConnectFailed"
+                : "appProfilesDisconnectFailed",
+              params: { profiles: failedProfiles.join(", ") },
+              failure: wanted
+                ? {
+                    reason: hostWriteReason(error),
+                    rereadFailed: hostRereadFailed(error),
+                  }
+                : ((error as { failure?: HostFailure }).failure ?? {
+                    reason: null,
+                    rereadFailed: false,
+                  }),
+            });
+            continue;
+          }
           setInstallError(
             wanted
               ? {
@@ -561,6 +653,31 @@ export function ApplicationDetail({
           <div>
             <h2>{text("一键插入应用")}</h2>
             <p>{text("安装记忆连接，并默认允许此应用使用已授权记忆。")}</p>
+            {profileSource &&
+              (profiles.length ? (
+                <>
+                  <ul
+                    className="r6-app-profiles"
+                    aria-label={t("appProfilesLabel", {
+                      name: source.display_name,
+                    })}
+                  >
+                    {profiles.map((profile) => (
+                      <li key={profile.hostId}>
+                        {t(
+                          hostConnectionApproved(profile)
+                            ? "appProfileOn"
+                            : "appProfileOff",
+                          { profile: profileName(profile.hostId) },
+                        )}
+                      </li>
+                    ))}
+                  </ul>
+                  <p>{t("appProfilesHint")}</p>
+                </>
+              ) : (
+                <p>{t("appProfilesNone", { name: source.display_name })}</p>
+              ))}
             {unsupported && (
               <p>{`${source.display_name} ${text(UNSUPPORTED_NOTE)}`}</p>
             )}
@@ -578,6 +695,7 @@ export function ApplicationDetail({
               stale ||
               appLocationNote !== null ||
               unsupported ||
+              (profileSource && !profiles.length) ||
               source.capabilities?.installer !== "implemented" ||
               source.capabilities?.recall !== "implemented" ||
               !hostCapabilities().install

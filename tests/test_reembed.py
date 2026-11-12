@@ -9,6 +9,7 @@ import hashlib
 import json
 import math
 import random
+from datetime import datetime
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -226,11 +227,23 @@ class TestVectorSpaceNames:
         with pytest.raises(ValueError):
             space_identity("", 512)
 
-    def test_non_chroma_provider_is_not_supported(self):
+    def test_an_unsupported_provider_is_refused(self):
         cfg = MemoryConfig()
-        cfg.vector_store.provider = "qdrant"
+        cfg.vector_store.provider = "faiss"
         with pytest.raises(NotImplementedError):
             vector_space_names(cfg)
+
+    def test_a_qdrant_space_adds_its_tag_index_and_clause_collections(self):
+        cfg = MemoryConfig()
+        cfg.vector_store.provider = "qdrant"
+        cfg.vector_store.collection_name = "mh1_memhub_abc"
+        cfg.vector_store.embedding_dims = 512
+        names = vector_space_names(cfg)
+        chroma = dict(names)
+        assert chroma.pop("tag_index") == "mh1_memhub_abc_512_tag_index"
+        assert chroma.pop("retrieval_clauses") == "mh1_memhub_abc_512__retrieval_clauses"
+        cfg.vector_store.provider = "chroma"
+        assert chroma == vector_space_names(cfg)
 
 
 class TestReembedText:
@@ -461,6 +474,8 @@ async def _two_spaces(path):
     """A live 1024 space and a stray 512 space sharing some ids."""
     from hy_memory.data.vector_store_chroma import ChromaVectorStore
 
+    stable_time = datetime(2025, 1, 1)
+
     async def _store(base, dims, model, contents):
         cfg = MemoryConfig()
         cfg.vector_store.provider = "chroma"
@@ -475,6 +490,7 @@ async def _two_spaces(path):
             node = MemoryNode(
                 node_id=node_id, user_id=user, agent_id="a", session_id="s",
                 layer=MemoryLayer.L2_FACT, content=content, status=status,
+                gmt_created=stable_time, gmt_modified=stable_time, valid_from=stable_time,
             )
             node.embedding = emb.vector(content)
             nodes.append(node)
@@ -640,3 +656,48 @@ async def test_returned_width_is_validated_and_not_retried():
             pytest.raises(EmbeddingDimensionMismatchError):
         await svc.embed_batch(["a", "b"], use_cache=False)
     assert client.embeddings.with_raw_response.create.await_count == 1
+
+
+@pytest.mark.parametrize("selected_roles", [None, ["memory"]])
+async def test_verify_reports_source_role_absent_from_target_mapping(tmp_path, selected_roles):
+    """A scanned/explicit partial target cannot verify a whole source space."""
+    path = tmp_path / "v"
+    await _seed(path, "src", 512)
+    source = _space(path, "src", 512)
+    # The public VectorSpace contract supports explicitly named partial spaces.
+    target = VectorSpace(
+        base_name="dst", dims=512, persist_directory=str(path), collections={},
+    )
+    before = _records(path, "src_512")
+    result = await verify_reembed(source, target, roles=selected_roles, samples=0)
+    diff = await diff_spaces(source, target, roles=selected_roles)
+    assert not result.ok
+    assert result.per_role["memory"]["source"] == len(before)
+    assert result.per_role["memory"]["target"] == 0
+    assert result.per_role["memory"]["missing"] == len(before)
+    assert len(diff.missing["memory"]) == len(before)
+    assert any("memory:" in problem and "missing" in problem for problem in result.problems)
+    assert _records(path, "src_512") == before
+
+
+async def test_verify_scanned_partial_target_detects_uncopied_roles(tmp_path):
+    path = tmp_path / "v"
+    names = await _seed(path, "src", 512)
+    source, target = _space(path, "src", 512), _space(path, "dst", 512)
+    before = _snapshot(path, names)
+    embedding = FakeEmbedder("new", 512)
+    await reembed_vector_space(source, target, embedding=embedding, roles=["memory"])
+    scanned_target = next(
+        space for space in await scan_vector_spaces(path) if space.base_name == "dst"
+    ).space(model="new")
+    result = await verify_reembed(source, scanned_target, embedding=embedding)
+    assert not result.ok
+    assert result.per_role["memory"]["missing"] == 0
+    assert result.per_role["entities"]["missing"] == 2
+    assert result.per_role["coding_keys"]["missing"] == 1
+    assert result.per_role["working_facts_cv"]["missing"] == 1
+    assert result.self_recall_hits == result.self_recall_samples == 14
+    # An explicitly scoped verification remains valid for intentionally partial copies.
+    assert (await verify_reembed(source, scanned_target, roles=["memory"], samples=0)).ok
+    assert _snapshot(path, names) == before
+    assert set(scanned_target.names()) == {"memory"}

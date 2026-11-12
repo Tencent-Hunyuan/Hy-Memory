@@ -194,6 +194,39 @@ it.each([
     expect(f.effects).toEqual([]);
   },
 );
+it("finds a Harness profile created after the Runtime started, and only a profile", async () => {
+  const f = await fixture();
+  const hostId = "deepseek-harness:later";
+  const later = {
+    hostId,
+    label: "DeepSeek Harness · later",
+    layout: { ...f.layout, hostId, hostLabel: "DeepSeek Harness · later" },
+    presencePath: f.root,
+  };
+  const discover = vi.fn(async () => [...f.hosts, later]);
+  const service = createHostControlService({
+    permissions: f.permissions as unknown as HostPermissions,
+    hosts: f.hosts,
+    discover,
+  });
+  await service.handle({ hostId, operation: "getPermission", args: [] });
+  expect(f.methods.getPermission).toHaveBeenCalledWith(later.layout);
+  // Remembered: the disk is read once per new profile, not once per call.
+  await service.handle({ hostId, operation: "getPermission", args: [] });
+  expect(discover).toHaveBeenCalledTimes(1);
+  await expect(
+    service.handle({
+      hostId: "deepseek-harness:absent",
+      operation: "getPermission",
+      args: [],
+    }),
+  ).rejects.toThrow();
+  expect(discover).toHaveBeenCalledTimes(2);
+  await expect(
+    service.handle({ hostId: "unknown", operation: "getPermission", args: [] }),
+  ).rejects.toThrow();
+  expect(discover).toHaveBeenCalledTimes(2);
+});
 it("clones nested arguments and trusted layout before an asynchronous owner observes them", async () => {
   const f = await fixture();
   let release!: () => void;

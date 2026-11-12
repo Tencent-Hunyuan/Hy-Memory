@@ -163,7 +163,28 @@ export function resolveGuiLocale(
 }
 
 export function isMessageKey(value: string): value is MessageKey {
-  return Object.hasOwn(chineseMessages, value);
+  return (
+    Object.hasOwn(chineseMessages, value) || dynamicMessage(value) !== null
+  );
+}
+
+function dynamicMessage(
+  value: string,
+): { key: MessageKey; params: Record<string, string> } | null {
+  const patterns: readonly [RegExp, MessageKey, string][] = [
+    [
+      /^每天 (.+) 自动运行 evolve，设备休眠错过后会补跑。$/,
+      "每天 {time} 自动运行 evolve，设备休眠错过后会补跑。",
+      "time",
+    ],
+    [/^上次整合：(.+)$/, "上次整合：{time}", "time"],
+    [/^切换到 (lite|pro|ultra)？$/, "切换到 {mode}？", "mode"],
+  ];
+  for (const [pattern, key, param] of patterns) {
+    const match = pattern.exec(value);
+    if (match?.[1]) return { key, params: { [param]: match[1] } };
+  }
+  return null;
 }
 
 export function translate(
@@ -171,9 +192,12 @@ export function translate(
   key: MessageKey,
   params?: Record<string, string | number>,
 ): string {
-  return translator.getFixedT(locale)(key, {
+  const dynamic = dynamicMessage(key);
+  const selected = dynamic?.key ?? key;
+  return translator.getFixedT(locale)(selected, {
+    ...dynamic?.params,
     ...params,
-    defaultValue: chineseMessages[key],
+    defaultValue: chineseMessages[selected],
   });
 }
 

@@ -1,4 +1,4 @@
-"""Read-only projection of HY's Kuzu graph for MemHub's existing graph UI.
+"""Read-only projection of HY's graph (Kuzu, or Neo4j/Memgraph) for the graph UI.
 
 This module is one of the two explicit graph architecture exceptions.  The
 public SDK does not expose graph projection yet, so it may use the client's
@@ -174,9 +174,19 @@ def _read_graph_snapshot(
         or []
     )
     return (
-        [*nodes, *topic_nodes],
-        [*related_edges, *derived_edges, *tagged_edges],
+        [*_listed(nodes), *_listed(topic_nodes)],
+        [*_listed(related_edges), *_listed(derived_edges), *_listed(tagged_edges)],
     )
+
+
+def _listed(rows: list[Any]) -> list[list[object]]:
+    """Rows as lists in RETURN order, whichever graph store answered.
+
+    Kuzu answers lists; the Neo4j/Memgraph store (`storage_backends`) answers
+    one dict per row, keyed by the RETURN expressions in their order. Both
+    stores share the SDK's schema, so the same Cypher reads either.
+    """
+    return [list(row.values()) if isinstance(row, dict) else row for row in rows]
 
 
 def _safe_float(value: object) -> float | None:

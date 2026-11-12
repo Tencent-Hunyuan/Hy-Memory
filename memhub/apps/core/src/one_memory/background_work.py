@@ -15,6 +15,20 @@ BULK_WORKERS = 3
 SNAPSHOT_WORKERS = 8
 INTERACTIVE_READ_WORKERS = 4
 SOURCE_READER_WORKERS = 4
+# One per source the drain runs side by side (`max_concurrent_sources`), and
+# two over for the outcome inquiries that follow them.
+SDK_WRITE_WORKERS = 12
+# Recall's SDK reads: one search and the `get`s behind it (`_SDK_GET_CONCURRENCY`).
+SDK_READ_WORKERS = 8
+# The durable write queue's own bookkeeping: claim, settle, the per-job reads
+# around an SDK write, and the drain's maintenance passes. Each is one short
+# statement on the single writer or a reader; the drain runs at most
+# `max_concurrent_sources` jobs, and they wait for the writer, not for CPU.
+DURABLE_QUEUE_WORKERS = 4
+# Lease renewal alone. Renewal is the drain's ownership fence: a lease that
+# lapses while its SDK write is still running hands the job to recovery, so it
+# must never wait for a thread behind any other work, its own queue's included.
+LEASE_RENEWAL_WORKERS = 2
 
 _pool: ThreadPoolExecutor | None = None
 _snapshot_pool: ThreadPoolExecutor | None = None
@@ -22,6 +36,9 @@ _interactive_pool: ThreadPoolExecutor | None = None
 _raw_read_pool: ThreadPoolExecutor | None = None
 _memory_read_pool: ThreadPoolExecutor | None = None
 _source_reader_pool: ThreadPoolExecutor | None = None
+_sdk_write_pool: ThreadPoolExecutor | None = None
+_durable_queue_pool: ThreadPoolExecutor | None = None
+_lease_renewal_pool: ThreadPoolExecutor | None = None
 _warmed_readers: weakref.WeakSet[ThreadPoolExecutor] = weakref.WeakSet()
 _reader_warm_lock = threading.Lock()
 _interactive_reads = 0
@@ -71,13 +88,65 @@ def raw_read_pool() -> ThreadPoolExecutor:
 
 
 def memory_read_pool() -> ThreadPoolExecutor:
+    """Recall's own threads: SDK searches, gets, and what decides between them.
+
+    Recall used to hand these to the default pool, which SDK writes share. A
+    write that times out keeps its thread until the SDK returns (#231), so a
+    few stuck writes left recall waiting for a thread while `/health`, which
+    needs none, still answered.
+    """
     global _memory_read_pool
     if _memory_read_pool is None:
         _memory_read_pool = ThreadPoolExecutor(
-            max_workers=INTERACTIVE_READ_WORKERS,
+            max_workers=SDK_READ_WORKERS,
             thread_name_prefix="one-memory-memory-read",
         )
     return _memory_read_pool
+
+
+def sdk_write_pool() -> ThreadPoolExecutor:
+    """SDK writes, bounded and apart from everything else.
+
+    Each thread here only waits for the SDK's own loop thread to answer
+    (`_LoopThread.run`), so any thread outside that loop may make the call; a
+    stuck write therefore costs a thread of this pool and nobody else's.
+    """
+    global _sdk_write_pool
+    if _sdk_write_pool is None:
+        _sdk_write_pool = ThreadPoolExecutor(
+            max_workers=SDK_WRITE_WORKERS,
+            thread_name_prefix="one-memory-sdk-write",
+        )
+    return _sdk_write_pool
+
+
+def durable_queue_pool() -> ThreadPoolExecutor:
+    """The durable write queue's database work, apart from bulk work.
+
+    The queue used to hand its claims, settles and maintenance to the bulk
+    pool, whose three threads also carry import heartbeats and job listings.
+    Under an import peak all three sat in those for tens of seconds, and the
+    queue's next statement waited for a thread before it could even join the
+    writer's line, and leases lapsed while their SDK writes were still running.
+    """
+    global _durable_queue_pool
+    if _durable_queue_pool is None:
+        _durable_queue_pool = ThreadPoolExecutor(
+            max_workers=DURABLE_QUEUE_WORKERS,
+            thread_name_prefix="one-memory-write-queue",
+        )
+    return _durable_queue_pool
+
+
+def lease_renewal_pool() -> ThreadPoolExecutor:
+    """Threads that only renew durable write leases (`DurableWriteDrain.renew`)."""
+    global _lease_renewal_pool
+    if _lease_renewal_pool is None:
+        _lease_renewal_pool = ThreadPoolExecutor(
+            max_workers=LEASE_RENEWAL_WORKERS,
+            thread_name_prefix="one-memory-lease-renewal",
+        )
+    return _lease_renewal_pool
 
 
 def source_reader_pool() -> ThreadPoolExecutor:
@@ -99,9 +168,21 @@ def warm_bulk_pool() -> None:
     Starting a thread is nothing on an idle machine and 2.5 seconds on a busy
     one, which is precisely when bulk work is being handed over. So it is
     done here instead, at startup, before there is anything to be late for.
+
+    The durable write queue's pools are warmed here too, for the same reason:
+    their first renewal must not pay for starting a thread.
     """
-    pool = bulk_pool()
-    started = tuple(threading.Event() for _ in range(BULK_WORKERS))
+    _start_every_worker(bulk_pool(), BULK_WORKERS, "bulk_pool_warmup_timeout")
+    _start_every_worker(
+        durable_queue_pool(), DURABLE_QUEUE_WORKERS, "durable_queue_pool_warmup_timeout"
+    )
+    _start_every_worker(
+        lease_renewal_pool(), LEASE_RENEWAL_WORKERS, "lease_renewal_pool_warmup_timeout"
+    )
+
+
+def _start_every_worker(pool: ThreadPoolExecutor, workers: int, timeout_code: str) -> None:
+    started = tuple(threading.Event() for _ in range(workers))
     release = threading.Event()
 
     def occupy(marker: threading.Event) -> None:
@@ -117,7 +198,7 @@ def warm_bulk_pool() -> None:
     try:
         for marker in started:
             if not marker.wait(10):
-                raise RuntimeError("bulk_pool_warmup_timeout")
+                raise RuntimeError(timeout_code)
     finally:
         release.set()
     for future in futures:
@@ -173,6 +254,62 @@ async def in_interactive_read[T](
     **kwargs: object,
 ) -> T:
     return await in_read_pool(interactive_read_pool(), work, *args, **kwargs)
+
+
+async def in_sdk_read[T](
+    work: Callable[..., T],
+    /,
+    *args: object,
+    **kwargs: object,
+) -> T:
+    """A recall-path read, in recall's own pool (`memory_read_pool`)."""
+    return await in_read_pool(memory_read_pool(), work, *args, **kwargs)
+
+
+async def in_sdk_write[T](
+    work: Callable[..., T],
+    /,
+    *args: object,
+    **kwargs: object,
+) -> T:
+    """One SDK write call, in the write pool (`sdk_write_pool`)."""
+    return await asyncio.get_running_loop().run_in_executor(
+        sdk_write_pool(),
+        copy_context().run,
+        partial(work, *args, **kwargs),
+    )
+
+
+async def in_the_write_queue[T](
+    work: Callable[..., T],
+    /,
+    *args: object,
+    **kwargs: object,
+) -> T:
+    """One durable write queue statement, in the queue's pool (`durable_queue_pool`).
+
+    It still goes through the one writer and its line, like every write; what
+    it no longer does is wait for a bulk thread first.
+    """
+    return await asyncio.get_running_loop().run_in_executor(
+        durable_queue_pool(),
+        copy_context().run,
+        partial(work, *args, **kwargs),
+    )
+
+
+async def in_lease_renewal[T](
+    work: Callable[..., T],
+    /,
+    *args: object,
+    **kwargs: object,
+) -> T:
+    """One lease renewal, in the threads kept for nothing else (`lease_renewal_pool`)."""
+    return await asyncio.get_running_loop().run_in_executor(
+        lease_renewal_pool(),
+        copy_context().run,
+        partial(work, *args, **kwargs),
+    )
 
 
 def _retrieve[T](future: "asyncio.Future[T]") -> None:
@@ -261,7 +398,16 @@ def _warm_reader_pool(reader: ThreadPoolExecutor) -> None:
 
 def shutdown_bulk_pool() -> None:
     global _pool, _snapshot_pool, _interactive_pool, _raw_read_pool, _memory_read_pool
-    global _source_reader_pool
+    global _source_reader_pool, _sdk_write_pool, _durable_queue_pool, _lease_renewal_pool
+    if _durable_queue_pool is not None:
+        _durable_queue_pool.shutdown(wait=False, cancel_futures=True)
+        _durable_queue_pool = None
+    if _lease_renewal_pool is not None:
+        _lease_renewal_pool.shutdown(wait=False, cancel_futures=True)
+        _lease_renewal_pool = None
+    if _sdk_write_pool is not None:
+        _sdk_write_pool.shutdown(wait=False, cancel_futures=True)
+        _sdk_write_pool = None
     if _pool is not None:
         _pool.shutdown(wait=False, cancel_futures=True)
         _pool = None

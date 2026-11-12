@@ -526,7 +526,22 @@ describe("hourly isolated desktop launch", () => {
     expect(resolvePackagedBuildNumber("-1")).toBeUndefined();
     expect(resolvePackagedBuildNumber(undefined, "3907")).toBe(3907);
     expect(resolvePackagedBuildNumber("3908", "3907")).toBe(3908);
-    expect(resolvePackagedCommit(undefined, "388fd0e9")).toBe("388fd0e9");
-    expect(resolvePackagedCommit("not-a-sha", "388fd0e9")).toBe("388fd0e9");
+  });
+
+  it("resolves only a full 40-character commit and lowercases it", () => {
+    // Every downstream check (packaged-runtime install, local install, release
+    // download, release scripts) requires 40 lowercase hex characters.
+    const embedded = "388fd0e9b3c41a2d5e6f7a8b9c0d1e2f3a4b5c6d";
+    expect(resolvePackagedCommit(undefined, embedded)).toBe(embedded);
+    expect(resolvePackagedCommit(embedded.toUpperCase())).toBe(embedded);
+    expect(
+      resolvePackagedCommit(` ${embedded.toUpperCase()} `, undefined),
+    ).toBe(embedded);
+    expect(resolvePackagedCommit("388fd0e9", embedded)).toBe(embedded);
+    expect(resolvePackagedCommit("388fd0e9")).toBeUndefined();
+    expect(resolvePackagedCommit("not-a-sha", embedded)).toBe(embedded);
+    expect(resolvePackagedCommit(`${embedded}0`, embedded)).toBe(embedded);
+    expect(resolvePackagedCommit("g".repeat(40), embedded)).toBe(embedded);
+    expect(resolvePackagedCommit(undefined, "unknown")).toBeUndefined();
   });
 });

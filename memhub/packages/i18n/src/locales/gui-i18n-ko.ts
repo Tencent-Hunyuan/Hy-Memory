@@ -1,7 +1,11 @@
 import type { MessageKey } from "../gui-i18n.js";
+import { embeddingSwitchKoreanMessages } from "../gui-i18n-embedding-switch.js";
+import { modeKoreanMessages } from "../gui-i18n-mode.js";
 
 /** Korean (ko) GUI copy. Machine-assisted; native-speaker review recommended. */
 export const koreanMessages: Record<MessageKey, string> = {
+  ...modeKoreanMessages,
+  ...embeddingSwitchKoreanMessages,
   "connectionFallback.title": "다른 도구 연결",
   "connectionFallback.desktopOnly":
     "로컬 페어링은 데스크톱 앱에서만 사용할 수 있습니다.",
@@ -74,6 +78,16 @@ export const koreanMessages: Record<MessageKey, string> = {
   "sdk.raw.loadFailed": "원본 대화를 일시적으로 불러올 수 없습니다.",
   "sdk.raw.searchFailed": "원본 대화를 검색하지 못했습니다. 다시 시도하세요.",
   "sdk.raw.recent": "최근 원본 대화",
+  "sdk.raw.empty":
+    "아직 원본 대화가 없습니다. 소스를 연결하면 여기에 표시됩니다.",
+  "sdk.raw.total": "원본 대화 {count}개",
+  "sdk.raw.total.one": "원본 대화 {count}개",
+  "memory:当前使用基础记忆。新对话会保存为原始记录，不会生成高级记忆；以前生成的高级记忆仍会保留，但当前不会显示或参与记忆召回。":
+    "기본 메모리를 사용 중입니다. 새 대화는 원본 기록으로 저장되며 고급 메모리를 만들지 않습니다. 기존 고급 메모리는 보존되지만 현재 표시되거나 회상에 사용되지 않습니다.",
+  "memory:当前使用智能记忆。新对话会由模型整理为高级记忆。":
+    "스마트 메모리를 사용 중입니다. 모델이 새 대화를 고급 메모리로 정리합니다.",
+  "memory:当前使用深度记忆。新对话会生成高级记忆，并由知识图谱和 evolve 继续整合。":
+    "심층 메모리를 사용 중입니다. 새 대화에서 고급 메모리를 만들고 지식 그래프와 evolve가 계속 통합합니다.",
   "sdk.raw.found": "결과 {count}개",
   "sdk.raw.found.one": "결과 {count}개",
   "memoryInspector.emptyHint": "출처, 내용, 변경 기록을 확인하세요.",
@@ -137,6 +151,7 @@ export const koreanMessages: Record<MessageKey, string> = {
   "selectedMemory.save": "변경 사항 저장",
   "selectedMemory.author.user": "나",
   "selectedMemory.author.agent": "어시스턴트",
+  "selectedMemory.author.tool": "도구",
   "selectedMemory.sourceUnavailable":
     "출처 권한이 변경되었거나 원문을 사용할 수 없습니다.",
   "selectedMemory.related": "관련 기억",
@@ -208,7 +223,6 @@ export const koreanMessages: Record<MessageKey, string> = {
   "memory:整理需要处理": "정리 작업 확인 필요",
   "memory:正在整理记忆": "기억 정리 중",
   "memory:整理状态": "정리 상태",
-  "memory:重新整理": "다시 정리",
   "memory:自动提炼范围": "자동 추출 범위",
   "memory:手动提炼下一批": "다음 묶음 수동 추출",
   "memory:刷新核对": "새로 고쳐 확인",
@@ -233,10 +247,6 @@ export const koreanMessages: Record<MessageKey, string> = {
   "memory:处理（操作）": "정리",
   "memory:{count} 条原话": "원문 발췌 {count}개",
   "memory:{count} 条原话.one": "원문 발췌 {count}개",
-  "memory:有 {count} 段对话的整理结果不确定":
-    "대화 {count}개의 정리 결과가 불확실합니다",
-  "memory:有 {count} 段对话的整理结果不确定.one":
-    "대화 {count}개의 정리 결과가 불확실합니다",
   "memory:{count} 次整理已完成": "정리 완료 {count}회",
   "memory:{count} 次整理已完成.one": "정리 완료 {count}회",
   "memory: · {count} 条在窗口外（原文可搜）":
@@ -678,6 +688,7 @@ export const koreanMessages: Record<MessageKey, string> = {
   nativeDevelopmentUnavailable: " (개발 모드에서 사용 불가)",
   nativeOpen: "{product} 열기",
   nativeQuit: "{product} 종료(백그라운드 서비스는 계속 실행)",
+  nativeQuitStopsService: "{product} 종료(메모리 서비스도 중지)",
   nativeLoginError:
     "로그인 시 실행 설정을 변경하지 못했습니다. 다시 시도하세요.",
   nativeMoveTitle: "먼저 MemHub를 응용 프로그램 폴더로 옮기세요",
@@ -938,6 +949,19 @@ export const koreanMessages: Record<MessageKey, string> = {
   设置分组: "설정 섹션",
   记忆模型: "기억 모델",
   当前模型: "현재 모델",
+  "分别管理记忆整理与搜索所使用的模型。":
+    "기억 정리와 검색에 사용할 모델을 각각 관리합니다.",
+  记忆整理: "기억 정리",
+  "把会话理解并整理成可长期使用的记忆。":
+    "대화를 이해하고 장기간 활용할 수 있는 기억으로 정리합니다.",
+  记忆搜索: "기억 검색",
+  "在需要时找到与你的问题最相关的记忆。":
+    "필요할 때 질문과 가장 관련성 높은 기억을 찾습니다.",
+  "本地内置（推荐）": "로컬 내장(권장)",
+  "Embedding · 配置记忆整理后可自定义":
+    "Embedding · 기억 정리 구성 후 사용자 지정 가능",
+  "Embedding · 本机处理，无需额外配置":
+    "Embedding · 로컬 처리, 추가 구성 필요 없음",
   "正在读取模型…": "모델을 불러오는 중…",
   模型状态暂不可读: "모델 상태를 확인할 수 없습니다",
   尚未配置模型: "구성된 모델이 없습니다",
@@ -1000,7 +1024,7 @@ export const koreanMessages: Record<MessageKey, string> = {
     "앱을 열지 않아도 기억을 계속 동기화, 정리하고 제공합니다.",
   导出日志: "로그 내보내기",
   "把本机运行日志打包成一个文件，发给开发排查。":
-    "로컬 진단 로그를 파일 하나로 묶어 지원팀에 보냅니다.",
+    "모든 로컬 로그를 묶습니다. 대화 내용이나 로컬 경로가 포함될 수 있으므로 신뢰할 수 있는 개발자에게만 공유하세요.",
   "确定退出 One Memory 界面吗？": "MemHub 창을 종료하시겠습니까?",
   "后台服务会继续同步、整理和提供记忆。":
     "백그라운드 서비스는 계속 기억을 동기화, 정리하고 제공합니다.",
@@ -1060,6 +1084,23 @@ export const koreanMessages: Record<MessageKey, string> = {
     "기억 접근 권한이 취소되어 {name}은(는) 더 이상 기억을 조회할 수 없습니다. 완전히 제거되었는지 확인할 수 없으니 다음 경로를 직접 확인하세요: {paths}.",
   appRemovalReview:
     "연결이 완전히 제거되었는지 확인할 수 없습니다. 다음 경로를 직접 확인하세요: {paths}.",
+  appProfilesLabel: "{name} 프로필",
+  appProfileOn: "{profile}: 연결됨",
+  appProfileOff: "{profile}: 연결 안 됨",
+  appProfilesHint:
+    "이 스위치는 감지된 모든 프로필에 기억 연결을 설치하고 접근을 허용하며, 끄면 모두 취소합니다. 켜져 있는 동안 새 프로필은 자동으로 연결됩니다.",
+  appProfilesNone:
+    "{name} 프로필이 감지되지 않았습니다. 프로필을 만든 뒤 이 페이지로 돌아오세요.",
+  appProfilesConnectFailed:
+    "다음 프로필을 연결하지 못했습니다: {profiles}. 다른 프로필은 유지됩니다. {reason}",
+  appProfilesDisconnectFailed:
+    "다음 프로필의 연결을 해제하지 못해 여전히 기억을 사용할 수 있습니다: {profiles}. 다시 시도하세요. {reason}",
+  appProfilesRevokedRetained:
+    "다음 프로필의 기억 접근 권한을 취소했지만 연결 파일이 모두 제거되지는 않았습니다. 확인하세요: {profiles}.",
+  appProfileNameUnsupported:
+    "프로필 이름에는 소문자, 숫자, 하이픈만 사용할 수 있으며 최대 32자입니다",
+  "apps.autoHostProfilesFailed":
+    "{name}의 다음 프로필을 자동으로 연결하지 못했습니다({profiles}){reason}.",
   "Cursor 的连接凭证已更新。请完全退出并重新打开 Cursor，再开始新对话。":
     "Cursor의 연결 자격 증명이 변경되었습니다. 새 대화를 시작하기 전에 Cursor를 완전히 종료했다가 다시 여세요.",
   连接其他工具: "다른 도구 연결",
@@ -1169,6 +1210,9 @@ export const koreanMessages: Record<MessageKey, string> = {
   "少一些重复交代，多一些理解。": "반복은 줄이고, 이해는 깊게.",
   onboardingMoreApps: "스크롤하여 더 보기 · 앱 {count}개 남음",
   "onboardingMoreApps.one": "스크롤하여 더 보기 · 앱 {count}개 남음",
+  onboardingMoreImportApps: "가로로 스크롤 · 앱 {count}개 남음",
+  onboardingImportChecking:
+    "가져오기 결과를 확인하는 중이며 선택 항목은 유지됩니다",
   onboardingAllApps: "앱 {count}개 모두 표시됨",
   默认位置: "기본 위치",
   自定义位置: "사용자 지정 위치",
@@ -1376,6 +1420,16 @@ export const koreanMessages: Record<MessageKey, string> = {
     "연결에 실패했습니다. 모델, 키, 수신처를 확인하세요.",
   "配置或测试结果暂未确认，请核对后重试。":
     "구성 또는 테스트 결과를 확인하지 못했습니다. 다시 시도하기 전에 확인하세요.",
+  "索引更新没有完成，仍在使用原来的搜索模型。请检查连接后重试。":
+    "인덱스 업데이트가 완료되지 않았습니다. 이전 검색 모델을 계속 사용합니다. 연결을 확인한 후 다시 시도하세요.",
+  "上次模型测试结果仍待核对，请稍后重试。":
+    "이전 모델 테스트 결과를 아직 확인해야 합니다. 잠시 후 다시 시도하세요.",
+  "模型写入暂时关闭。请等待索引维护完成后重试。":
+    "모델 쓰기가 일시 중지되었습니다. 인덱스 유지 관리가 완료된 후 다시 시도하세요.",
+  "模型未能确认启用，请在设置中核对。":
+    "모델이 활성화되었는지 확인하지 못했습니다. 설정에서 확인하세요.",
+  "已保存的模型配置暂时无法读取，不会重复创建。请重试刷新。":
+    "저장된 모델 구성을 일시적으로 읽을 수 없습니다. 중복으로 생성되지 않습니다. 다시 새로 고쳐 보세요.",
   所选连接已启用: "선택한 앱 연결이 활성화되었습니다",
   本次未选择应用连接: "이번에 선택한 앱 연결 없음",
   尚未填写接收方: "수신처가 입력되지 않음",
@@ -1430,10 +1484,30 @@ export const koreanMessages: Record<MessageKey, string> = {
   "apps.back": "홈으로 돌아가기",
   "apps.overview": "기억 개요",
   "apps.memories": "저장된 기억",
+  "apps.rawConversations": "원본 대화",
+  "apps.rawSaving": "저장 중",
+  "apps.rawSavingCompact": "저장 중",
+  "apps.rawSavingStatus": "저장 상태",
+  "apps.rawSavingDetail": "생성 모델 없이 원본 대화를 저장합니다",
+  "apps.rawNoExcerpt": "표시할 수 있는 사용자 원문이 없습니다",
+  "apps.rawConversation": "원본 대화",
+  "apps.rawSaved": "원본 대화 저장됨",
+  "apps.rawEmpty": "저장된 원본 대화가 아직 없습니다",
+  "apps.rawCheckedEmpty": "확인됨: 표시할 원본 대화 업데이트가 없습니다",
+  "apps.memoryCheckedEmpty": "확인됨: 표시할 메모리 업데이트가 없습니다",
+  "apps.recentEmptyCompact": "업데이트 없음",
+  "apps.rawWaiting": "저장된 원본 대화가 여기에 표시됩니다",
+  "apps.checkedRecent": "현재 내용 확인됨",
+  "apps.currentMode": "현재 모드",
+  "apps.mode.lite": "기본 메모리 (lite)",
+  "apps.mode.pro": "스마트 메모리 (pro)",
+  "apps.mode.ultra": "심층 메모리 (ultra)",
   "apps.readingCount": "로컬 기억 확인 중…",
+  "apps.rawReadingCount": "원본 대화 확인 중…",
   "apps.startingRetry":
     "백그라운드 서비스를 시작하는 중입니다. 자동으로 업데이트됩니다",
   "apps.countWillUpdate": "기억 개수는 자동으로 업데이트됩니다",
+  "apps.rawCountWillUpdate": "원본 대화 수는 자동으로 업데이트됩니다",
   "apps.showingPrevious":
     "이전 데이터를 표시하는 중입니다. 자동으로 업데이트됩니다",
   "apps.unreadable": "사용할 수 없음",
@@ -1530,12 +1604,16 @@ export const koreanMessages: Record<MessageKey, string> = {
   "apps.revision": "버전 {count}",
   "apps.conversationTime": "대화 시간",
   "apps.importTime": "가져온 시간",
+  "apps.writeTime": "기록 시간",
+  "apps.updateTime": "업데이트 시간",
   "apps.incompleteCalls":
     " · 일부 호출이 기록되지 않아 목록이 불완전할 수 있습니다",
   "apps.timeoutWarning":
     "{host}이(가) 최근 기억을 조회하지 못했습니다. 백그라운드 서비스가 바쁠 수 있으며 자동으로 복구됩니다.",
   "apps.autoHostFailed": "{name}을(를) 자동으로 연결하지 못했습니다{reason}.",
   "apps.failureReason": ": {reason}",
+  "apps.desktopBridgeUnavailable":
+    "원클릭 연결은 MemHub 데스크톱 앱에서 진행해야 합니다",
   "apps.autoSyncFailed":
     "{name}의 지속 동기화를 자동으로 켜지 못했습니다. {reason}",
   "apps.noAutoRetry": "자동으로 다시 시도하지 않습니다.",
@@ -1613,8 +1691,6 @@ export const koreanMessages: Record<MessageKey, string> = {
     "일괄 작업 결과는 유지되지만 목록을 새로 고치지 못했습니다. 나중에 자동으로 다시 불러옵니다.",
   "memory:召回范围已保存，但列表刷新失败。请稍后重新打开记忆页。":
     "조회 범위는 저장되었지만 목록을 새로 고치지 못했습니다. 나중에 기억 페이지를 다시 여세요.",
-  "memory:重新整理可能再次调用模型。只会重跑结果不确定的对话，是否继续？":
-    "다시 정리하면 모델이 다시 호출될 수 있습니다. 결과가 불확실한 대화만 다시 시도합니다. 계속하시겠습니까?",
   "memory:原始对话暂时无法读取": "원본 대화를 불러오지 못했습니다",
   "memory:没有匹配的原始对话": "일치하는 원본 대화가 없습니다",
   "memory:还没有导入的原始对话": "아직 가져온 원본 대화가 없습니다",
@@ -1943,6 +2019,19 @@ export const koreanMessages: Record<MessageKey, string> = {
   "memory:还没有开始生成记忆：{reason}（{count} 条待处理）":
     "기억이 생성되지 않는 중: {reason}(대기 {count}개)",
   "memory:去配置生成模型": "생성 모델 구성",
+  "memory:模型暂停处理": "모델 일시 중지됨",
+  "memory:模型配置有问题（{reason}），记忆暂停处理，已有 {count} 条在排队":
+    "모델 설정에 문제가 있습니다({reason}). 기억 처리가 일시 중지되었으며 {count}개가 대기 중입니다",
+  "memory:模型配置有问题（{reason}），记忆暂停处理，已有 {count} 条在排队.one":
+    "모델 설정에 문제가 있습니다({reason}). 기억 처리가 일시 중지되었으며 {count}개가 대기 중입니다",
+  "memory:API Key 无效或没有权限": "API 키가 잘못되었거나 권한이 없습니다",
+  "memory:找不到模型或地址": "모델 또는 주소를 찾을 수 없습니다",
+  "memory:请求过于频繁，被服务商限流":
+    "요청이 너무 많아 서비스 제공자가 제한했습니다",
+  "memory:模型响应超时": "모델 응답 시간이 초과되었습니다",
+  "memory:模型服务出错": "모델 서비스 오류",
+  "memory:无法连接模型服务": "모델 서비스에 연결할 수 없습니다",
+  "memory:连接模型服务失败": "모델 서비스 연결에 실패했습니다",
   "calls.directHost": "직접 호출(진단)",
   "calls.headline.timedOut": "{host}이(가) 제때 기억을 조회하지 못했습니다",
   "calls.headline.unavailable": "{host}이(가) 지금은 기억을 조회할 수 없습니다",
@@ -1950,6 +2039,15 @@ export const koreanMessages: Record<MessageKey, string> = {
   "calls.headline.empty": "{host}이(가) 일치하는 기억을 찾지 못했습니다",
   "calls.headline.found": "{host}이(가) 관련 항목 {count}개를 찾았습니다",
   "calls.headline.found.one": "{host}이(가) 관련 항목 {count}개를 찾았습니다",
+  "calls.headline.rawOnly": "{host}이(가) 원본 대화 {count}개를 찾았습니다",
+  "calls.headline.rawOnly.one": "{host}이(가) 원본 대화 {count}개를 찾았습니다",
+  "calls.headline.memoryOnly": "{host}이(가) 기억 {count}개를 찾았습니다",
+  "calls.headline.memoryOnly.one": "{host}이(가) 기억 {count}개를 찾았습니다",
+  "calls.headline.mixed":
+    "{host}이(가) 기억 {memories}개 · 원본 대화 {raw}개를 찾았습니다",
+  "calls.headline.mixed.one":
+    "{host}이(가) 기억 {memories}개 · 원본 대화 {raw}개를 찾았습니다",
+  "calls.headline.completed": "{host} 호출이 완료되었습니다",
   "calls.detail.timedOut":
     "기억을 정리하는 중입니다. 조회 시간이 초과되어 이번 답변에는 기억이 포함되지 않았습니다.",
   "calls.detail.unavailable":

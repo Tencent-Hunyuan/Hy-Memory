@@ -149,6 +149,8 @@ function validateArgs(operation: HostControlOperation, args: unknown[]): void {
 export function createHostControlService(options: {
   permissions: HostPermissions;
   hosts: readonly RecallHostDescriptor[];
+  /** Re-reads the disk for a profile host created since this service started. */
+  discover?: () => Promise<readonly RecallHostDescriptor[]>;
 }) {
   const permissions = options.permissions;
   const hosts = new Map<string, RecallHostDescriptor>();
@@ -157,6 +159,17 @@ export function createHostControlService(options: {
     if (source.hostId !== source.layout.hostId || hosts.has(source.hostId))
       fail();
     hosts.set(source.hostId, structuredClone(source));
+  }
+  /** Only a profile id can appear after start; every other host is a fixed
+   * path, so an unknown one is refused without touching the disk. */
+  async function discovered(hostId: string) {
+    if (!options.discover || !hostId.includes(":")) return undefined;
+    const found = (await options.discover()).find(
+      (source) =>
+        source.hostId === hostId && source.layout.hostId === source.hostId,
+    );
+    if (found) hosts.set(hostId, structuredClone(found));
+    return found;
   }
   return {
     async handle(input: unknown): Promise<unknown> {
@@ -169,7 +182,10 @@ export function createHostControlService(options: {
         !Array.isArray(request.args)
       )
         fail();
-      const host = hosts.get(request.hostId);
+      // A known host must not yield here: its arguments are cloned below,
+      // before the caller's next tick can change them.
+      const host =
+        hosts.get(request.hostId) ?? (await discovered(request.hostId));
       if (!host) fail();
       const operation = request.operation as HostControlOperation;
       if (

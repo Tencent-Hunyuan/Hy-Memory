@@ -70,11 +70,24 @@ def test_a_revoked_grant_is_not_a_missing_one(tmp_path) -> None:
     assert state is SourceAuthorizationState.REVOKED_GRANT
 
 
+def _rebuild(root: Path) -> None:
+    """Replace `root` with a new directory that cannot reuse its inode.
+
+    rmdir then mkdir lets ext4 hand the freed inode straight back, and Linux
+    has no birth time to tell them apart (see `access._changed_ns`), so the
+    replacement would be indistinguishable on CI. Creating it while the old
+    directory still exists guarantees a different inode on every platform.
+    """
+    retired = root.with_name(root.name + ".retired")
+    root.rename(retired)
+    root.mkdir()
+    retired.rmdir()
+
+
 def test_a_rebuilt_directory_is_not_a_moved_candidate(tmp_path) -> None:
     store, _database, home = build_store(tmp_path)
     root = _grant(store, home, "workbuddy")
-    root.rmdir()
-    root.mkdir()
+    _rebuild(root)
 
     state = store.authorization_state(user_id="local", source_id="workbuddy", candidate=root)
 
@@ -105,8 +118,7 @@ def test_a_grant_pointing_somewhere_else_is_a_moved_candidate(tmp_path) -> None:
 def test_a_grant_still_fails_closed_when_a_state_is_named(tmp_path) -> None:
     store, _database, home = build_store(tmp_path)
     root = _grant(store, home, "workbuddy")
-    root.rmdir()
-    root.mkdir()
+    _rebuild(root)
 
     # Naming the reason is not granting access: the read path still refuses,
     # and says so through the same code it always did.
@@ -178,3 +190,71 @@ def test_recording_a_rejection_never_breaks_the_host_turn(tmp_path) -> None:
         "workbuddy",
         CaptureRejection.GRANT_REVOKED,
     )
+
+
+def test_a_truncated_marker_is_repaired_instead_of_disabling_the_sink(tmp_path) -> None:
+    """A half-written marker must not stay broken forever.
+
+    The record is read by support as-is, and ``record_capture_rejection``
+    swallows every error by design.  If a truncated marker made ``json.loads``
+    raise on every later call, the count would silently stop being maintained.
+    """
+    store, database, home = build_store(tmp_path)
+    _grant(store, home, "workbuddy")
+
+    logs = database.parent / "logs"
+    logs.mkdir(parents=True, exist_ok=True)
+    (logs / "capture-rejection-workbuddy-sync_disabled.json").write_text(
+        '{"count": 4', encoding="utf8"
+    )
+
+    record_capture_rejection(database, "workbuddy", CaptureRejection.SYNC_DISABLED)
+
+    record = json.loads(
+        (logs / "capture-rejection-workbuddy-sync_disabled.json").read_text(encoding="utf8")
+    )
+    assert record["count"] == 1
+    assert record["source_id"] == "workbuddy"
+
+
+def test_the_marker_tracks_when_the_last_rejection_happened(tmp_path, monkeypatch) -> None:
+    """``last_at`` must move with every rejection, not stay at the window start."""
+    import one_memory.live_capture as live_capture
+
+    store, database, home = build_store(tmp_path)
+    _grant(store, home, "workbuddy")
+    marker = database.parent / "logs" / "capture-rejection-workbuddy-sync_disabled.json"
+    clock = iter([1_000.0, 1_060.0])
+    real_time = live_capture.time.time
+    monkeypatch.setattr(live_capture.time, "time", lambda: next(clock, real_time()))
+
+    record_capture_rejection(database, "workbuddy", CaptureRejection.SYNC_DISABLED)
+    first = json.loads(marker.read_text(encoding="utf8"))
+    record_capture_rejection(
+        database, "workbuddy", CaptureRejection.SYNC_DISABLED, window_seconds=1e12
+    )
+    second = json.loads(marker.read_text(encoding="utf8"))
+
+    assert first["last_at"] == first["window_started_at"]
+    assert second["count"] == 2
+    assert second["window_started_at"] == first["window_started_at"]
+    assert second["last_at"] > second["window_started_at"]
+
+
+def test_a_failed_publish_leaves_the_previous_marker_intact(tmp_path, monkeypatch) -> None:
+    """A write that fails mid-way keeps the old record and leaves no stray file."""
+    store, database, home = build_store(tmp_path)
+    _grant(store, home, "workbuddy")
+
+    record_capture_rejection(database, "workbuddy", CaptureRejection.SYNC_DISABLED)
+    marker = database.parent / "logs" / "capture-rejection-workbuddy-sync_disabled.json"
+    before = marker.read_text(encoding="utf8")
+
+    def boom(_self, _target):
+        raise OSError(28, "No space left on device")
+
+    monkeypatch.setattr(Path, "replace", boom)
+    record_capture_rejection(database, "workbuddy", CaptureRejection.SYNC_DISABLED)
+
+    assert marker.read_text(encoding="utf8") == before
+    assert [p.name for p in marker.parent.iterdir()] == [marker.name]

@@ -13,7 +13,6 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { readPublishedRuntimeLifetime } from "./discovery.js";
 import { RuntimeService } from "./runtime-service.js";
 import { RuntimeSupervisor } from "./runtime-supervisor.js";
 
@@ -74,6 +73,23 @@ async function lockEntries(dataDir: string): Promise<string[]> {
 }
 
 describe("RuntimeService", () => {
+  it("publishes its build so an App can compare it before adopting", async () => {
+    const dataDir = await directory("runtime-service-build-");
+    const service = new RuntimeService({
+      dataDir,
+      createSupervisor: () => supervisor(),
+      pid: 4321,
+      buildIdentity: { buildNumber: 38, commit: null },
+    });
+
+    await service.start();
+    const receipt = JSON.parse(
+      await readFile(path.join(dataDir, "runtime-service.json"), "utf8"),
+    );
+    expect(receipt).toMatchObject({ build_number: 38, git_commit: null });
+    await service.stop();
+  });
+
   it("publishes and removes an outer Runtime receipt without secrets", async () => {
     const dataDir = await directory("runtime-service-");
     const runtime = supervisor();
@@ -94,7 +110,6 @@ describe("RuntimeService", () => {
       instance_id: "runtime-instance",
       pid: 4321,
       core_port: 8765,
-      lifetime: "managed",
     });
     expect(JSON.stringify(receipt)).not.toContain("secret");
 
@@ -104,44 +119,6 @@ describe("RuntimeService", () => {
     ).rejects.toThrow();
     expect(runtime.stop).toHaveBeenCalledOnce();
   });
-
-  it.each(["managed", "transient"] as const)(
-    "publishes the %s lifetime for a later desktop attachment",
-    async (lifetime) => {
-      const dataDir = await directory("runtime-lifetime-");
-      const service = new RuntimeService({
-        dataDir,
-        lifetime,
-        createSupervisor: supervisor,
-        pid: 4321,
-      });
-      try {
-        await service.start();
-        const receipt = JSON.parse(
-          await readFile(path.join(dataDir, "runtime-service.json"), "utf8"),
-        );
-        expect(receipt.lifetime).toBe(lifetime);
-        expect(await readPublishedRuntimeLifetime(dataDir)).toBe(lifetime);
-        // A newer desktop must preserve an old service whose lifetime is unknown.
-        delete receipt.lifetime;
-        await writeFile(
-          path.join(dataDir, "runtime-service.json"),
-          JSON.stringify(receipt),
-        );
-        expect(await readPublishedRuntimeLifetime(dataDir)).toBeNull();
-        receipt.lifetime = "invalid";
-        await writeFile(
-          path.join(dataDir, "runtime-service.json"),
-          JSON.stringify(receipt),
-        );
-        await expect(readPublishedRuntimeLifetime(dataDir)).rejects.toThrow(
-          "runtime_service_receipt_invalid",
-        );
-      } finally {
-        await service.stop();
-      }
-    },
-  );
 
   it("refuses a live owner of the same Runtime home", async () => {
     const dataDir = await directory("runtime-service-live-");

@@ -293,6 +293,7 @@ def test_sdk_user_profile_http_returns_native_assembled_profile(tmp_path):
             response = await client.get("/api/v2/user-profile")
             assert response.status_code == 200, response.text
             assert response.json() == {
+                "user_id": "local",
                 "request_id": "profile-request",
                 "profile": {
                     "memory_id": "l0-head",
@@ -660,6 +661,8 @@ def test_memory_add_routes_do_not_collide_with_single_memory_routes(tmp_path):
                 "task_id",
                 "memory_ids",
                 "error",
+                "error_code",
+                "next_retry_at",
             }
             status = await client.get(f"/api/v2/memories/additions/{request_id}")
             assert status.json()["evidence_id"] == created.json()["evidence_id"]

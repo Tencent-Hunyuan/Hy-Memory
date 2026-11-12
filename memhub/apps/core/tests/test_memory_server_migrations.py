@@ -17,6 +17,7 @@ from one_memory.memory_server.migration_runner import (
     InMemoryMigrationStore,
     MigrationResult,
     MigrationSchemaMismatchError,
+    SqliteMigrationStore,
     ledger_sql,
     migrate,
 )
@@ -136,6 +137,76 @@ def test_sdk_write_receipts_are_owned_by_migration_56() -> None:
         assert "sdk_raw_ids_json" in ddl
         assert "sdk_memory_ids_json" in ddl
         assert "CREATE TABLE IF NOT EXISTS memory_task_sdk_receipts" in ddl
+
+
+def test_onboarding_progress_migrates_old_sqlite_columns_in_append_order(tmp_path) -> None:
+    path = tmp_path / "old-onboarding.sqlite3"
+    with sqlite3.connect(path) as database:
+        database.execute(
+            """
+            CREATE TABLE onboarding_state (
+                singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
+                status TEXT NOT NULL,
+                selected_source_ids_json TEXT NOT NULL,
+                started_at TEXT,
+                completed_at TEXT,
+                updated_at TEXT NOT NULL
+            )
+            """
+        )
+        database.execute(
+            "INSERT INTO onboarding_state VALUES "
+            "(1,'importing','[\"cursor\"]',NULL,NULL,'2026-11-04T00:00:00+00:00')"
+        )
+
+    migration = next(item for item in MIGRATIONS if item.version == 62)
+    result = asyncio.run(migrate(SqliteMigrationStore(path), (migration,)))
+
+    assert result.applied == (62,)
+    with sqlite3.connect(path) as database:
+        columns = [str(row[1]) for row in database.execute("PRAGMA table_info(onboarding_state)")]
+        row = database.execute(
+            "SELECT mode_intent, setup_step, model_profile_id FROM onboarding_state"
+        ).fetchone()
+    assert columns == [
+        "singleton",
+        "status",
+        "selected_source_ids_json",
+        "started_at",
+        "completed_at",
+        "updated_at",
+        "mode_intent",
+        "setup_step",
+        "model_profile_id",
+    ]
+    assert row == (None, None, None)
+
+
+def test_onboarding_progress_mysql_retries_each_duplicate_column() -> None:
+    class DuplicateColumnError(Exception):
+        pass
+
+    class Cursor:
+        dialect = "mysql"
+
+        def __init__(self) -> None:
+            self.attempted: list[str] = []
+            self.applied: list[str] = []
+
+        async def execute(self, statement: str) -> None:
+            self.attempted.append(statement)
+            if "ADD COLUMN mode_intent" in statement or "ADD COLUMN setup_step" in statement:
+                raise DuplicateColumnError(1060, "duplicate column")
+            self.applied.append(statement)
+
+    cursor = Cursor()
+    migration = next(item for item in MIGRATIONS if item.version == 62)
+
+    asyncio.run(migration.apply(cursor))
+
+    assert len(cursor.attempted) == 3
+    assert len(cursor.applied) == 1
+    assert "model_profile_id" in cursor.applied[0]
 
 
 def test_sdk_matter_references_are_owned_by_migration_57() -> None:
@@ -1360,7 +1431,7 @@ def test_only_one_model_profile_can_be_active() -> None:
 
     def insert(profile_id: str, active: int) -> None:
         db.execute(
-            "INSERT INTO model_profiles VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            "INSERT INTO model_profiles VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (
                 profile_id,
                 "n",
@@ -1384,6 +1455,7 @@ def test_only_one_model_profile_can_be_active() -> None:
                 active,
                 "2026",
                 "2026",
+                "max_tokens",
             ),
         )
 
@@ -1962,6 +2034,117 @@ def test_the_statement_splitter_still_drops_real_comments() -> None:
     )
 
     assert statements == ["CREATE TABLE t (x TEXT)", "CREATE INDEX i ON t(x)"]
+
+
+def test_the_statement_splitter_drops_hash_comments() -> None:
+    """MySQL treats `#` as a line comment, so it must be stripped too."""
+    from one_memory.memory_server.migrations import _split_statements
+
+    statements = _split_statements(
+        "# explain\nCREATE TABLE t (x TEXT); # trailing\nCREATE INDEX i ON t(x);"
+    )
+
+    assert statements == ["CREATE TABLE t (x TEXT)", "CREATE INDEX i ON t(x)"]
+
+
+def test_a_hash_comment_apostrophe_does_not_swallow_the_next_statement() -> None:
+    """Regression: `SQLite's` in a `#:` comment opened a phantom literal.
+
+    This is the real 1064: the scanner only knew `--`, so the apostrophe in
+    `#: Emulates SQLite's partial index` started a `'...'` string that ran past
+    the `;`, and two `CREATE TABLE` statements reached MySQL as one broken one.
+    """
+    from one_memory.memory_server.migrations import _split_statements
+
+    statements = _split_statements(
+        "CREATE TABLE a (x TEXT);\n"
+        "#: Emulates SQLite's partial index\n"
+        "CREATE TABLE b (y TEXT);\n"
+    )
+
+    assert statements == [
+        "CREATE TABLE a (x TEXT)",
+        "CREATE TABLE b (y TEXT)",
+    ]
+
+
+def test_model_profiles_ddl_splits_into_two_statements_on_mysql() -> None:
+    """The DDL that triggered the 1064 must render as two statements."""
+    from one_memory.memory_server.migrations import _split_statements, model_profiles_ddl
+
+    statements = _split_statements(model_profiles_ddl("mysql"))
+
+    assert len(statements) == 2
+    assert statements[0].startswith("CREATE TABLE IF NOT EXISTS model_profiles")
+    assert statements[1].startswith("CREATE TABLE IF NOT EXISTS model_profile_versions")
+    assert "SQLite's" not in " ".join(statements)
+
+
+def test_a_hash_inside_a_string_literal_is_content() -> None:
+    """`DEFAULT '#fff'` must survive: `#` in a literal is not a comment."""
+    from one_memory.memory_server.migrations import _split_statements
+
+    statements = _split_statements(
+        "CREATE TABLE t (c TEXT DEFAULT '#fff; #a'); CREATE INDEX i ON t(c);"
+    )
+
+    assert statements == [
+        "CREATE TABLE t (c TEXT DEFAULT '#fff; #a')",
+        "CREATE INDEX i ON t(c)",
+    ]
+
+
+def test_the_statement_splitter_keeps_comment_markers_inside_each_quote_style() -> None:
+    """`--` and `#` inside `'...'`, `"..."` and `` `...` `` are all content."""
+    from one_memory.memory_server.migrations import _split_statements
+
+    statements = _split_statements(
+        "CREATE TABLE t (a TEXT DEFAULT 'x#y--z', b TEXT DEFAULT \"p#q--r\", "
+        "`c#d--e` TEXT); CREATE INDEX i ON t(a);"
+    )
+
+    assert statements == [
+        "CREATE TABLE t (a TEXT DEFAULT 'x#y--z', b TEXT DEFAULT \"p#q--r\", "
+        "`c#d--e` TEXT)",
+        "CREATE INDEX i ON t(a)",
+    ]
+
+
+def test_the_statement_splitter_keeps_double_quote_markers_inside_strings() -> None:
+    """A `#` or `--` in a double-quoted literal does not start a comment."""
+    from one_memory.memory_server.migrations import _split_statements
+
+    statements = _split_statements(
+        'CREATE TABLE t (c TEXT DEFAULT "a--b#c"); CREATE INDEX i ON t(c);'
+    )
+
+    assert statements == [
+        'CREATE TABLE t (c TEXT DEFAULT "a--b#c")',
+        "CREATE INDEX i ON t(c)",
+    ]
+
+
+def test_the_statement_splitter_keeps_backtick_markers_inside_identifiers() -> None:
+    """A `#` or `--` in a backtick identifier does not start a comment."""
+    from one_memory.memory_server.migrations import _split_statements
+
+    statements = _split_statements(
+        "CREATE TABLE t (`a--b#c` TEXT); CREATE INDEX i ON t(`a--b#c`);"
+    )
+
+    assert statements == [
+        "CREATE TABLE t (`a--b#c` TEXT)",
+        "CREATE INDEX i ON t(`a--b#c`)",
+    ]
+
+
+def test_a_hash_comment_at_end_of_input_terminates_the_statement() -> None:
+    """A trailing `#` comment with no newline must not leak into the statement."""
+    from one_memory.memory_server.migrations import _split_statements
+
+    statements = _split_statements("CREATE TABLE t (x TEXT); # done")
+
+    assert statements == ["CREATE TABLE t (x TEXT)"]
 
 
 def test_retrieval_index_ddl_v1_is_a_real_baseline_and_v2_folds_the_upgrade() -> None:

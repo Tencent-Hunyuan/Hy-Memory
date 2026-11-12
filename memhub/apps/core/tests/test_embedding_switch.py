@@ -947,6 +947,34 @@ async def test_cleanup_drops_only_a_retired_space(tmp_path: Path) -> None:
     assert dropped.state == "dropped"
 
 
+async def test_a_retired_space_holding_the_only_records_of_this_store_is_kept(
+    tmp_path: Path,
+) -> None:
+    """One registry, several stores: a space retired by a switch on one is kept on another.
+
+    A switch on Qdrant retires the space whose Chroma collections still hold
+    the Chroma-era memories. Back on Chroma the live space has nothing there:
+    neither the sweep nor a cleanup drops the only copy.
+    """
+    home = Home(tmp_path)
+    old = seed_builtin(home)
+    service = home.service()
+    await run(service, await start(home, service, home.profile()))
+    live = home.spaces.require_live()
+    # This store's view: the new space's collections are elsewhere.
+    for name in list(home.backend.store.collections):
+        if name.startswith(live.collection_base):
+            del home.backend.store.collections[name]
+
+    later = datetime.now(UTC) + timedelta(days=15)
+    assert await service.sweep_retired(now=later) == []
+    with pytest.raises(EmbeddingSwitchError, match="embedding_space_only_copy"):
+        await service.drop_space(old.space_id)
+
+    assert home.spaces.get(old.space_id).state == "retired"
+    assert home.backend.store.space(old.collection_base, 512)
+
+
 def test_derived_space_is_the_profile_s_pre_registry_space() -> None:
     builtin = derived_space(builtin_retrieval_snapshot())
     assert builtin.profile_id is None
@@ -1113,3 +1141,86 @@ def test_sdk_migrate_leaves_an_unfinished_switch_alone(tmp_path: Path) -> None:
     assert result.state == "not_required"
     assert (home.spaces.list_spaces(), dict(service.jobs.get(job_id))) == before
     assert home.spaces.require_live().space_id == live.space_id
+
+
+# ----------------------------------------------------------------------
+# Custom storage backends (`storage_backends`): refuse, skip, touch nothing
+# ----------------------------------------------------------------------
+
+
+class _Watched:
+    """Counts every call the switch makes into the re-embed backend."""
+
+    def __init__(self, backend: FakeReembedBackend) -> None:
+        self.backend = backend
+        self.calls: list[str] = []
+
+    def __getattr__(self, name: str):
+        value = getattr(self.backend, name)
+        if name == "unavailable_reason" or not callable(value):
+            return value
+
+        def watched(*args, **kwargs):
+            self.calls.append(name)
+            return value(*args, **kwargs)
+
+        return watched
+
+
+async def test_on_qdrant_the_switch_is_refused_and_chroma_is_never_opened(tmp_path: Path) -> None:
+    from one_memory.storage_backends import EMBEDDING_SWITCH_UNSUPPORTED
+
+    home = Home(tmp_path)
+    old = seed_builtin(home)
+    # A stray the startup scan would merge.
+    home.backend.store.put("memhub_stray0000000000", 512, {"s": ("stray", "local")})
+    watched = _Watched(home.backend)
+    home.backend = watched  # type: ignore[assignment]
+    service = home.service(
+        hold=True,
+        storage_refusal=lambda: EMBEDDING_SWITCH_UNSUPPORTED,
+        chroma_is_live=lambda: False,
+    )
+
+    await service.recover()
+    assert service.writes_open()
+    assert (service.scan_state, service.scan_error) == (
+        "done",
+        "embedding_scan_skipped_custom_backend",
+    )
+    target = home.profile()
+    plan = await service.plan(target.profile_id)
+    # Never an "empty home": its memories would be left behind unseen.
+    assert plan.needed is True and plan.blockers[0] == EMBEDDING_SWITCH_UNSUPPORTED
+    with pytest.raises(EmbeddingSwitchError, match=EMBEDDING_SWITCH_UNSUPPORTED):
+        await service.start_switch(
+            target.profile_id,
+            expected_revision=target.revision,
+            plan_token=plan.plan_token,
+            requested_by="cli",
+        )
+    assert await service.sweep_retired(now=datetime.now(UTC) + timedelta(days=30)) == []
+    assert home.spaces.require_live().space_id == old.space_id
+    # Not one call reached the Chroma store of the backend that was left.
+    assert watched.calls == []
+    assert set(watched.backend.store.space(old.collection_base, 512)["memory"]) == {"a", "b", "c"}
+
+
+async def test_a_pro_switch_on_a_server_graph_leaves_the_kuzu_graph_alone(tmp_path: Path) -> None:
+    home = Home(tmp_path)
+    old = seed_builtin(home)
+    graph = tmp_path / "hy-memory" / "governed-v2" / "graph"
+    graph.mkdir(parents=True)
+    (graph / "data").write_text("the graph of the store that was left")
+    service = home.service(graph_enabled=lambda: False, kuzu_is_live=lambda: False)
+    target = home.profile()
+
+    plan = await service.plan(target.profile_id)
+    assert plan.blockers == [] and plan.graph_vectors is None
+    job_id = await start(home, service, target)
+    await run(service, job_id)
+
+    assert service.get_job(job_id).state == "done"
+    assert home.backend.graphs_built == []
+    await service.drop_space(old.space_id)
+    assert (graph / "data").read_text() == "the graph of the store that was left"

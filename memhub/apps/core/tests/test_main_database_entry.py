@@ -128,6 +128,13 @@ ALLOWED = {
         "before migration, read-only and never written to",
         opened_with="?mode=ro",
     ),
+    ("memory_backup.py", "_sqlite_copy"): Allowed(
+        "the SDK's own SQLite files (Chroma, cache, history, coding), read-only, "
+        "and the backup copy SQLite's backup API writes from them; never the "
+        "main database, which a backup copies through MainDatabase.back_up",
+        opened_with=("?mode=ro", "target"),
+        calls=2,
+    ),
     ("imports/snapshots.py", "_backup_sqlite"): Allowed(
         "the private snapshot copy the backup API writes into, not the main database",
         opened_with="?mode=rw",

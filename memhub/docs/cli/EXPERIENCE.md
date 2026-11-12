@@ -31,6 +31,10 @@ node apps/cli/dist/one-memory.cjs doctor
 ```
 
 `status` 显示 Runtime 是否运行；`doctor` 按诊断口径做只读检查（默认不修复）。
+`status` 还有一行 `存储后端：Kuzu + Chroma（默认）`；换过后端时是
+`存储后端：Neo4j + Qdrant（通过 CLI 配置，连接正常）`。服务器没有响应最近一次连接测试时显示
+`连接失败：<code>`，并算作异常（`storage_backends`，`status` 退出码 1）；`--json` 在
+`pipeline.storage_backends`。
 
 ## 2. 首次接入（init / sources connect）—— 没有独立的「授权」步骤
 
@@ -69,8 +73,14 @@ node apps/cli/dist/one-memory.cjs sources list
 ```
 
 - 只有 `hermes` 能带 `--user-id`（非 `local`）或 `--root`；其他来源带了会退 2，什么都不发。
+- 用户 ID 不必等于 profile 名：profile 名里有 `:` 等字符时另起一个，例如
+  `--user-id wife-work --root ~/.hermes/profiles/wife:work`。
 - `--root` 里的 `~` 由 CLI 展开为主目录，相对路径按当前目录解析成绝对路径。
-- 扫描 `~/.hermes` 时会排除 `profiles/**`，所以 `local` 不会读到 wife 的 `state.db`。
+- 扫描时任何层级名为 `profiles` 的目录都会被排除，所以 `local` 不会读到 wife 的 `state.db`，
+  即使授权的根在 `~/.hermes` 之上。
+- `--root` 不能是 `profiles` 目录本身（`hermes_root_is_profiles_container`），也不能与另一个
+  用户已接入的 Hermes 目录相同、包含它或在它之内（`hermes_root_overlaps_other_user`，解析
+  symlink 后比较）；`~/.hermes` 给 `local`、`~/.hermes/profiles/<name>` 给另一个用户是允许的。
 - App 不变：它只读写 `local`，其他来源也都固定是 `local`。
 
 ## 3. 看导入进度
@@ -140,7 +150,11 @@ node apps/cli/dist/one-memory.cjs write status <request_id> --user-id wife
 
 - 用户 ID 只能是 1–64 位字母、数字、`.`、`_`、`-`；其他写法退 2，不连 Runtime。
 - 不带 `--user-id`（或写 `--user-id local`）时请求里不出现 `user_id`，和以前完全一样。
-- 用户之间互相隔离：读、改、删另一个用户的记忆 ID 返回「未找到」；write 的 request id 也只属于提交它的用户。
+- 用户之间互相隔离：读、改、删另一个用户的记忆 ID 返回「未找到」（HTTP 404 `memory_not_found`，
+  与不存在的 ID 完全一样）；write 的 request id 也只属于提交它的用户。
+- `memories delete <id> --yes` 遇到「未找到」时按已删除处理：提示「未找到记忆 <id>（可能已删除）」，
+  退出 0；`--json` 为 `state: "committed"` 加 `already_gone: true`。App 里重复点删除也不再报错。
+- 读接口（`memories list`、`profile`、`recall` 等背后的 HTTP 响应）都带 `user_id`，即实际读的是哪个用户。
 
 ### 画像版本（`profile --versions`）
 
@@ -177,7 +191,7 @@ node apps/cli/dist/one-memory.cjs settings features reset                       
 ```
 
 - 全局设置，不分用户；没设置的功能保持 SDK 默认值，什么都不设时与以前完全一样（App 不变）。
-- 可设：`graph_rerank`（图谱重排，仅 ultra）、`same_series_timeline`（需 graph_rerank）、`episode_recall`（片段召回，pro 即可）、`session_episodes`（片段写入）、`episode_summary`（片段摘要，每个片段一次模型调用）、`intention`（默认开）、`few_shot`。
+- 可设：`graph_rerank`（图谱重排，仅 ultra）、`same_series_timeline`（需 graph_rerank）、`episode_recall`（片段召回，pro 即可）、`session_episodes`（片段写入）、`episode_summary`（片段摘要，每个片段一次模型调用）、`intention`（默认开）、`intention_dedup`（意图判重，默认开；关闭后检索和写入都不判重、不删除意图）、`few_shot`；以及数值 `intention_dedup_threshold`（意图判重的余弦阈值，默认 0.95，可设 0.8–1.0，例如 `settings features set intention_dedup_threshold=0.9 --yes`），以及整数 `agent_max_tokens`（evolve、System 2 等 Agent 调用的输出上限，默认 2000 或已设置的 `MEMORY_AGENT_MAX_TOKENS`，可设 512–32000；本地模型输出被截断、报 `invalid_operations_json` 时调大，例如 `settings features set agent_max_tokens=6000 --yes`，`settings features reset agent_max_tokens` 恢复默认；保存在 config.json，重启不丢）。
 - 片段召回只对带片段的记忆有用：同时开 `session_episodes`，之后提取的记忆才按会话归入片段。
 - 在当前模式下不生效的功能照样保存，并注明原因（如 `graph_rerank` 在 pro 下「需要 ultra」）。
 - 修改会重建 SDK 客户端：正在写的一批按旧设置写完，之后的写入和检索用新设置；不迁移数据，不改集合名。
@@ -189,14 +203,47 @@ node apps/cli/dist/one-memory.cjs settings features reset                       
 ```bash
 node apps/cli/dist/one-memory.cjs settings language          # 界面语言和 SDK 提示语言
 node apps/cli/dist/one-memory.cjs settings language ja       # 设为日语，立即生效
-node apps/cli/dist/one-memory.cjs settings language system   # 跟随系统（不指定 SDK 语言）
+node apps/cli/dist/one-memory.cjs settings language system   # 清除设置（不指定 SDK 语言）
 ```
 
 - 可选 11 种：`en`、`zh-Hans`、`zh-Hant`、`ja`、`es`、`de`、`pt`、`fr`、`ko`、`ru`、`id`，以及 `system`；旧代码 `zh-CN` 按 `zh-Hans` 处理。
-- App 切换语言时会自动设置（Desktop 启动时也会同步一次已保存的选择）。全局设置，存于 `config.json` 的 `ui_language`；从未选择时不写入。
-- `zh-Hans` 和 `system` 不向 SDK 传语言，SDK 照旧自动识别中文或英文；其余语言（包括 `en`）作为 `MemoryConfig.language` 传给 SDK，提取等提示使用该语言。
+- App 切换语言时会自动设置；Desktop 每次启动也会同步一次界面实际显示的语言（App 选“跟随系统”时，发送它按系统语言解析出的语言，例如 `zh-Hans`）。全局设置，存于 `config.json` 的 `ui_language`；从未设置时不写入。
+- 所有语言（包括 `zh-Hans` 和 `en`）都作为 `MemoryConfig.language` 传给 SDK，提取等提示使用该语言；只有未设置（`system`，或只用 CLI/API、从未打开 App 的安装）时不向 SDK 传语言，SDK 照旧自动识别中文或英文。
 - 修改会像功能开关一样重建 SDK 客户端；不迁移数据，不改集合名（需要 hy-memory 2.0.11 的 `MemoryConfig.language`）。
-- `status --json` 的 `pipeline.ui_language` / `pipeline.sdk_language`（`auto` 或语言代码）。API：`GET`/`PUT /api/v1/settings/ui-language`。
+- `status --json` 的 `pipeline.ui_language` / `pipeline.sdk_language`（`auto` 或语言代码；`zh-Hans` 用户显示 `zh-Hans`）。API：`GET`/`PUT /api/v1/settings/ui-language`。
+
+### 存储后端（`settings backends`）
+
+记忆默认存在本机的 Kuzu（图数据库，ultra 使用）和 Chroma（向量库）里。只能用 CLI 或 API
+更换；App 只读显示。契约见 `docs/contracts/storage-backends-v1.md`。
+
+```bash
+node apps/cli/dist/one-memory.cjs settings backends                     # 当前后端、连接状态、哪些功能可用
+node apps/cli/dist/one-memory.cjs settings backends test --graph neo4j --graph-url bolt://127.0.0.1:7687 \
+  --graph-user neo4j --graph-password-file ~/.neo4j-pass                # 只测连接，不保存
+node apps/cli/dist/one-memory.cjs settings backends set --vector qdrant --vector-host 127.0.0.1   # 测连接 + 显示计划
+node apps/cli/dist/one-memory.cjs settings backends set --vector qdrant --vector-host 127.0.0.1 --yes  # 保存并生效
+node apps/cli/dist/one-memory.cjs settings backends reset --yes         # 回到 Kuzu + Chroma
+```
+
+- 图数据库：`kuzu`（默认）、`neo4j`、`memgraph`（`--graph-url bolt://…`、`--graph-user`、
+  `--graph-database`、`--graph-password-file`）。向量库：`chroma`（默认）、`qdrant`（必须是服务器：
+  `--vector-host`、`--vector-port` 默认 6333、`--vector-prefix`、`--vector-api-key-file`）。
+  FAISS 和 Qdrant 本地模式不支持（`storage_backend_faiss_unsupported` /
+  `storage_backend_vector_host_required`）。只写一侧时另一侧不变。
+- 密码和 API key 只从文件读（文件须是自己的、权限 600；`-` 从管道读），保存在系统钥匙串，
+  不写进 `config.json`，输出里只显示「已保存」。不写这个参数时保留已保存的值。
+- `set` 先做连接测试，失败就不保存；再显示计划，加 `--yes` 才保存。`reset` 同样需要 `--yes`。
+- **不迁移数据**：已有记忆留在原后端，不会被搬到新后端；新后端从它现在的内容开始。原来的数据
+  不会被删除或改写，改回原后端就能再次看到。
+- 图数据库里已经有记忆图谱时（图谱不按资料空间隔离，可能是另一个 MemHub 的），需要加
+  `--adopt-existing-graph` 才能接管。Qdrant 的集合都带本资料空间的前缀（`namespace`），多个
+  MemHub 共用一台服务器也不会互相读写。
+- 在 Qdrant 上可以更换向量模型（hy-memory 2.0.16 起 SDK 能为 Qdrant 重新生成向量），只读写本资料空间
+  前缀下的集合；Neo4j/Memgraph 图数据库在 ultra 下仍拒绝（`embedding_switch_backend_unsupported`，
+  一个库只有一个固定维度的向量索引）。`show` 列出每个功能在当前后端上是
+  可用、跳过还是不支持。升级迁移在自定义后端上跳过。
+- API：`GET`/`PUT`/`DELETE /api/v1/settings/storage-backends`，`POST /api/v1/settings/storage-backends/test`。
 
 ## 8. 召回（recall）
 
@@ -206,13 +253,34 @@ node apps/cli/dist/one-memory.cjs settings language system   # 跟随系统（�
 ## 9. 备份
 
 ```bash
-node apps/cli/dist/one-memory.cjs backup create --target <数据目录>/backups/<文件名> --json
-node apps/cli/dist/one-memory.cjs backup restore --source <数据目录>/backups/<文件名>        # 预览
-node apps/cli/dist/one-memory.cjs backup restore --source <数据目录>/backups/<文件名> --yes --confirm <数据目录>/backups/<文件名>  # 执行
+node apps/cli/dist/one-memory.cjs backup create --target <数据目录>/backups/<名字>              # 预览：预计大小
+node apps/cli/dist/one-memory.cjs backup create --target <数据目录>/backups/<名字> --yes --json  # 执行
+node apps/cli/dist/one-memory.cjs backup restore --source <数据目录>/backups/<名字>.memhub-backup        # 预览
+node apps/cli/dist/one-memory.cjs backup restore --source <数据目录>/backups/<名字>.memhub-backup --yes --confirm <数据目录>/backups/<名字>.memhub-backup  # 执行
 ```
 
-备份只包含主库（来源、写入队列、配置），**不包含记忆本身**（`hy-memory/`）。目标必须在
-数据目录内（否则拒绝），放在 `backups/` 下才能被 restore 使用；restore 需 Runtime 已停止。
+从 1.0.7 起备份**包含全部记忆**：主库（来源、写入队列、配置）加记忆库 `hy-memory/`
+（Chroma、Kuzu 图谱、SDK 的 SQLite 缓存）；向量在 Qdrant 服务器上时另含一份经 SDK
+导出、带向量的 `export/memories.jsonl`。备份是一个目录 `backups/<名字>.memhub-backup/`
+（`backups/x.sqlite3` 也写成 `backups/x.memhub-backup`），只有本人可读写（0700/0600）。
+
+- `create` 不加 `--yes` 只显示目标和预计大小（`GET /api/v1/backup/estimate`），
+  不写任何东西；加 `--yes` 才写。复制期间记忆写入短暂暂停（约 1 秒 / 千条记忆），
+  结束后自动恢复，结果里有 `pause_ms`。目标必须是 `<数据目录>/backups/` 下尚不存在的名字（路径中的 `..` 与符号链接都会被解析，指向别处一律拒绝）。
+- `restore` 需 Runtime 已停止，并用 `--confirm` 再写一遍路径。它替换主库和记忆库，
+  然后核对记忆条数（每个用户每一层、每个向量集合、图谱节点）；不一致就整体回滚，
+  `backup_restore_counts_mismatch`。之前的数据留在
+  `backups/pre-restore-<时间>.memhub-previous/`。图谱打不开会被隔离并在下次启动时重建。
+- 旧格式备份（单个 `.sqlite3` 文件）照旧恢复主库，结果写明
+  `memories_included: false`：它不含记忆，记忆库保持原样。
+- 后端不同（本机 Kuzu + Chroma 与服务器之间）拒绝恢复：`backup_restore_backend_mismatch`。
+- 记忆在 Qdrant 上时，恢复经 SDK 按原 id 写回记忆（含状态、演化关系、时间和向量），恢复前服务器上的
+  记忆另存为 `backups/pre-restore-<时间>.memhub-previous-vectors.jsonl`。SDK 还不能写回的内容会
+  拒绝恢复并说明原因：Coding/Working 经验（`backup_restore_qdrant_experiences_unsupported`）、
+  检索子句索引（`backup_restore_qdrant_retrieval_clauses_unsupported`）、2.0.16 之前的备份
+  （`backup_restore_export_without_vectors`）、换过向量模型之后（`backup_restore_qdrant_space_changed`）。
+
+合同：[`../contracts/backup-v2.md`](../contracts/backup-v2.md)。
 
 ## 10. 宿主接入（host）
 
@@ -240,7 +308,7 @@ node apps/cli/dist/one-memory.cjs sync resume --source codex
 `backup restore`、`graph-width --decision rebuild_with_new`。不加时只说明将要做什么，不做任何
 改动（exit 0）。`delete-data` 和 `backup restore` 还要用 `--confirm <路径>` 再写一遍目标（数据目录 /
 备份文件），只加 `--yes` 会被拒绝。install / upgrade / uninstall / service-install / service-uninstall 不加 `--yes`
-时只出计划。其它写命令直接执行。
+时只出计划。`backup create` 不加 `--yes` 时只显示预计大小（备份含全部记忆，可能很大）。其它写命令直接执行。
 
 ## 12. 卸载（保留数据）
 

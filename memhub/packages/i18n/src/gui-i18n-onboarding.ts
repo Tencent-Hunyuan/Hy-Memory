@@ -83,6 +83,10 @@ export const onboardingSpanishMessages = {
   onboardingMoreApps: "Desplázate para ver más · Quedan {count} aplicaciones",
   "onboardingMoreApps.one":
     "Desplázate para ver más · Queda {count} aplicación",
+  onboardingMoreImportApps:
+    "Desplázate horizontalmente · Quedan {count} aplicaciones",
+  onboardingImportChecking:
+    "Comprobando el resultado de la importación; tu selección se conserva",
   onboardingAllApps: "Se muestran las {count} aplicaciones",
   默认位置: "Ubicación predeterminada",
   自定义位置: "Ubicación personalizada",
@@ -313,6 +317,16 @@ export const onboardingSpanishMessages = {
     "La conexión falló. Comprueba el modelo, la clave y el destinatario.",
   "配置或测试结果暂未确认，请核对后重试。":
     "El resultado de la configuración o la prueba aún no está confirmado. Compruébalo antes de reintentar.",
+  "索引更新没有完成，仍在使用原来的搜索模型。请检查连接后重试。":
+    "No se completó la actualización del índice. Se sigue usando el modelo de búsqueda anterior. Comprueba la conexión y vuelve a intentarlo.",
+  "上次模型测试结果仍待核对，请稍后重试。":
+    "El resultado de la última prueba del modelo aún debe comprobarse. Vuelve a intentarlo más tarde.",
+  "模型写入暂时关闭。请等待索引维护完成后重试。":
+    "La escritura del modelo está temporalmente pausada. Espera a que termine el mantenimiento del índice y vuelve a intentarlo.",
+  "模型未能确认启用，请在设置中核对。":
+    "No se pudo confirmar que el modelo esté habilitado. Compruébalo en Configuración.",
+  "已保存的模型配置暂时无法读取，不会重复创建。请重试刷新。":
+    "La configuración guardada del modelo no se puede leer temporalmente. No se creará un duplicado. Vuelve a actualizar.",
   自定义兼容服务: "Servicio compatible personalizado",
   所选连接已启用: "Se habilitaron las conexiones seleccionadas",
   本次未选择应用连接: "No se seleccionaron conexiones de aplicaciones",
@@ -383,6 +397,8 @@ export const onboardingChineseMessages = {
   onboardingImportHistory: "导入 {name} 历史",
   onboardingMoreApps: "向下查看更多 · 还有 {count} 个应用",
   "onboardingMoreApps.one": "向下查看更多 · 还有 {count} 个应用",
+  onboardingMoreImportApps: "横向滑动查看更多 · 还有 {count} 个应用",
+  onboardingImportChecking: "正在核对导入结果，已保存的选择不会丢失",
   onboardingAllApps: "已显示全部 {count} 个应用",
   onboardingImportRefused: "尚未获准导入（{reason}）。请核对来源后重试。",
   onboardingConfirmHistory: "确认这是 {name} 的历史位置",

@@ -62,8 +62,6 @@ export const memoryChineseMessages = {
     "批量处理结果已保留，但列表刷新失败，稍后会自动重新读取。",
   "memory:召回范围已保存，但列表刷新失败。请稍后重新打开记忆页。":
     "召回范围已保存，但列表刷新失败。请稍后重新打开记忆页。",
-  "memory:重新整理可能再次调用模型。只会重跑结果不确定的对话，是否继续？":
-    "重新整理可能再次调用模型。只会重跑结果不确定的对话，是否继续？",
   "memory:原始对话暂时无法读取": "原始对话暂时无法读取",
   "memory:没有匹配的原始对话": "没有匹配的原始对话",
   "memory:还没有导入的原始对话": "还没有导入的原始对话",
@@ -161,6 +159,12 @@ export const memoryChineseMessages = {
   "memory:来源与主题": "来源与主题",
   "memory:记忆或原始对话": "记忆或原始对话",
   "memory:原始对话": "原始对话",
+  "memory:当前使用基础记忆。新对话会保存为原始记录，不会生成高级记忆；以前生成的高级记忆仍会保留，但当前不会显示或参与记忆召回。":
+    "当前为 lite：只保存和搜索原始对话，不生成高级记忆。已有高级记忆仍会保留，但不显示、不参与召回。",
+  "memory:当前使用智能记忆。新对话会由模型整理为高级记忆。":
+    "当前为 pro：新对话会由模型整理为高级记忆。",
+  "memory:当前使用深度记忆。新对话会生成高级记忆，并由知识图谱和 evolve 继续整合。":
+    "当前为 ultra：新对话会生成高级记忆，并由知识图谱继续整合。",
   "memory:地图组织方式": "地图组织方式",
   "memory:筛选地图记忆": "筛选地图记忆",
   "memory:搜索原始对话": "搜索原始对话",
@@ -288,7 +292,6 @@ export const memoryChineseMessages = {
   "memory:保存中…": "保存中…",
   "memory:保存原话": "保存原话",
   "memory:最近添加": "最近添加",
-  "memory:重新整理": "重新整理",
   "memory:原话已保存，等待可用模型": "原话已保存，等待可用模型",
   "memory:原话已保存，等待整理": "原话已保存，等待整理",
   "memory:正在等待整理": "正在等待整理",
@@ -377,6 +380,18 @@ export const memoryChineseMessages = {
   "memory:还没有开始生成记忆：{reason}（{count} 条待处理）":
     "还没有开始生成记忆：{reason}（{count} 条待处理）",
   "memory:去配置生成模型": "去配置生成模型",
+  "memory:模型暂停处理": "模型暂停处理",
+  "memory:模型配置有问题（{reason}），记忆暂停处理，已有 {count} 条在排队":
+    "模型配置有问题（{reason}），记忆暂停处理，已有 {count} 条在排队",
+  "memory:模型配置有问题（{reason}），记忆暂停处理，已有 {count} 条在排队.one":
+    "模型配置有问题（{reason}），记忆暂停处理，已有 {count} 条在排队",
+  "memory:API Key 无效或没有权限": "API Key 无效或没有权限",
+  "memory:找不到模型或地址": "找不到模型或地址",
+  "memory:请求过于频繁，被服务商限流": "请求过于频繁，被服务商限流",
+  "memory:模型响应超时": "模型响应超时",
+  "memory:模型服务出错": "模型服务出错",
+  "memory:无法连接模型服务": "无法连接模型服务",
+  "memory:连接模型服务失败": "连接模型服务失败",
 } as const;
 
 export const memorySpanishMessages: Record<
@@ -450,8 +465,6 @@ export const memorySpanishMessages: Record<
     "Se conservó el resultado de la operación por lotes, pero no se pudo actualizar la lista. Se volverá a leer automáticamente.",
   "memory:召回范围已保存，但列表刷新失败。请稍后重新打开记忆页。":
     "Se guardó el ámbito de consulta, pero no se pudo actualizar la lista. Vuelve a abrir la página de memorias más tarde.",
-  "memory:重新整理可能再次调用模型。只会重跑结果不确定的对话，是否继续？":
-    "Volver a procesar puede llamar de nuevo al modelo. Solo se repetirán las conversaciones con resultado incierto. ¿Quieres continuar?",
   "memory:原始对话暂时无法读取":
     "Las conversaciones originales no están disponibles por ahora",
   "memory:没有匹配的原始对话": "No hay conversaciones originales que coincidan",
@@ -560,6 +573,12 @@ export const memorySpanishMessages: Record<
   "memory:来源与主题": "Orígenes y temas",
   "memory:记忆或原始对话": "Memorias o conversaciones originales",
   "memory:原始对话": "Conversaciones originales",
+  "memory:当前使用基础记忆。新对话会保存为原始记录，不会生成高级记忆；以前生成的高级记忆仍会保留，但当前不会显示或参与记忆召回。":
+    "Estás usando la memoria básica. Las conversaciones nuevas se guardan como registros originales y no generan memorias avanzadas. Las memorias avanzadas anteriores se conservan, pero no se muestran ni se usan para recuperar recuerdos.",
+  "memory:当前使用智能记忆。新对话会由模型整理为高级记忆。":
+    "Estás usando la memoria inteligente. El modelo convierte las conversaciones nuevas en memorias avanzadas.",
+  "memory:当前使用深度记忆。新对话会生成高级记忆，并由知识图谱和 evolve 继续整合。":
+    "Estás usando la memoria profunda. Las conversaciones nuevas generan memorias avanzadas que el grafo de conocimiento y evolve siguen consolidando.",
   "memory:地图组织方式": "Organización del mapa",
   "memory:筛选地图记忆": "Filtrar memorias del mapa",
   "memory:搜索原始对话": "Buscar conversaciones originales",
@@ -698,7 +717,6 @@ export const memorySpanishMessages: Record<
   "memory:保存中…": "Guardando…",
   "memory:保存原话": "Guardar texto",
   "memory:最近添加": "Añadidas recientemente",
-  "memory:重新整理": "Volver a procesar",
   "memory:原话已保存，等待可用模型": "Texto guardado; esperando un modelo",
   "memory:原话已保存，等待整理": "Texto guardado; pendiente de procesar",
   "memory:正在等待整理": "Pendiente de procesar",
@@ -795,4 +813,18 @@ export const memorySpanishMessages: Record<
   "memory:还没有开始生成记忆：{reason}（{count} 条待处理）":
     "Aún no se generan memorias: {reason} ({count} pendientes)",
   "memory:去配置生成模型": "Configurar modelo de generación",
+  "memory:模型暂停处理": "Modelo en pausa",
+  "memory:模型配置有问题（{reason}），记忆暂停处理，已有 {count} 条在排队":
+    "Hay un problema con la configuración del modelo ({reason}). El procesamiento de memorias está en pausa; {count} elementos en cola",
+  "memory:模型配置有问题（{reason}），记忆暂停处理，已有 {count} 条在排队.one":
+    "Hay un problema con la configuración del modelo ({reason}). El procesamiento de memorias está en pausa; {count} elemento en cola",
+  "memory:API Key 无效或没有权限":
+    "la clave de API no es válida o no tiene permisos",
+  "memory:找不到模型或地址": "no se encontró el modelo o la URL",
+  "memory:请求过于频繁，被服务商限流":
+    "demasiadas solicitudes; el proveedor limitó la frecuencia",
+  "memory:模型响应超时": "la respuesta del modelo agotó el tiempo de espera",
+  "memory:模型服务出错": "error del servicio del modelo",
+  "memory:无法连接模型服务": "no se puede conectar con el servicio del modelo",
+  "memory:连接模型服务失败": "falló la conexión con el servicio del modelo",
 };

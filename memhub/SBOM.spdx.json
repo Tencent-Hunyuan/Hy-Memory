@@ -3,9 +3,9 @@
   "dataLicense": "CC0-1.0",
   "SPDXID": "SPDXRef-DOCUMENT",
   "name": "one-memory",
-  "documentNamespace": "https://one-memory.local/spdx/2026-10-22T13:18:16Z",
+  "documentNamespace": "https://one-memory.local/spdx/2026-11-12T06:30:57Z",
   "creationInfo": {
-    "created": "2026-10-22T13:18:16Z",
+    "created": "2026-11-12T06:30:57Z",
     "creators": [
       "Tool: one-memory-generate-sbom"
     ]
@@ -701,6 +701,23 @@
       ]
     },
     {
+      "SPDXID": "SPDXRef-Package-pypi-h2",
+      "name": "h2",
+      "versionInfo": "4.4.1",
+      "downloadLocation": "NOASSERTION",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "NOASSERTION",
+      "copyrightText": "NOASSERTION",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:pypi/h2@4.4.1"
+        }
+      ]
+    },
+    {
       "SPDXID": "SPDXRef-Package-pypi-hf-xet",
       "name": "hf-xet",
       "versionInfo": "1.6.0",
@@ -714,6 +731,23 @@
           "referenceCategory": "PACKAGE-MANAGER",
           "referenceType": "purl",
           "referenceLocator": "pkg:pypi/hf-xet@1.6.0"
+        }
+      ]
+    },
+    {
+      "SPDXID": "SPDXRef-Package-pypi-hpack",
+      "name": "hpack",
+      "versionInfo": "4.2.0",
+      "downloadLocation": "NOASSERTION",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "NOASSERTION",
+      "copyrightText": "NOASSERTION",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:pypi/hpack@4.2.0"
         }
       ]
     },
@@ -799,6 +833,23 @@
           "referenceCategory": "PACKAGE-MANAGER",
           "referenceType": "purl",
           "referenceLocator": "pkg:pypi/humanfriendly@10.0"
+        }
+      ]
+    },
+    {
+      "SPDXID": "SPDXRef-Package-pypi-hyperframe",
+      "name": "hyperframe",
+      "versionInfo": "6.1.0",
+      "downloadLocation": "NOASSERTION",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "NOASSERTION",
+      "copyrightText": "NOASSERTION",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:pypi/hyperframe@6.1.0"
         }
       ]
     },
@@ -1262,6 +1313,23 @@
       ]
     },
     {
+      "SPDXID": "SPDXRef-Package-pypi-neo4j",
+      "name": "neo4j",
+      "versionInfo": "6.4.1",
+      "downloadLocation": "NOASSERTION",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "NOASSERTION",
+      "copyrightText": "NOASSERTION",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:pypi/neo4j@6.4.1"
+        }
+      ]
+    },
+    {
       "SPDXID": "SPDXRef-Package-pypi-numpy",
       "name": "numpy",
       "versionInfo": "2.5.2",
@@ -1513,6 +1581,23 @@
           "referenceCategory": "PACKAGE-MANAGER",
           "referenceType": "purl",
           "referenceLocator": "pkg:pypi/pluggy@1.6.0"
+        }
+      ]
+    },
+    {
+      "SPDXID": "SPDXRef-Package-pypi-portalocker",
+      "name": "portalocker",
+      "versionInfo": "3.2.0",
+      "downloadLocation": "NOASSERTION",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "NOASSERTION",
+      "copyrightText": "NOASSERTION",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:pypi/portalocker@3.2.0"
         }
       ]
     },
@@ -1789,6 +1874,23 @@
       ]
     },
     {
+      "SPDXID": "SPDXRef-Package-pypi-pytz",
+      "name": "pytz",
+      "versionInfo": "2026.6",
+      "downloadLocation": "NOASSERTION",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "NOASSERTION",
+      "copyrightText": "NOASSERTION",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:pypi/pytz@2026.6"
+        }
+      ]
+    },
+    {
       "SPDXID": "SPDXRef-Package-pypi-pyyaml",
       "name": "pyyaml",
       "versionInfo": "6.0.3",
@@ -1802,6 +1904,23 @@
           "referenceCategory": "PACKAGE-MANAGER",
           "referenceType": "purl",
           "referenceLocator": "pkg:pypi/pyyaml@6.0.3"
+        }
+      ]
+    },
+    {
+      "SPDXID": "SPDXRef-Package-pypi-qdrant-client",
+      "name": "qdrant-client",
+      "versionInfo": "1.19.1",
+      "downloadLocation": "NOASSERTION",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "NOASSERTION",
+      "copyrightText": "NOASSERTION",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:pypi/qdrant-client@1.19.1"
         }
       ]
     },
@@ -2352,7 +2471,7 @@
     {
       "SPDXID": "SPDXRef-Package-hy-memory",
       "name": "hy-memory",
-      "versionInfo": "2.0.11",
+      "versionInfo": "2.0.16",
       "downloadLocation": "NOASSERTION",
       "filesAnalyzed": false,
       "licenseConcluded": "Apache-2.0",
@@ -2580,7 +2699,17 @@
     {
       "spdxElementId": "SPDXRef-Package-one-memory",
       "relationshipType": "DEPENDS_ON",
+      "relatedSpdxElement": "SPDXRef-Package-pypi-h2"
+    },
+    {
+      "spdxElementId": "SPDXRef-Package-one-memory",
+      "relationshipType": "DEPENDS_ON",
       "relatedSpdxElement": "SPDXRef-Package-pypi-hf-xet"
+    },
+    {
+      "spdxElementId": "SPDXRef-Package-one-memory",
+      "relationshipType": "DEPENDS_ON",
+      "relatedSpdxElement": "SPDXRef-Package-pypi-hpack"
     },
     {
       "spdxElementId": "SPDXRef-Package-one-memory",
@@ -2606,6 +2735,11 @@
       "spdxElementId": "SPDXRef-Package-one-memory",
       "relationshipType": "DEPENDS_ON",
       "relatedSpdxElement": "SPDXRef-Package-pypi-humanfriendly"
+    },
+    {
+      "spdxElementId": "SPDXRef-Package-one-memory",
+      "relationshipType": "DEPENDS_ON",
+      "relatedSpdxElement": "SPDXRef-Package-pypi-hyperframe"
     },
     {
       "spdxElementId": "SPDXRef-Package-one-memory",
@@ -2745,6 +2879,11 @@
     {
       "spdxElementId": "SPDXRef-Package-one-memory",
       "relationshipType": "DEPENDS_ON",
+      "relatedSpdxElement": "SPDXRef-Package-pypi-neo4j"
+    },
+    {
+      "spdxElementId": "SPDXRef-Package-one-memory",
+      "relationshipType": "DEPENDS_ON",
       "relatedSpdxElement": "SPDXRef-Package-pypi-numpy"
     },
     {
@@ -2816,6 +2955,11 @@
       "spdxElementId": "SPDXRef-Package-one-memory",
       "relationshipType": "DEPENDS_ON",
       "relatedSpdxElement": "SPDXRef-Package-pypi-pluggy"
+    },
+    {
+      "spdxElementId": "SPDXRef-Package-one-memory",
+      "relationshipType": "DEPENDS_ON",
+      "relatedSpdxElement": "SPDXRef-Package-pypi-portalocker"
     },
     {
       "spdxElementId": "SPDXRef-Package-one-memory",
@@ -2900,7 +3044,17 @@
     {
       "spdxElementId": "SPDXRef-Package-one-memory",
       "relationshipType": "DEPENDS_ON",
+      "relatedSpdxElement": "SPDXRef-Package-pypi-pytz"
+    },
+    {
+      "spdxElementId": "SPDXRef-Package-one-memory",
+      "relationshipType": "DEPENDS_ON",
       "relatedSpdxElement": "SPDXRef-Package-pypi-pyyaml"
+    },
+    {
+      "spdxElementId": "SPDXRef-Package-one-memory",
+      "relationshipType": "DEPENDS_ON",
+      "relatedSpdxElement": "SPDXRef-Package-pypi-qdrant-client"
     },
     {
       "spdxElementId": "SPDXRef-Package-one-memory",

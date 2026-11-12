@@ -15,7 +15,8 @@
    safe center falls back to the start if the pair would overflow a narrow column.
    Three or more keep the existing row and scroll horizontally. */
 .r6-import-progress[data-count="1"],
-.r6-import-progress[data-count="2"] {
+.r6-import-progress[data-count="2"],
+.r6-import-progress[data-count="3"] {
   justify-content: safe center;
   overflow-x: hidden;
 }

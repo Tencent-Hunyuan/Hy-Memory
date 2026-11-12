@@ -66,6 +66,7 @@ from one_memory.sdk_vector_reattach import (
     stored_memory_ids,
     vectors_belong_to_another_space,
 )
+from one_memory.storage_backends import MIGRATION_SKIPPED, custom_backends_configured
 from one_memory.target_schema import drop_legacy_tables, legacy_tables_present
 
 PREPARED_PHASE = "prepared"
@@ -483,6 +484,8 @@ class StartupMigrationResult:
     """`not_required`, `cutover` (this run switched authority) or `complete`."""
 
     state: str
+    #: Why a run that found work did none of it (`MIGRATION_SKIPPED`).
+    skipped: str | None = None
     migration_id: str | None = None
     bundle_id: str | None = None
     preparation: CutoverPreparation | None = None
@@ -492,6 +495,8 @@ class StartupMigrationResult:
 
     def as_document(self) -> dict[str, object]:
         document: dict[str, object] = {"schema_version": 1, "state": self.state}
+        if self.skipped is not None:
+            document["skipped"] = self.skipped
         if self.migration_id is not None:
             document["migration_id"] = self.migration_id
             document["bundle_id"] = self.bundle_id
@@ -713,6 +718,21 @@ def run_startup_migration(
     # No active profile means no generation model, not no embedding: the
     # vectors are the built-in model's, which is also what the Runtime reads.
     profile = active if active is not None else builtin_retrieval_snapshot()
+    custom = custom_backends_configured(data_dir)
+    if custom and authority is not MemoryAuthority.SDK:
+        # Only an SDK-authority home can have chosen another store; a legacy
+        # home that names one was edited by hand. Its cutover reads and
+        # reattaches the local Chroma store, which is then not the store in
+        # use: refuse, and leave everything as it is.
+        raise DataPlaneMigrationError("sdk_migration_custom_backend_unsupported")
+    if custom:
+        # Upgrade migrations repair the local Kuzu/Chroma stores and the
+        # tables that fed them. A home on another store does not use those
+        # stores, and they must stay exactly as the person left them
+        # (docs/contracts/storage-backends-v1.md): nothing is touched.
+        with log.step("preflight.custom_backend") as step:
+            step["skipped"] = MIGRATION_SKIPPED
+        return StartupMigrationResult(state="not_required", skipped=MIGRATION_SKIPPED)
     if authority is MemoryAuthority.SDK:
         with log.step("preflight.leftovers_scan") as step:
             vectors_waiting = bool(legacy_vector_collections(data_dir, profile))

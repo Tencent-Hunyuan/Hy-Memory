@@ -134,6 +134,7 @@ _WRITE_DIAGNOSTIC_KEYS = (
     "agent_status",
     "agent_error_code",
     "agent_error",
+    "reconcile_error_code",
     "l1_rollback",
     "l1_rollback_failed",
     "partial_agent_persist",
@@ -695,7 +696,8 @@ class HyMemoryClient:
         # _store_for_variant() 取正确的那一份。
         self._coding_writers: Dict[str, Any] = {}   # variant → CodingWriter
         self._coding_stores: Dict[str, Any] = {}    # variant → CodingMemoryStore
-        # 版本演进链层（scene="coding" 独有）。零 LLM 纯 sqlite，见 _get_chain_store。
+        # 版本演进链层（scene="coding" 独有）。零 LLM，跟随业务存储后端。
+        self._chain_lock = threading.RLock()
         self._chain_store = None         # HyCodeMem | None
         self._chain_store_failed = False  # 初始化失败过就不再重试
         # 链层反查真实 diff 用的本地仓路径。None = 只用对话里的 old/new 兜底抽取；
@@ -1205,20 +1207,13 @@ class HyMemoryClient:
         return "" if not (u or w) else "%s|%s" % (u, w)
 
     def _get_chain_store(self, owner: str = ""):
-        """
-        Lazy 初始化版本演进链层（scene="coding" 独有）。
+        """Lazy 初始化版本演进链层（scene="coding" 独有）。
 
-        零 LLM、零 embedding、纯 sqlite —— 构造代价可以忽略，所以不用异步锁。
-        失败返回 None：这层是**增量**，拿不到就退回纯向量双层（= working 的行为），
-        不该让一次 add/search 整体失败。
-
-        owner 变了要换实例（同一个 client 服务多个 user 时）—— 实例只是个 sqlite
-        连接 + owner 字符串，重建很便宜，而复用会让 owner 过滤失效。
-        库文件是同一个，所以不同 owner 共享文件、靠 WHERE 隔离。
-
-        库位置：跟 coding_memory.db 同目录下的 hy_code_chain/hy_code.db。不并进同一个
-        文件是因为 CodingMemoryStore 自己管 schema 迁移，塞三张表进去会让两边的迁移
-        逻辑互相踩；两个文件同目录，备份/清理时不会漏。
+        跟随 business_store 后端；SQLite 使用 coding_memory.db 同目录的
+        hy_code_chain/hy_code.db，PostgreSQL 使用独立 chain schema。
+        owner 变化时关闭旧连接并新建作用域实例，调用方持有 _chain_lock。
+        SQLite 的可选链层保持 best-effort；显式 PostgreSQL 初始化失败抛错，
+        避免服务端误以为已持久化版本历史。
         """
         if self._chain_store is not None and getattr(
                 self._chain_store, "owner", "") == owner:
@@ -1232,12 +1227,16 @@ class HyMemoryClient:
                 _os.path.dirname(_os.path.abspath(self._config.coding.db_path)),
                 "hy_code_chain",
             )
+            if self._chain_store is not None:
+                self._chain_store.close()
             self._chain_store = HyCodeMem(
-                _dir, repo_root=self._chain_repo_root, owner=owner)
-            logger.info("[coding] chain store initialized at %s (owner=%r)",
-                        _dir, owner)
+                _dir, repo_root=self._chain_repo_root, owner=owner, config=self._config)
+            logger.info("[coding] chain store initialized (backend=%s, owner=%r)",
+                        self._config.business_store.backend, owner)
             return self._chain_store
         except Exception as e:
+            if self._config.business_store.backend == "postgres":
+                raise
             # 只试一次。失败通常是环境性的（目录不可写 / sqlite 不可用），重试每次
             # add 都付一遍代价却不会变好。
             self._chain_store_failed = True
@@ -1280,28 +1279,31 @@ class HyMemoryClient:
 
         返回存下的 hunk 数（0 = 这段没有可识别的代码改动，正常情况，不是错误）。
 
-        全程零 LLM、零 embedding、纯 sqlite + 正则，适合在写链路同步执行。
+        全程零 LLM、零 embedding、业务存储 + 正则，适合在写链路同步执行。
 
         best-effort：任何异常只记 warning。这层是增量，它失败时向量双层已经写完了，
         把整个 add 拖失败是净亏。
         """
         # 走类而不是 self：_chain_owner 是 staticmethod，而这两个方法会被测试绑到裸
         # SimpleNamespace 上调（同 _scene_variant 那处），self 上没有这个属性。
-        store = self._get_chain_store(
-            HyMemoryClient._chain_owner(user_id, workspace_id))
-        if store is None:
-            return 0
-        try:
-            text = self._chain_text(chat_messages)
-            if not text.strip():
+        from contextlib import nullcontext
+
+        with getattr(self, "_chain_lock", nullcontext()):
+            store = self._get_chain_store(
+                HyMemoryClient._chain_owner(user_id, workspace_id))
+            if store is None:
                 return 0
-            # branch 给了就不猜（meta 里的 branch 优先于从文本里正则认）。
-            # workspace_id 不单独透传给 observe：它已经进了 owner（见 _chain_owner），
-            # thread 的键里不再需要第二个仓维度。
-            return int(store.observe(text, meta={"branch": branch or ""}) or 0)
-        except Exception as e:
-            logger.warning("[coding] chain observe failed: %s", e)
-            return 0
+            try:
+                text = self._chain_text(chat_messages)
+                if not text.strip():
+                    return 0
+                # branch 给了就不猜（meta 里的 branch 优先于从文本里正则认）。
+                # workspace_id 不单独透传给 observe：它已经进了 owner（见 _chain_owner），
+                # thread 的键里不再需要第二个仓维度。
+                return int(store.observe(text, meta={"branch": branch or ""}) or 0)
+            except Exception as e:
+                logger.warning("[coding] chain observe failed: %s", e)
+                return 0
 
     def _chain_block_enabled(self) -> bool:
         """search 是否注入 coding 版本演进链块（diff / chain_block）。
@@ -1330,21 +1332,24 @@ class HyMemoryClient:
         best-effort：失败返回 ("", [])，退化成纯向量双层（= working 的行为）。
         默认不注入（见 _chain_block_enabled）；需显式开启 chain_block_enabled。
         """
-        if not facts:
-            return "", []
-        # 走类而不是 self：测试常把本方法绑到裸 SimpleNamespace 上，self 上未必有
-        # 同名 bound method；_chain_owner 同理。
-        if not HyMemoryClient._chain_block_enabled(self):
-            return "", []
-        store = self._get_chain_store(
-            HyMemoryClient._chain_owner(user_id, workspace_id))
-        if store is None:
-            return "", []
-        try:
-            return store.decorate(facts, instruction=instruction, scope=scope)
-        except Exception as e:
-            logger.warning("[coding] chain decorate failed: %s", e)
-            return "", []
+        from contextlib import nullcontext
+
+        with getattr(self, "_chain_lock", nullcontext()):
+            if not facts:
+                return "", []
+            # 走类而不是 self：测试常把本方法绑到裸 SimpleNamespace 上，self 上未必有
+            # 同名 bound method；_chain_owner 同理。
+            if not HyMemoryClient._chain_block_enabled(self):
+                return "", []
+            store = self._get_chain_store(
+                HyMemoryClient._chain_owner(user_id, workspace_id))
+            if store is None:
+                return "", []
+            try:
+                return store.decorate(facts, instruction=instruction, scope=scope)
+            except Exception as e:
+                logger.warning("[coding] chain decorate failed: %s", e)
+                return "", []
 
     async def _search_coding(
         self,
@@ -1707,8 +1712,9 @@ class HyMemoryClient:
         # out_facts 里删掉。不同调用方可能自行拼 prompt，悄悄少给 facts 比多给一个
         # 字段危险得多；需要“块 + 剩余 facts”时可按 chain_used 自行过滤。
         if variant == "coding":
-            _blk, _used = self._decorate_with_chain(
-                out_facts, instruction=target_query,
+            from .coding.store import _run_in_pool
+            _blk, _used = await _run_in_pool(
+                self._decorate_with_chain, out_facts, instruction=target_query,
                 scope=(workspace_id or None),
                 user_id=primary_user, workspace_id=workspace_id,
             )
@@ -1863,6 +1869,7 @@ class HyMemoryClient:
         branch: Optional[str] = None,
         request_id: Optional[str] = None,
         layers: Optional[List[Any]] = None,
+        statuses: Optional[List[Any]] = None,
         embed_override: Optional[Dict[str, Any]] = None,
         query_embedding: Optional[List[float]] = None,
         rerank: bool = True,
@@ -1955,6 +1962,8 @@ class HyMemoryClient:
             layers:             可选。pro/ultra 下只召回指定层级（字符串或
                                 MemoryLayer），在召回阶段生效。lite 下忽略该参数并
                                 强制只召回 L1_RAW。
+            statuses:           仅用于 L1_RAW 定向搜索，可显式包含 active / shadow。
+                                非 raw 搜索或 scene="all" 传入时拒绝，避免静默忽略。
             rerank:             默认 True（原行为）。False 时本次调用跳过全部重排阶段：
                                 chat 路的本地 cross-encoder 重排（recall.local_rerank_enabled）
                                 与记忆关系图重排（graph_rerank / episode 扩展），working/
@@ -1998,7 +2007,7 @@ class HyMemoryClient:
             intention_limit=intention_limit, created_after=created_after,
             reader=reader,
             workspace_id=workspace_id, branch=branch,
-            request_id=request_id, layers=layers,
+            request_id=request_id, layers=layers, statuses=statuses,
             embed_override=embed_override,
             query_embedding=query_embedding,
             rerank=rerank,
@@ -2052,8 +2061,9 @@ class HyMemoryClient:
 
         Returns:
             {"success": True, "memory_id": "...", "request_id": "...", "elapsed_ms": ...}
-            生产力条目额外带 "kind" / "variant"。ID 同时命中多个 namespace 时抛
-            AmbiguousMemoryIdError。
+            生产力条目额外带 "kind" / "variant"。图正文同步失败时附加
+            "graph_sync_failed": True，向量库更新仍成功。ID 同时命中多个
+            namespace 时抛 AmbiguousMemoryIdError。
         """
         return self._loop_thread.run(self.async_update(
             memory_id, content, kind=kind, variant=variant, task=task,
@@ -2278,6 +2288,71 @@ class HyMemoryClient:
         return self._loop_thread.run(
             self.async_clone_user(
                 src_user_id, dst_user_id, agent_id=agent_id,
+            )
+        )
+
+    def export_user_memories(
+        self,
+        user_id: str,
+        *,
+        layers: Optional[List[Any]] = None,
+        include_embeddings: bool = True,
+        limit: int = 1_000_000,
+    ) -> Dict[str, Any]:
+        """
+        导出一个用户在向量库中的全部记忆节点（备份用）。
+
+        每个层级（含 L1_RAW 原始对话）、每种状态（含 SUPERSEDED / SHADOW）都在内，
+        每条是 `MemoryNode.to_dict()`，默认带 embedding。与 clone_user 同一读法，
+        但不写任何东西。图库（L5-L7）不在内：图是可由记忆重建的派生数据
+        （`build_memory_graph`）。
+
+        Args:
+            user_id:            用户 ID（必填）
+            layers:             可选，只导出这些层级（字符串或 MemoryLayer）
+            include_embeddings: 是否带向量（默认 True；False 时 embedding 为 None）
+            limit:              单次最多导出的节点数
+
+        Returns:
+            {"success": True, "request_id", "user_id", "nodes": [...], "count",
+             "by_layer": {"l1_raw": N, ...}, "embedding_dims", "embedding_model",
+             "elapsed_ms"}
+        """
+        return self._loop_thread.run(
+            self.async_export_user_memories(
+                user_id, layers=layers,
+                include_embeddings=include_embeddings, limit=limit,
+            )
+        )
+
+    def import_user_memories(
+        self,
+        user_id: str,
+        nodes: List[Dict[str, Any]],
+        *,
+        require_empty: bool = True,
+    ) -> Dict[str, Any]:
+        """
+        把 export_user_memories 导出的节点原样写回（恢复用）。
+
+        保留 node_id、层级、状态、演化链指针与时间；有 embedding 就原样写入
+        （维度必须与当前向量库一致），没有就用当前 embedding 服务重算。默认要求
+        该用户在向量库里是空的；写入失败时回滚已写入的该用户数据。不写图库：
+        恢复后用 `build_memory_graph` 重建。
+
+        Args:
+            user_id:       用户 ID；每个节点的 user_id 必须与之相同
+            nodes:         `MemoryNode.to_dict()` 形式的节点
+            require_empty: 目标用户必须为空（默认 True）
+
+        Returns:
+            {"success": True, "request_id", "user_id", "imported_count",
+             "by_layer", "re_embedded", "elapsed_ms"}；失败时 success=False
+            并带 "error_message"。
+        """
+        return self._loop_thread.run(
+            self.async_import_user_memories(
+                user_id, nodes, require_empty=require_empty,
             )
         )
 
@@ -2551,10 +2626,14 @@ class HyMemoryClient:
             self._coding_store = None
             self._coding_writer = None
             self._coding_llm_provider = None
-        # 链层：纯 sqlite，没有异步资源
+        # 链层：同步数据库连接，和写入/读取共用线程锁
         if getattr(self, "_chain_store", None) is not None:
             try:
-                self._chain_store.close()
+                from .coding.store import _run_in_pool
+                def close_chain():
+                    with self._chain_lock:
+                        self._chain_store.close()
+                await _run_in_pool(close_chain)
             except Exception as e:
                 logger.warning(f"[close] chain store close failed: {e}")
             self._chain_store = None
@@ -3032,9 +3111,12 @@ class HyMemoryClient:
                 # 版本演进链层（scene="coding" 独有）。放在 writer.write 之后、返回
                 # 之前，因为它只依赖对话原文，与向量层写入结果无关。
                 # best-effort：这层挂不上不影响本次 add 的向量层产出。
-                if scene_variant == "coding":
-                    resp["chain_rounds"] = self._observe_chain(
-                        chat_messages, user_id=uid,
+                # 向量层写入失败（success=False）时跳过：调用方会重跑整段，失败的
+                # 那次不该先把改动记进演进链。
+                if scene_variant == "coding" and resp.get("success"):
+                    from .coding.store import _run_in_pool
+                    resp["chain_rounds"] = await _run_in_pool(
+                        self._observe_chain, chat_messages, user_id=uid,
                         workspace_id=workspace_id, branch=branch,
                     )
                 # 同步刷新 elapsed
@@ -3384,12 +3466,14 @@ class HyMemoryClient:
         request_id: str,
         t0: float,
         query_embedding: Optional[List[float]],
+        statuses: Optional[List[Any]],
     ) -> Dict[str, Any]:
         """Implement `search(..., layers=['l1_raw'])` without a second API."""
         from .models.memory import MemoryLayer, MemoryStatus
 
         embedding = query_embedding or await self._embed_service.embed(query)
         fetch = min(max(limit * (10 if session_ids else 2), limit), 10_000)
+        status_filter = self._normalize_statuses(statuses) or [MemoryStatus.ACTIVE]
         hits = await self._vector_store.search(
             query_embedding=embedding,
             user_ids=user_ids,
@@ -3399,7 +3483,7 @@ class HyMemoryClient:
             layers=[MemoryLayer.L1_RAW],
             limit=fetch,
             score_threshold=min_score,
-            status_filter=[MemoryStatus.ACTIVE],
+            status_filter=status_filter,
             only_latest=False,
             created_after=created_after,
         )
@@ -3417,7 +3501,7 @@ class HyMemoryClient:
                     "memory_id": row.pop("raw_id"),
                     **row,
                     "layer": MemoryLayer.L1_RAW.value,
-                    "status": MemoryStatus.ACTIVE.value,
+                    "status": node.status.value,
                     "score": round(float(hit.get("score", 0.0)), 4),
                 }
             )
@@ -3861,6 +3945,7 @@ class HyMemoryClient:
         branch: Optional[str] = None,
         request_id: Optional[str] = None,
         layers: Optional[List[Any]] = None,
+        statuses: Optional[List[Any]] = None,
         embed_override: Optional[Dict[str, Any]] = None,
         query_embedding: Optional[List[float]] = None,
         rerank: bool = True,
@@ -3890,7 +3975,7 @@ class HyMemoryClient:
                     schema_min_score=schema_min_score, schema_limit=schema_limit,
                     intention_limit=intention_limit, created_after=created_after,
                     reader=reader, workspace_id=workspace_id, branch=branch,
-                    request_id=request_id, layers=layers,
+                    request_id=request_id, layers=layers, statuses=statuses,
                     query_embedding=query_embedding,
                     rerank=rerank,
                 )
@@ -3905,7 +3990,7 @@ class HyMemoryClient:
             schema_min_score=schema_min_score, schema_limit=schema_limit,
             intention_limit=intention_limit, created_after=created_after,
             reader=reader, workspace_id=workspace_id, branch=branch,
-            request_id=request_id, layers=layers,
+            request_id=request_id, layers=layers, statuses=statuses,
             query_embedding=query_embedding,
             rerank=rerank,
         )
@@ -3935,6 +4020,7 @@ class HyMemoryClient:
         branch: Optional[str] = None,
         request_id: Optional[str] = None,
         layers: Optional[List[Any]] = None,
+        statuses: Optional[List[Any]] = None,
         query_embedding: Optional[List[float]] = None,
         rerank: bool = True,
     ) -> Dict[str, Any]:
@@ -4019,6 +4105,17 @@ class HyMemoryClient:
                 "Cannot specify multiple agent_ids and multiple session_ids simultaneously. "
                 "Use single agent_id with multiple session_ids, or multiple agent_ids without session_ids."
             )
+
+        if statuses is not None:
+            from .models.memory import MemoryLayer
+
+            requested_layers = self._normalize_layers(layers)
+            if scene_all or (
+                not lite_mode and requested_layers != [MemoryLayer.L1_RAW]
+            ):
+                raise ValueError(
+                    "statuses is supported only for explicit L1_RAW search"
+                )
 
         if scene_all:
             return await self._search_all_scenes(
@@ -4355,6 +4452,7 @@ class HyMemoryClient:
                 request_id=request_id,
                 t0=t0,
                 query_embedding=query_embedding,
+                statuses=statuses,
             )
 
         read_req = ReadRequest(
@@ -4539,10 +4637,11 @@ class HyMemoryClient:
         coding_config = getattr(config, "coding", None)
         if config is None or coding_config is None:
             return None
-        if not CodingMemoryStore.database_exists(
-            config,
-            db_path=coding_config.db_path,
-            variant=variant,
+        from .coding.store import _run_in_pool
+
+        if not await _run_in_pool(
+            CodingMemoryStore.database_exists, config,
+            db_path=coding_config.db_path, variant=variant,
         ):
             return None
         await self._get_coding_writer(variant=variant)
@@ -4848,7 +4947,8 @@ class HyMemoryClient:
 
         Returns:
             {"success", "memory_id", "request_id", "elapsed_ms"}；生产力条目额外带
-            "kind" / "variant"。不存在时 success=False + error_message。
+            "kind" / "variant"。图正文同步失败时附加 "graph_sync_failed": True。
+            不存在时 success=False + error_message。
         """
         self._validate_memory_namespace(kind, variant)
         if task is not None and kind in ("chat", "fact"):
@@ -4953,7 +5053,7 @@ class HyMemoryClient:
     async def _update_chat(self, memory_id: str, content: str) -> Dict[str, Any]:
         """chat 记忆的更新（原 async_update 逻辑）。
 
-        流程: get_by_id → 404 校验 → embed → 更新节点字段 → upsert → 记录历史
+        更新向量库，并同步已有图节点的正文。图同步失败不回滚向量库。
         """
         request_id = str(uuid.uuid4())
         set_request_id(request_id)
@@ -4982,8 +5082,10 @@ class HyMemoryClient:
         # 更新节点
         node.content = content
         node.embedding = new_embedding
+        node.gmt_modified = datetime.now()
 
         await self._vector_store.upsert(node)
+        graph_synced = await self._sync_chat_graph_content(memory_id)
         try:
             from .pipelines._retrieval.retrieval_clauses import (
                 sync_retrieval_clause_index,
@@ -5022,12 +5124,41 @@ class HyMemoryClient:
             except Exception as e:
                 logger.warning(f"[update] history record failed: {e}")
 
-        return {
+        result = {
             "success": True,
             "memory_id": memory_id,
             "request_id": request_id,
             "elapsed_ms": round((time.perf_counter() - t0) * 1000, 2),
         }
+        if not graph_synced:
+            result["graph_sync_failed"] = True
+        return result
+
+    async def _sync_chat_graph_content(self, memory_id: str) -> bool:
+        graph_store = getattr(self, "_graph_store", None)
+        graph_config = getattr(self._config, "graph_store", None)
+        if graph_store is None or not getattr(graph_config, "memory_graph_write", True):
+            return True
+
+        from .core.workload import graph_slot
+
+        provider = getattr(graph_config, "provider", "")
+        provider = str(getattr(provider, "value", provider) or "").lower()
+        try:
+            async with graph_slot(kuzu=provider == "kuzu"):
+                # A concurrent edit may have committed while this one waited.
+                latest = await self._vector_store.get_by_id(memory_id)
+                if latest is None:
+                    return True
+                # Update in place. Upserting could recreate an absent graph node.
+                if await graph_store.update_node(memory_id, {"content": latest.content}):
+                    return True
+            logger.warning("[update] graph content sync failed: memory_id=%s", memory_id)
+        except Exception as exc:
+            logger.warning(
+                "[update] graph content sync failed: memory_id=%s: %s", memory_id, exc,
+            )
+        return False
 
     def _backend_identity(self) -> Dict[str, str]:
         """解析当前 VDB 后端身份：provider / db_name / collection_name。
@@ -6799,6 +6930,10 @@ class HyMemoryClient:
                 getattr(gcfg, "hierarchy_topic_write", False) if gcfg else False
             ),
         )
+        # 回填是一次性的大批写入：立刻 CHECKPOINT，不把整批 WAL 留给下次打开回放。
+        checkpoint = getattr(self._graph_store, "checkpoint", None)
+        if callable(checkpoint):
+            await checkpoint()
         return {
             "success": True,
             "memories_scanned": len(nodes),
@@ -7013,6 +7148,174 @@ class HyMemoryClient:
                 current["waiters"] -= 1
                 if current["waiters"] <= 0:
                     entries.pop(key, None)
+
+    @_ensure_internal_loop
+    async def async_export_user_memories(
+        self,
+        user_id: str,
+        *,
+        layers: Optional[List[Any]] = None,
+        include_embeddings: bool = True,
+        limit: int = 1_000_000,
+    ) -> Dict[str, Any]:
+        """导出一个用户的全部向量库记忆节点（异步），见 export_user_memories。"""
+        normalized_user_id = str(user_id or "").strip()
+        if not normalized_user_id:
+            raise ValueError("user_id is required and cannot be empty")
+        request_id = str(uuid.uuid4())
+        set_request_id(request_id)
+        t0 = time.perf_counter()
+        effective_layers = self._normalize_layers(layers)
+        nodes = await self._vector_store.list_by_user(
+            normalized_user_id,
+            limit=limit,
+            layers=effective_layers,
+            with_vectors=include_embeddings,
+            # 备份要的是这个用户的全部数据，含原始对话层。
+            allow_raw_layer=True,
+        )
+        items: List[Dict[str, Any]] = []
+        by_layer: Dict[str, int] = {}
+        for node in nodes or []:
+            data = node.to_dict()
+            embedding = getattr(node, "embedding", None)
+            data["embedding"] = (
+                [float(value) for value in embedding]
+                if include_embeddings and embedding
+                else None
+            )
+            items.append(data)
+            by_layer[data["layer"]] = by_layer.get(data["layer"], 0) + 1
+        vector_config = getattr(self._config, "vector_store", None)
+        embedder_config = getattr(self._config, "embedder", None)
+        dims = getattr(vector_config, "embedding_dims", None)
+        if not dims:
+            dims = next((len(item["embedding"]) for item in items if item["embedding"]), None)
+        return {
+            "success": True,
+            "request_id": request_id,
+            "user_id": normalized_user_id,
+            "nodes": items,
+            "count": len(items),
+            "by_layer": by_layer,
+            "embedding_dims": dims,
+            "embedding_model": getattr(embedder_config, "model", None),
+            "elapsed_ms": round((time.perf_counter() - t0) * 1000, 2),
+        }
+
+    @_ensure_internal_loop
+    async def async_import_user_memories(
+        self,
+        user_id: str,
+        nodes: List[Dict[str, Any]],
+        *,
+        require_empty: bool = True,
+    ) -> Dict[str, Any]:
+        """把导出的节点按原 id 写回（异步），见 import_user_memories。"""
+        from .models.memory import MemoryNode
+
+        request_id = str(uuid.uuid4())
+        set_request_id(request_id)
+        t0 = time.perf_counter()
+
+        def failed(message: str) -> Dict[str, Any]:
+            return {
+                "success": False,
+                "request_id": request_id,
+                "user_id": user_id,
+                "imported_count": 0,
+                "elapsed_ms": round((time.perf_counter() - t0) * 1000, 2),
+                "error_message": message,
+            }
+
+        normalized_user_id = str(user_id or "").strip()
+        if not normalized_user_id:
+            return failed("user_id is required")
+        if not nodes:
+            return {
+                "success": True,
+                "request_id": request_id,
+                "user_id": normalized_user_id,
+                "imported_count": 0,
+                "by_layer": {},
+                "re_embedded": 0,
+                "elapsed_ms": round((time.perf_counter() - t0) * 1000, 2),
+            }
+
+        built: List[Any] = []
+        missing: List[Any] = []
+        seen_ids = set()
+        dims = getattr(getattr(self._config, "vector_store", None), "embedding_dims", None)
+        for data in nodes:
+            if not isinstance(data, dict):
+                return failed("every node must be a dict from export_user_memories")
+            if str(data.get("user_id") or "") != normalized_user_id:
+                return failed("a node belongs to another user_id")
+            node = MemoryNode.from_dict(dict(data))
+            if not data.get("node_id") or node.node_id in seen_ids:
+                return failed("every node needs a unique node_id")
+            seen_ids.add(node.node_id)
+            embedding = data.get("embedding")
+            if embedding:
+                if dims and len(embedding) != int(dims):
+                    return failed(
+                        f"embedding width {len(embedding)} does not match "
+                        f"the vector store ({dims})"
+                    )
+                node.embedding = [float(value) for value in embedding]
+            else:
+                node.embedding = None
+                missing.append(node)
+            built.append(node)
+
+        if require_empty:
+            existing = await self._vector_store.list_by_user(
+                normalized_user_id, limit=1, with_vectors=False,
+                allow_raw_layer=True,
+            )
+            if existing:
+                return failed(
+                    f"user_id '{normalized_user_id}' already has memories. "
+                    "Import requires an empty user."
+                )
+
+        try:
+            if missing:
+                # 导出时没带向量（或旧格式）：用当前 embedding 服务按内容重算。
+                vectors = await self._embed_service.embed_batch(
+                    [node.content for node in missing]
+                )
+                for node, vector in zip(missing, vectors):
+                    node.embedding = list(vector)
+            written = await self._vector_store.upsert_batch(built)
+            if set(written) != {node.node_id for node in built}:
+                raise RuntimeError("import incomplete: not every node was written")
+        except Exception as error:  # noqa: BLE001 - reported, and rolled back below
+            logger.error(f"[import] failed: {error}", exc_info=True)
+            if require_empty:
+                try:
+                    await self._vector_store.delete_by_metadata(user_id=normalized_user_id)
+                except Exception as rollback_error:  # noqa: BLE001
+                    logger.warning(f"[import] rollback failed: {rollback_error}")
+            return failed(str(error))
+
+        by_layer: Dict[str, int] = {}
+        for node in built:
+            layer = node.layer.value if hasattr(node.layer, "value") else str(node.layer)
+            by_layer[layer] = by_layer.get(layer, 0) + 1
+        logger.info(
+            f"[import] user={normalized_user_id} imported={len(built)} "
+            f"re_embedded={len(missing)}"
+        )
+        return {
+            "success": True,
+            "request_id": request_id,
+            "user_id": normalized_user_id,
+            "imported_count": len(built),
+            "by_layer": by_layer,
+            "re_embedded": len(missing),
+            "elapsed_ms": round((time.perf_counter() - t0) * 1000, 2),
+        }
 
     @_ensure_internal_loop
     async def async_clone_user(

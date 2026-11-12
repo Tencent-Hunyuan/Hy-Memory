@@ -12,7 +12,12 @@ from hy_memory.coding.fact_reconciler import (
     FACT_RECONCILE_PROMPT,
     WorkingFactReconciler,
 )
-from hy_memory.coding.types import CodingMemory, WorkingFact, WorkingFactDraft
+from hy_memory.coding.types import (
+    CodingMemory,
+    CodingWriteError,
+    WorkingFact,
+    WorkingFactDraft,
+)
 
 from tests.coding._helpers import FailingLLMProvider, MockLLMProvider
 
@@ -602,39 +607,79 @@ class TestCleanSummary:
         assert s == '现在读 "APP_CONFIG" 这个变量。'
 
 
+async def _seed_old_fact(store):
+    await store.insert_fact(WorkingFact(
+        fact_id="f_old", user_id="u1", session_id="test-session",
+        statement="config 位于 /opt/app/config.yaml",
+    ))
+
+
+async def _active_fact_ids(store):
+    with store._lock:
+        rows = store._conn.execute(
+            "SELECT fact_id FROM working_fact WHERE user_id=? AND status='active'",
+            ("u1",),
+        ).fetchall()
+    return sorted(r[0] for r in rows)
+
+
 @pytest.mark.asyncio
-class TestFailSafe:
-    async def test_llm_failure_still_inserts(self, coding_store, mock_embed):
-        """LLM 挂了宁可多留一条过期事实，也不能因为一次调用失败丢结论。"""
-        await coding_store.insert_fact(WorkingFact(
-            fact_id="f_old", user_id="u1", session_id="test-session",
-            statement="config 位于 /opt/app/config.yaml",
-        ))
-        rec = WorkingFactReconciler(coding_store, mock_embed, FailingLLMProvider())
+class TestDecisionFailure:
+    """覆盖判定的 LLM 失败 / 空回复 / 解析不出：抛 RECONCILE_FAILED，既不插入新事实，
+    也不覆盖旧事实（此前退化为全 INSERT 不覆盖）。"""
+
+    @pytest.mark.parametrize("llm,cause", [
+        (FailingLLMProvider(), "LLM_UNAVAILABLE"),
+        (MockLLMProvider(""), "EMPTY_RESPONSE"),
+        (MockLLMProvider("不是 JSON 的一段话"), "JSON_PARSE_FAILED"),
+        (MockLLMProvider('{"result": "keep"}'), "JSON_PARSE_FAILED"),
+    ])
+    async def test_failure_stores_nothing(self, coding_store, mock_embed, llm, cause):
+        await _seed_old_fact(coding_store)
+        rec = WorkingFactReconciler(coding_store, mock_embed, llm)
+
+        with pytest.raises(CodingWriteError) as exc:
+            await rec.reconcile(
+                [_draft("config 位于 /etc/app/config.yaml")],
+                user_id="u1", session_id="test-session",
+            )
+        assert exc.value.error_code == "RECONCILE_FAILED"
+        assert exc.value.cause == cause
+        assert await _active_fact_ids(coding_store) == ["f_old"]
+        old = await coding_store.get_fact("f_old", user_id="u1")
+        assert old.status == "active"
+
+    async def test_valid_empty_ops_inserts_without_supersede(
+        self, coding_store, mock_embed,
+    ):
+        """{"ops": []} 是有效决策：都不覆盖、只插入。"""
+        await _seed_old_fact(coding_store)
+        rec = WorkingFactReconciler(
+            coding_store, mock_embed, MockLLMProvider(_ops_resp([])),
+        )
 
         facts, ops = await rec.reconcile(
-            [_draft("config 位于 /etc/app/config.yaml")], user_id="u1",
+            [_draft("config 位于 /etc/app/config.yaml")],
+            user_id="u1", session_id="test-session",
         )
         assert len(facts) == 1
         assert [o.action for o in ops] == ["INSERT"]
         old = await coding_store.get_fact("f_old", user_id="u1")
         assert old.status == "active"
 
-    async def test_unparsable_llm_output(self, coding_store, mock_embed):
-        await coding_store.insert_fact(WorkingFact(
-            fact_id="f_old", user_id="u1", session_id="test-session",
-            statement="config 位于 /opt/app/config.yaml",
-        ))
-        rec = WorkingFactReconciler(
-            coding_store, mock_embed, MockLLMProvider("不是 JSON 的一段话")
+    async def test_no_candidates_needs_no_llm(self, coding_store, mock_embed):
+        """没有候选时不调 LLM：全部 INSERT 是确定结论，LLM 挂着也不影响。"""
+        llm = FailingLLMProvider()
+        rec = WorkingFactReconciler(coding_store, mock_embed, llm)
+        facts, _ = await rec.reconcile(
+            [_draft("config 位于 /etc/app/config.yaml")],
+            user_id="u1", session_id="test-session",
         )
+        assert len(facts) == 1 and llm.calls == 0
 
-        facts, ops = await rec.reconcile(
-            [_draft("config 位于 /etc/app/config.yaml")], user_id="u1",
-        )
-        assert len(facts) == 1
-        assert [o.action for o in ops] == ["INSERT"]
 
+@pytest.mark.asyncio
+class TestReplyParsing:
     async def test_markdown_fence_parsed(self, coding_store, mock_embed):
         await coding_store.insert_fact(WorkingFact(
             fact_id="f_old", user_id="u1", session_id="test-session",
