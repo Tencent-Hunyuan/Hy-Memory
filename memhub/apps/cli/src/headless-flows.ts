@@ -420,6 +420,7 @@ function validateModelConfig(value: unknown): Record<string, unknown> | null {
     "max_concurrency",
     "context_window",
     "disable_thinking",
+    "output_token_parameter",
   ]);
   if (Object.keys(config).some((key) => !allowed.has(key))) return null;
   if (
@@ -435,7 +436,10 @@ function validateModelConfig(value: unknown): Record<string, unknown> | null {
     !optionalInteger(config.max_concurrency, 1, 32) ||
     !optionalInteger(config.context_window, 1_024, 10_000_000) ||
     (config.disable_thinking !== undefined &&
-      typeof config.disable_thinking !== "boolean")
+      typeof config.disable_thinking !== "boolean") ||
+    (config.output_token_parameter !== undefined &&
+      config.output_token_parameter !== "max_tokens" &&
+      config.output_token_parameter !== "max_completion_tokens")
   ) {
     return null;
   }

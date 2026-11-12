@@ -19,6 +19,14 @@ from one_memory.memory_server.migrations import (
 )
 from one_memory.secrets import SecretStore, SecretStoreUnavailableError
 
+#: The field an OpenAI-compatible chat request carries its output-token ceiling
+#: in. Most providers take `max_tokens`; some newer ones refuse it and require
+#: `max_completion_tokens`. Per profile, because it is a property of the
+#: provider; every Core request and the SDK (`llm.output_token_parameter`,
+#: hy-memory 2.0.16) send the same one.
+OutputTokenParameter = Literal["max_tokens", "max_completion_tokens"]
+DEFAULT_OUTPUT_TOKEN_PARAMETER: OutputTokenParameter = "max_tokens"
+
 
 class ProviderKind(StrEnum):
     HY_DEFAULT = "hy_default"
@@ -38,7 +46,7 @@ _PROFILE_SNAPSHOT_COLUMNS = (
     "profile_id, revision, provider_kind, base_url, model, embedding_model, "
     "embedding_provider_kind, embedding_base_url, embedding_dimensions, "
     "timeout_seconds, max_concurrency, context_window, disable_thinking, "
-    "(secret_ref IS NOT NULL) AS has_api_key"
+    "output_token_parameter, (secret_ref IS NOT NULL) AS has_api_key"
 )
 
 
@@ -66,6 +74,7 @@ class ModelProfileInput(BaseModel):
     max_concurrency: int = Field(default=4, ge=1, le=32)
     context_window: int | None = Field(default=None, ge=1024, le=10_000_000)
     disable_thinking: bool = True
+    output_token_parameter: OutputTokenParameter = DEFAULT_OUTPUT_TOKEN_PARAMETER
 
     @field_validator("creation_operation_id")
     @classmethod
@@ -143,6 +152,7 @@ class ModelProfilePatch(BaseModel):
     max_concurrency: int | None = Field(default=None, ge=1, le=32)
     context_window: int | None = Field(default=None, ge=1024, le=10_000_000)
     disable_thinking: bool | None = None
+    output_token_parameter: OutputTokenParameter | None = None
 
     @model_validator(mode="after")
     def validate_secret_change(self) -> "ModelProfilePatch":
@@ -180,6 +190,7 @@ class ModelProfile(BaseModel):
     max_concurrency: int
     context_window: int | None
     disable_thinking: bool = True
+    output_token_parameter: OutputTokenParameter = DEFAULT_OUTPUT_TOKEN_PARAMETER
     capabilities: ModelCapabilities
     revision: int
     is_active: bool
@@ -205,6 +216,7 @@ class ModelProfileSnapshot(BaseModel):
     has_api_key: bool
     # 与 ModelProfile 的默认值保持一致：忘记显式传参时不应悄悄打开思考链。
     disable_thinking: bool = True
+    output_token_parameter: OutputTokenParameter = DEFAULT_OUTPUT_TOKEN_PARAMETER
 
 
 class ModelProfileConflictError(RuntimeError):
@@ -308,6 +320,12 @@ class ModelProfileStore:
                         f"ALTER TABLE {table} "
                         "ADD COLUMN disable_thinking INTEGER NOT NULL DEFAULT 1"
                     )
+                if "output_token_parameter" not in columns:
+                    # Every profile saved before the option sent `max_tokens`.
+                    connection.execute(
+                        f"ALTER TABLE {table} ADD COLUMN output_token_parameter "
+                        "TEXT NOT NULL DEFAULT 'max_tokens'"
+                    )
             for table in ("model_profiles", "model_profile_versions"):
                 connection.execute(
                     f"""
@@ -326,14 +344,14 @@ class ModelProfileStore:
                     embedding_model, embedding_provider_kind, embedding_base_url,
                     embedding_dimensions,
                     timeout_seconds, max_concurrency, context_window,
-                    disable_thinking,
+                    disable_thinking, output_token_parameter,
                     secret_ref, created_at
                 )
                 SELECT profile_id, revision, provider_kind, base_url, model,
                        embedding_model, embedding_provider_kind, embedding_base_url,
                        embedding_dimensions,
                        timeout_seconds, max_concurrency, context_window,
-                       disable_thinking,
+                       disable_thinking, output_token_parameter,
                        secret_ref, updated_at
                 FROM model_profiles
                 """
@@ -375,8 +393,9 @@ class ModelProfileStore:
                         embedding_model, embedding_provider_kind, embedding_base_url,
                         embedding_dimensions,
                         secret_ref, timeout_seconds, max_concurrency,
-                        context_window, disable_thinking, revision, created_at, updated_at
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)
+                        context_window, disable_thinking, output_token_parameter,
+                        revision, created_at, updated_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)
                     """,
                     (
                         profile_id,
@@ -393,6 +412,7 @@ class ModelProfileStore:
                         value.max_concurrency,
                         value.context_window,
                         int(value.disable_thinking),
+                        value.output_token_parameter,
                         now,
                         now,
                     ),
@@ -682,6 +702,9 @@ class ModelProfileStore:
                     if patch.disable_thinking is not None
                     else current.disable_thinking
                 ),
+                "output_token_parameter": (
+                    patch.output_token_parameter or current.output_token_parameter
+                ),
             }
             if (
                 patch.api_key is None
@@ -722,6 +745,7 @@ class ModelProfileStore:
                         "embedding_provider_kind",
                         "embedding_base_url",
                         "disable_thinking",
+                        "output_token_parameter",
                     )
                 )
             )
@@ -745,6 +769,7 @@ class ModelProfileStore:
                         secret_ref = ?,
                         timeout_seconds = ?, max_concurrency = ?,
                         context_window = ?, disable_thinking = ?,
+                        output_token_parameter = ?,
                         revision = revision + 1,
                         endpoint_reachable = 0, model_available = 0,
                         structured_output = 0, embedding_available = 0,
@@ -765,6 +790,7 @@ class ModelProfileStore:
                         next_values["max_concurrency"],
                         next_values["context_window"],
                         next_values["disable_thinking"],
+                        next_values["output_token_parameter"],
                         int(deactivate),
                         now,
                         profile_id,
@@ -1043,6 +1069,7 @@ class ModelProfileStore:
             context_window=row["context_window"],
             has_api_key=row["secret_ref"] is not None,
             disable_thinking=bool(row["disable_thinking"]),
+            output_token_parameter=row["output_token_parameter"],
         )
 
     def resolve_snapshot_secret(
@@ -1095,14 +1122,14 @@ class ModelProfileStore:
                 embedding_model, embedding_provider_kind, embedding_base_url,
                 embedding_dimensions,
                 timeout_seconds, max_concurrency, context_window,
-                disable_thinking,
+                disable_thinking, output_token_parameter,
                 secret_ref, created_at
             )
             SELECT profile_id, revision, provider_kind, base_url, model,
                    embedding_model, embedding_provider_kind, embedding_base_url,
                    embedding_dimensions,
                    timeout_seconds, max_concurrency, context_window,
-                   disable_thinking,
+                   disable_thinking, output_token_parameter,
                    secret_ref, ?
             FROM model_profiles WHERE profile_id = ?
             """,
@@ -1135,6 +1162,7 @@ class ModelProfileStore:
             max_concurrency=row["max_concurrency"],
             context_window=row["context_window"],
             disable_thinking=bool(row["disable_thinking"]),
+            output_token_parameter=row["output_token_parameter"],
             capabilities=ModelCapabilities(
                 endpoint_reachable=bool(row["endpoint_reachable"]),
                 model_available=bool(row["model_available"]),
@@ -1165,6 +1193,19 @@ def disable_thinking_params(
     if profile.provider_kind is ProviderKind.OLLAMA:
         return {"think": False}
     return {}
+
+
+def output_token_field(
+    profile: ModelProfile | ModelProfileSnapshot,
+) -> OutputTokenParameter:
+    """The field an OpenAI-compatible chat request puts its token ceiling in.
+
+    The one choice for every request Core builds itself (probe, answers,
+    batch extraction) and for the SDK's `llm.output_token_parameter`, so a
+    provider that refuses `max_tokens` is refused nowhere. Ollama and
+    Anthropic requests keep their native fields.
+    """
+    return profile.output_token_parameter
 
 
 def attach_disable_thinking(

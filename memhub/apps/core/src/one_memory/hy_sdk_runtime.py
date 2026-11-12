@@ -58,6 +58,7 @@ from one_memory.model_profiles import (
     ModelProfileSnapshot,
     ProviderKind,
     disable_thinking_params,
+    output_token_field,
 )
 from one_memory.storage_backends import ResolvedStorage, storage_kwargs
 
@@ -481,6 +482,8 @@ def build_sdk_config(
         "model": profile.model,
         "api_key": generation_key,
         "base_url": generation_endpoint,
+        # Always the profile's, never `MEMORY_LLM_OUTPUT_TOKEN_PARAMETER`.
+        "output_token_parameter": output_token_field(profile),
     }
     # The SDK sends `extra_body` on every chat call, chat and coding/working
     # alike. Without it DeepSeek spent the whole agent_max_tokens on thinking
