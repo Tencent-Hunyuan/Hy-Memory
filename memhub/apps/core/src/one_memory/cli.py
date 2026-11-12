@@ -37,7 +37,7 @@ from collections.abc import Iterator, Sequence  # noqa: E402
 from pathlib import Path  # noqa: E402
 from typing import Any, TextIO  # noqa: E402
 
-from one_memory.config import load_settings  # noqa: E402
+from one_memory.config import Settings, load_settings  # noqa: E402
 from one_memory.runtime_client import RuntimeStatus, inspect_runtime  # noqa: E402
 
 # The startup dialog can only act on the name it is given: running out of disk
@@ -741,6 +741,16 @@ def _status_text(command: str, status: RuntimeStatus) -> str:
 #: authority (`EX_CONFIG`). The Runtime maps it to `sdk_migration_required`.
 SDK_MIGRATION_REQUIRED_EXIT = 78
 
+#: Exit status of a serving Core refused because its port is already bound
+#: (`EX_TEMPFAIL`): whoever holds the port must let go, or the port changes,
+#: before the Core can start. Distinguished from a crash, which exits with the
+#: interpreter's unhandled-error status.
+PORT_IN_USE_EXIT = 75
+
+#: Errnos that mean "another listener owns the address", across platforms:
+#: POSIX EADDRINUSE and Windows WSAEADDRINUSE (10048).
+_PORT_IN_USE_ERRNOS = frozenset({errno.EADDRINUSE, 10048})
+
 
 def _refuse_unmigrated_home(data_dir: Path) -> None:
     """Exit before binding when an existing home has not reached SDK authority.
@@ -802,9 +812,144 @@ def _without_embedding_switch(settings: Any) -> Any:
     return copy(update={"embedding_switch_worker": False}) if callable(copy) else settings
 
 
-def serve(*, maintenance: bool = False) -> None:
+def _port_in_use_explanation(status: RuntimeStatus, *, settings_port: int) -> str:
+    """The refusal code for a bind that did not happen, naming the holder.
+
+    `inspect_runtime`'s receipt is the other Core's -- the failing Core has not
+    written its own yet (the receipt is published only after the bind, from the
+    server's lifespan). A receipt whose process serves *this* port proves the
+    blocker is this home's own Runtime, including one that is still starting:
+    the bind now precedes the lifespan, so during a long startup phase (the
+    graph probe can hold it for minutes) the port listens while the identity
+    probe gets no answer -- a receipt plus a live pid plus a listening port is
+    this home's Runtime, not a foreign process. The localized sentence for
+    each code lives with the i18n catalogs; the Core prints the code only.
+    """
+    if status.port is not None and status.port == settings_port:
+        if status.state == "running":
+            return "core_port_in_use_by_runtime"
+        if (
+            status.state == "unhealthy"
+            and status.code == "runtime_identity_unreachable"
+            and _port_is_listening(status.host or "127.0.0.1", status.port)
+        ):
+            return "core_port_in_use_by_runtime"
+    return "core_port_in_use"
+
+
+def _port_is_listening(host: str, port: int) -> bool:
+    """Whether something accepts a TCP connection at `host:port`.
+
+    Distinguishes the Runtime-that-is-still-starting (port listening, HTTP
+    identity not answering yet) from a receipt whose pid was recycled: a
+    recycled pid that happens to hold exactly this port is not a listener we
+    could ever attribute to this home.
+    """
+    import socket
+
+    try:
+        with socket.create_connection((host, port), timeout=0.5):
+            return True
+    except OSError:
+        return False
+
+
+def _serve_forever(application: object, settings: Settings) -> None:
+    """Serve on sockets this process binds itself.
+
+    uvicorn (pinned 0.52) answers a refused bind internally -- logged, then
+    `SystemExit(3)` -- and its lifespan takes `core.lock` and publishes this
+    process's own runtime receipt before it binds, so by the time uvicorn
+    could report a refusal the receipt no longer names the holder. Binding
+    here keeps the refusal ours to answer while the previous Core's receipt
+    still speaks for the process that actually holds the port, and hands
+    uvicorn sockets it never has to bind.
+
+    Addresses resolve the way uvicorn's own bind did: `localhost` serves
+    both stacks and `::1` serves IPv6, instead of `create_server`'s
+    single-family first answer.
+    """
+    import socket
+
     import uvicorn
 
+    listening: list[socket.socket] = []
+    refusal: OSError | None = None
+    try:
+        infos = socket.getaddrinfo(
+            settings.host,
+            settings.port,
+            type=socket.SOCK_STREAM,
+            flags=socket.AI_PASSIVE,
+        )
+        for family, socktype, proto, _canonname, sockaddr in infos:
+            sock = socket.socket(family, socktype, proto)
+            try:
+                if family == socket.AF_INET6:
+                    # Bound explicitly per family: a dual-stack v6 listener
+                    # would collide with the v4 one below.
+                    sock.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_V6ONLY, 1)
+                sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+                sock.bind(sockaddr)
+                sock.listen(2048)
+                listening.append(sock)
+            except OSError as error:
+                sock.close()
+                refusal = refusal if refusal is not None else error
+    except OSError as error:
+        refusal = error
+    if not listening:
+        assert refusal is not None
+        _serve_forever_refused(
+            refusal,
+            settings_port=settings.port,
+            data_dir=settings.data_dir,
+            stderr=sys.stderr,
+        )
+    config = uvicorn.Config(
+        application,
+        host=settings.host,
+        port=settings.port,
+        reload=False,
+        access_log=False,
+    )
+    server = uvicorn.Server(config)
+    try:
+        server.run(sockets=listening)
+    finally:
+        for sock in listening:
+            sock.close()
+
+
+def _serve_forever_refused(
+    error: OSError, *, settings_port: int, data_dir: Path, stderr: object
+) -> None:
+    """Name the process that holds the port, then exit as refused, not broken.
+
+    Split from `_serve_forever` so the refused path is drivable in tests
+    without a real listener; the message content and exit status are the
+    contract the Runtime and scripts read. An OSError that is not the
+    address-in-use refusal is not this path's to answer: rethrown as-is.
+    """
+    if getattr(error, "errno", None) not in _PORT_IN_USE_ERRNOS:
+        raise error
+
+    from one_memory.diagnostic_log import diagnostic_event
+
+    code = _port_in_use_explanation(inspect_runtime(data_dir), settings_port=settings_port)
+    diagnostic_event(
+        level="error",
+        component="core.lifecycle",
+        event="core.bind_refused",
+        outcome="refused",
+        instance_id=os.environ.get("ONE_MEMORY_INSTANCE_ID"),
+        details={"code": code, "port": settings_port},
+    )
+    print(code, file=stderr, flush=True)  # type: ignore[arg-type]
+    raise SystemExit(PORT_IN_USE_EXIT) from error
+
+
+def serve(*, maintenance: bool = False) -> None:
     from one_memory.diagnostic_log import configure_diagnostics, diagnostic_event
     from one_memory.hy_runtime_config import (
         apply_diagnostic_log_level,
@@ -857,21 +1002,9 @@ def serve(*, maintenance: bool = False) -> None:
     )
     if maintenance:
         with CoreRuntime(settings, publish_receipt=False):
-            uvicorn.run(
-                application,
-                host=settings.host,
-                port=settings.port,
-                reload=False,
-                access_log=False,
-            )
+            _serve_forever(application, settings)
     else:
-        uvicorn.run(
-            application,
-            host=settings.host,
-            port=settings.port,
-            reload=False,
-            access_log=False,
-        )
+        _serve_forever(application, settings)
 
 
 if __name__ == "__main__":

@@ -2041,4 +2041,8 @@ export const traditionalChineseMessages: Record<MessageKey, string> = {
   "migration.unknown": "未知",
   "migration.yes": "是",
   "migration.no": "否",
+  "core.portInUse.byRuntime":
+    "連接埠 {port} 已被本資料目錄的 MemHub Core 佔用（可能仍在啟動中）。等待它就緒，或先停止它（如 memhub stop / 重新啟動系統服務），或變更 ONE_MEMORY_PORT。",
+  "core.portInUse.foreign":
+    "連接埠 {port} 被其他行程佔用，不是本資料目錄的 MemHub Core。找出佔用該連接埠的行程，或變更 ONE_MEMORY_PORT。",
 };

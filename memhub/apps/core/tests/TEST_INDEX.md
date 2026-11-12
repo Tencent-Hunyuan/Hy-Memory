@@ -57,6 +57,7 @@
 | `test_cli_commands.py` | `contract` | 覆盖 status reports the verified runtime as json、doctor fails when runtime identity cannot be verified、serve and legacy empty command share the same entry 等 4 个场景。 |
 | `test_cli_lifecycle.py` | `integration` | 覆盖 cli starts and stops without residual runtime 场景。 |
 | `test_cli_migration_error_codes.py` | `unit` | The startup dialog can only act on the code it is handed. |
+| `test_cli_port_in_use.py` | `integration` | 覆盖 port in use exit codes、serve exits with core_port_in_use instead of a traceback 场景。 |
 | `test_cli_restore.py` | `contract` | 覆盖 restore requires a source、restore refuses while the runtime is running、restore previews without confirmation 等 4 个场景。 |
 | `test_codex_header_provenance.py` | `contract` | 覆盖 header workspace versions and native ids reach file origin、new adapter rereads header after a real checkpoint、machine and unknown session sources do not establish human or agent sender 等 14 个场景。 |
 | `test_connection_lifetime.py` | `integration` | Every SQLite connection a request opens must be closed when the request ends. |
@@ -337,4 +338,4 @@
 | `test_workspace_recall.py` | `contract` | Workspace memories were unreachable from every host; these pin the way in. |
 | `test_write_queue_lease_renewal.py` | `contract` | Rule 8: a lease must outlive the work it covers, and be renewed while it runs. |
 
-共 332 个测试文件。
+共 333 个测试文件。
