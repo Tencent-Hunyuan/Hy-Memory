@@ -837,24 +837,22 @@ def _port_in_use_explanation(status: RuntimeStatus) -> tuple[str, str]:
 
 
 def _serve_forever(application: object, settings: Settings) -> None:
-    """Run the server, translating a lost bind race into an exit, not a crash.
+    """Serve on a socket this process binds itself.
 
-    A Core that cannot bind was refused, not broken: the raw `OSError: [Errno
-    98] Address already in use` traceback leaves the operator to guess which
-    process holds the port (and deleting the runtime state files, as #377's
-    reporter had to, is the wrong lever -- the blocker is a process, not a
-    stale receipt). The receipt left by the previous Core says who holds it.
+    uvicorn (pinned 0.52) answers a refused bind internally -- logged, then
+    `SystemExit(3)` -- and its lifespan takes `core.lock` and publishes this
+    process's own runtime receipt before it binds, so by the time uvicorn
+    could report a refusal the receipt no longer names the holder. Binding
+    here keeps the refusal ours to answer while the previous Core's receipt
+    still speaks for the process that actually holds the port, and hands
+    uvicorn a socket it never has to bind.
     """
+    import socket
+
     import uvicorn
 
     try:
-        uvicorn.run(
-            application,
-            host=settings.host,
-            port=settings.port,
-            reload=False,
-            access_log=False,
-        )
+        listening = socket.create_server((settings.host, settings.port), backlog=2048)
     except OSError as error:
         _serve_forever_refused(
             error,
@@ -862,6 +860,18 @@ def _serve_forever(application: object, settings: Settings) -> None:
             data_dir=settings.data_dir,
             stderr=sys.stderr,
         )
+    config = uvicorn.Config(
+        application,
+        host=settings.host,
+        port=settings.port,
+        reload=False,
+        access_log=False,
+    )
+    server = uvicorn.Server(config)
+    try:
+        server.run(sockets=[listening])
+    finally:
+        listening.close()
 
 
 def _serve_forever_refused(
@@ -876,6 +886,7 @@ def _serve_forever_refused(
     """
     if getattr(error, "errno", None) not in _PORT_IN_USE_ERRNOS:
         raise error
+
     from one_memory.diagnostic_log import diagnostic_event
 
     code, message = _port_in_use_explanation(inspect_runtime(data_dir))
