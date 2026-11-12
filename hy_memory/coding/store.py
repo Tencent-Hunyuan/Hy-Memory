@@ -385,7 +385,7 @@ class CodingMemoryStore:
 
         向量行只嵌 task + search_keys（solution 不进向量），所以只改 solution 时
         不重嵌、不碰向量库；改了 task / search_keys 才删旧 key 行重写。
-        updated_at 总是刷新。
+        先完成向量化，失败时保留旧内容和检索向量。成功后刷新 updated_at。
         """
         prev = await self.get_by_id(experience_id, user_id=user_id)
         if prev is None:
@@ -397,11 +397,13 @@ class CodingMemoryStore:
             updated.solution = solution
         if search_keys is not None:
             updated.search_keys = list(search_keys)
+        keys_changed = updated.task != prev.task or updated.search_keys != prev.search_keys
+        embeddings = await self._embed_vec_keys(updated) if keys_changed else None
         updated.updated_at = datetime.utcnow()
         await _run_in_pool(self._repository.upsert_experience, updated)
-        if updated.task != prev.task or updated.search_keys != prev.search_keys:
+        if keys_changed:
             await self._delete_vec_keys_by_count(experience_id, 1 + len(prev.search_keys))
-            await self._upsert_vec_keys(updated)
+            await self._upsert_vec_keys(updated, embeddings=embeddings)
         logger.info(f"[coding-store] edited experience_id={experience_id}")
         return updated
 
@@ -417,15 +419,17 @@ class CodingMemoryStore:
         statement 是事实层的检索文本，所以 active 事实会重嵌并覆盖它那一行向量
         （node_id 就是 fact_id，upsert 即覆盖）。superseded 事实的向量行早已撤掉，
         这里不把它加回去，否则会让过期结论重新占召回名额。
+        先完成向量化，失败时保留旧 statement 及其向量。
         """
         prev = await self.get_fact(fact_id, user_id=user_id)
         if prev is None:
             return None
         updated = deepcopy(prev)
         updated.statement = statement
+        embedding = await self.embed_fact(updated) if updated.status == "active" else None
         await _run_in_pool(self._repository.upsert_fact, updated)
         if updated.status == "active":
-            await self._upsert_fact_vec(updated)
+            await self._upsert_fact_vec(updated, embedding=embedding)
         logger.info(f"[coding-store] edited fact_id={fact_id}")
         return updated
 
@@ -948,8 +952,8 @@ class CodingMemoryStore:
     ) -> None:
         """把 task + search_keys 写入 VDB（每行一个 MemoryNode）。
 
-        embeddings 由写入链路预先算好（见 _embed_vec_keys）；不传时现算，
-        失败只记 warning（edit_experience 的手动编辑路径沿用这一行为）。
+        embeddings 由写入和手动编辑链路预先算好（见 _embed_vec_keys）；
+        不传时现算，失败只记 warning。
         """
         if self._vec is None:
             return
@@ -1036,7 +1040,7 @@ class CodingMemoryStore:
             return
         vector_text = self._fact_vector_text(fact)
         if embedding is None:
-            # edit_fact 的手动编辑路径：现算，失败只记 warning。
+            # 未提供预先算好的向量时现算，失败只记 warning。
             try:
                 embedding = await self.embed_service.embed(vector_text)
             except Exception as e:
