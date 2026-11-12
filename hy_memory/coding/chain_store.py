@@ -198,6 +198,10 @@ class HyCodeMem:
 
         with self._repository.transaction():
             n = 0
+            # 同一轮的所有 hunk 共用一个时间, 且只有它们之间才允许合并成一版:
+            # 跨轮但用户原话相同(said 相等)是两次独立的修改, 必须各记一版。
+            round_at = self._round_time(meta)
+            seen = set()
             for file, symbol, lo, hi, hunk in self._split_hunks(patch):
                 if meta.get("file") and file != meta["file"] and not meta.get("_multi"):
                     pass  # meta.file 只是提示, 不做过滤 —— 一轮可能真的改了多个文件
@@ -208,7 +212,8 @@ class HyCodeMem:
                 tid = self._upsert_thread(branch, file, symbol, lo, hi,
                                           by_symbol=_SYNTH_MARK in hunk,
                                           pkey=meta.get("pkey") or "")
-                self._add_round(tid, said, hunk, at=self._round_time(meta))
+                self._add_round(tid, said, hunk, at=round_at, same_round=tid in seen)
+                seen.add(tid)
                 # body: 这一轮改完后那段代码的完整样子(含未被改动的行)。每轮覆写 →
                 # 灌完留下的是**最后一版**的全文, 正是 _body_at 需要的那一版。
                 # 取不到就不动(老 body 保留 / 一直为空), 绝不因为它失败而丢掉这一轮。
@@ -443,8 +448,8 @@ class HyCodeMem:
             return ""
         return "\n".join(lines[a:b])
 
-    def _add_round(self, tid, said, patch, at=None):
-        self._repository.add_round(tid, said, patch, at)
+    def _add_round(self, tid, said, patch, at=None, same_round=False):
+        self._repository.add_round(tid, said, patch, at, same_round)
 
     def _round_time(self, meta):
         """这一轮真实发生的时间。优先从那一轮的 git commit 取 author date;
