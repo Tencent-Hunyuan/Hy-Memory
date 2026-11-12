@@ -297,6 +297,7 @@ class EmbedService:
         self._queue_locks: Dict[tuple, asyncio.Lock] = {}
         self._queue_pending: Dict[tuple, List[tuple]] = {}   # bucket -> [(text, Future, enter_at, lock_wait_ms, depth)]
         self._queue_flush_tasks: Dict[tuple, Optional[asyncio.Task]] = {}
+        self._queue_send_tasks: set = set()
 
         # Last embed response metadata (non-sensitive headers + body metadata)
         self._last_embed_meta: Dict[str, Any] = {}
@@ -497,7 +498,11 @@ class EmbedService:
 
         # ── 锁已释放 ── 此时其他协程可以继续入队，不被本批的 HTTP 阻塞
         if batch_to_send is not None:
-            await self._send_batch(batch_to_send)
+            # The full batch belongs to every waiter, not the caller that filled
+            # it. A cancelled write must not cancel its peers' shared request.
+            task = asyncio.create_task(self._send_batch(batch_to_send))
+            self._queue_send_tasks.add(task)
+            task.add_done_callback(self._queue_send_tasks.discard)
 
         result = await fut
         if isinstance(result, tuple) and len(result) == 2:
@@ -1041,15 +1046,13 @@ class EmbedService:
                 # 判断是否可重试：HTTP 状态码 或 显式异常类型 或 消息关键字。
                 # 状态码优先——它是三者里唯一不受 message 措辞影响的判据。
                 _status = getattr(e, "status_code", None)
-                _retryable = (
-                    (isinstance(_status, int)
-                     and (_status >= 500 or _status in _RETRYABLE_STATUS))
-                    or isinstance(e, _RETRYABLE)
-                    or any(
+                if isinstance(_status, int):
+                    _retryable = _status >= 500 or _status in _RETRYABLE_STATUS
+                else:
+                    _retryable = isinstance(e, _RETRYABLE) or any(
                         kw in _err_msg.lower()
                         for kw in ("timeout", "timed out", "connection", "read operation")
                     )
-                )
                 meta = {
                     "error": _err_name,
                     "error_msg": _err_msg[:300],

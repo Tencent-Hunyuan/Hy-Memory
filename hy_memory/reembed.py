@@ -1133,13 +1133,11 @@ def _verify_sync(source: VectorSpace, target: VectorSpace, roles: Optional[Itera
     common: List[Tuple[str, str]] = []  # (role, id)
     problems: List[str] = []
     for role in _roles(source, roles):
-        if role not in tgt_names:
-            continue
         src_digests, src_users, _ = _collect(
             _get_collection(src_client, src_names[role]), ["documents", "metadatas"], None,
         )
         tgt_digests, tgt_users, bad = _collect(
-            _get_collection(tgt_client, tgt_names[role]),
+            _get_collection(tgt_client, tgt_names[role]) if role in tgt_names else None,
             ["documents", "metadatas", "embeddings"], int(target.dims or 0) or None,
         )
         missing = [rid for rid in src_digests if rid not in tgt_digests]

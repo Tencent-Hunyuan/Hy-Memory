@@ -671,6 +671,7 @@ const hyMemoryPlugin = definePluginEntry({
       const autoCaptureCursors = new Map<string, { nextIndex: number; fingerprint: string }>();
       const turnCounters = new Map<string, number>();
       const lastMessagesCache = new Map<string, any[]>();
+      const captureWrites = new Map<string, Promise<void>>();
 
       function messageFingerprint(msg: any): string {
         const text = typeof msg?.content === "string"
@@ -721,7 +722,7 @@ const hyMemoryPlugin = definePluginEntry({
         return result;
       }
 
-      async function doCapture(
+      async function captureMessages(
         messages: any[],
         cursorKey: string,
       ) {
@@ -730,21 +731,16 @@ const hyMemoryPlugin = definePluginEntry({
 
         if (startIndex >= messages.length) return; // Nothing new
 
+        const nextCursor = {
+          nextIndex: messages.length,
+          fingerprint: messageFingerprint(messages[messages.length - 1]),
+        };
         const incremental = extractMessages(messages, startIndex);
         if (incremental.length === 0 || !incremental.some((m) => m.role === "user")) {
           // Update cursor even if nothing to write (skip non-user messages)
-          autoCaptureCursors.set(cursorKey, {
-            nextIndex: messages.length,
-            fingerprint: messageFingerprint(messages[messages.length - 1]),
-          });
+          autoCaptureCursors.set(cursorKey, nextCursor);
           return;
         }
-
-        // Update cursor BEFORE async write to prevent concurrent re-entry from reading stale cursor
-        autoCaptureCursors.set(cursorKey, {
-          nextIndex: messages.length,
-          fingerprint: messageFingerprint(messages[messages.length - 1]),
-        });
 
         api.logger.info(
           `openclaw-hy-memory: doCapture cursor=${cursorKey} startIndex=${startIndex} totalMessages=${messages.length} incrementalCount=${incremental.length}`,
@@ -755,15 +751,33 @@ const hyMemoryPlugin = definePluginEntry({
           );
         }
 
-        await provider.add(incremental, {
+        const result = await provider.add(incremental, {
           user_id: cfg.userId,
           agent_id: cfg.agentId,
           session_id: cfg.sessionId,
         });
+        if (!result.success) {
+          throw new Error(result.error_message ?? "Memory capture was not acknowledged");
+        }
+
+        // Only acknowledged writes advance the cursor. Same-session calls are
+        // serialized below, so a failed prefix remains available for retry.
+        autoCaptureCursors.set(cursorKey, nextCursor);
 
         api.logger.info(
           `openclaw-hy-memory: auto-captured ${incremental.length} messages (from index ${startIndex})`,
         );
+      }
+
+      async function doCapture(messages: any[], cursorKey: string) {
+        const previous = captureWrites.get(cursorKey) ?? Promise.resolve();
+        const pending = previous.catch(() => {}).then(() => captureMessages(messages, cursorKey));
+        captureWrites.set(cursorKey, pending);
+        try {
+          await pending;
+        } finally {
+          if (captureWrites.get(cursorKey) === pending) captureWrites.delete(cursorKey);
+        }
       }
 
       api.on("agent_end", async (event: any, ctx: any) => {
