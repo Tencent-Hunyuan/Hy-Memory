@@ -16,8 +16,13 @@ import os
 
 READER_LEGACY = "legacy"
 READER_HYBRID = "hybrid"
+READER_NATIVE = "native"
 
-ALL_READERS = (READER_LEGACY, READER_HYBRID)
+ALL_READERS = (READER_LEGACY, READER_HYBRID, READER_NATIVE)
+
+from ...models.memory import MemoryLayer
+
+VDB_RECALL_LAYERS = [MemoryLayer.L2_FACT, MemoryLayer.L3_SUMMARY, MemoryLayer.L4_IDENTITY]
 
 
 def resolve_reader_name(override: str = "") -> str:

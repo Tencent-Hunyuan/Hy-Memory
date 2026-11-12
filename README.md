@@ -254,6 +254,8 @@ That version is usually not in the working tree or at HEAD either, so it cannot 
 
 ### Documentation
 
+- [Qdrant native retrieval](docs/native_retrieval.md) — Server-only text/BM25 and hybrid recall, explicit preparation and validation
+
 - [Usage guide](docs/usage.md) — full configuration reference, API details, deployment modes
 - [Environment variables](docs/env_reference.md) — settings and defaults
 - [Search and Reader guide](docs/hy_memory_search_skill.md) — reader selection, schema quotas, rerank, and return channels

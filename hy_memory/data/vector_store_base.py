@@ -33,12 +33,31 @@ import asyncio
 from typing import Optional, List, Dict, Any
 import logging
 import uuid
+from dataclasses import dataclass, field
 
 from ..models.memory import (
     MemoryNode, MemoryLayer, MemoryStatus,
     MetaCognitionTag,
 )
 from ..config import MemoryConfig
+from ..retrieval import NativeRetrievalError
+
+
+@dataclass
+class NativeQuery:
+    """Internal bounded native query; every branch uses the same seed scope."""
+
+    texts: List[str]
+    embeddings: List[List[float]]
+    user_ids: List[str]
+    layers: List[MemoryLayer]
+    mode: str = "hybrid"
+    limit: int = 30
+    agent_ids: List[str] = field(default_factory=list)
+    session_ids: List[str] = field(default_factory=list)
+    isolation_keys: List[str] = field(default_factory=list)
+    include_sources: List[str] = field(default_factory=list)
+    exclude_sources: List[str] = field(default_factory=list)
 
 
 # ================================================================
@@ -116,6 +135,22 @@ class VectorStoreBase(ABC):
 
     _supports_retrieval_clauses: bool = False
     _supports_narrow_episode_queries: bool = False
+
+    async def prepare_native_retrieval(self) -> Dict[str, Any]:
+        """Explicitly prepare the backend's native indexes; never called by reads."""
+        raise NativeRetrievalError("unsupported", "native retrieval requires Qdrant Server")
+
+    async def native_query(self, request: NativeQuery) -> List[Dict[str, Any]]:
+        """Execute one ordered backend query plan, without application-side fusion."""
+        raise NativeRetrievalError("unsupported", "native retrieval requires Qdrant Server")
+
+    async def native_get_by_ids(self, node_ids: List[str]) -> List[MemoryNode]:
+        """Fetch exactly the requested IDs or raise an integrity error."""
+        raise NativeRetrievalError("unsupported", "strict native ID retrieval is unsupported")
+
+    async def native_cosine(self, embedding: List[float], node_ids: List[str], request: NativeQuery) -> List[Dict[str, Any]]:
+        """Obtain backend cosine evidence restricted to resolved candidate IDs."""
+        raise NativeRetrievalError("unsupported", "native cosine retrieval is unsupported")
 
     # ================================================================
     # 生命周期

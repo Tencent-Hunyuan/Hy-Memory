@@ -413,6 +413,9 @@ class ReadRequest:
     """
     # 必填
     query: str = ""
+    raw_query: Optional[str] = None
+    native_mode: str = "hybrid"
+    native_threshold: Any = None
 
     # 用户隔离
     user_id: str = ""              # 单用户（向后兼容）

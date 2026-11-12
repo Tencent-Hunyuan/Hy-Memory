@@ -70,6 +70,8 @@ logger = logging.getLogger(__name__)
 MessageList = List[Dict[str, str]]
 AddInput = Union[str, MessageList]
 
+_SEARCH_UNSET = object()
+
 # working（coding）路两层的默认阈值。刻意不复用 chat 路的 min_score：
 # chat 匹配的是完整语义单元，0.4 是长期在用的经验值；working 事实层匹配的是一句话
 # 结论，同样语义相关度下分数系统性偏低，0.4
@@ -1844,6 +1846,15 @@ class HyMemoryClient:
             include_runtime_diag=True,
         )
 
+    def prepare_native_retrieval(self) -> Dict[str, Any]:
+        """Explicitly prepare Qdrant Server text indexes; never rewrites memories."""
+        return self._search_loop_thread.run(self.async_prepare_native_retrieval())
+
+    @_ensure_search_loop
+    async def async_prepare_native_retrieval(self) -> Dict[str, Any]:
+        """Async form of :meth:`prepare_native_retrieval`."""
+        return await self._vector_store.prepare_native_retrieval()
+
     def search(
         self,
         query: Optional[str] = None,
@@ -1857,14 +1868,16 @@ class HyMemoryClient:
         include_sources: Optional[List[str]] = None,
         exclude_sources: Optional[List[str]] = None,
         limit: int = 10,
-        min_score: float = 0.4,
+        min_score: Any = _SEARCH_UNSET,
         working_fact_min_score: Optional[float] = None,
         working_experience_min_score: Optional[float] = None,
         schema_min_score: float = 0.4,
-        schema_limit: int = 10,
+        schema_limit: Any = _SEARCH_UNSET,
         intention_limit: int = 0,
         created_after: Optional[float] = None,
         reader: str = "",
+        native_mode: str = "hybrid",
+        native_threshold: Any = None,
         workspace_id: Optional[str] = None,
         branch: Optional[str] = None,
         request_id: Optional[str] = None,
@@ -1872,7 +1885,7 @@ class HyMemoryClient:
         statuses: Optional[List[Any]] = None,
         embed_override: Optional[Dict[str, Any]] = None,
         query_embedding: Optional[List[float]] = None,
-        rerank: bool = True,
+        rerank: Any = _SEARCH_UNSET,
     ) -> Dict[str, Any]:
         """
         搜索记忆。
@@ -2005,7 +2018,7 @@ class HyMemoryClient:
             working_experience_min_score=working_experience_min_score,
             schema_min_score=schema_min_score, schema_limit=schema_limit,
             intention_limit=intention_limit, created_after=created_after,
-            reader=reader,
+            reader=reader, native_mode=native_mode, native_threshold=native_threshold,
             workspace_id=workspace_id, branch=branch,
             request_id=request_id, layers=layers, statuses=statuses,
             embed_override=embed_override,
@@ -3933,14 +3946,16 @@ class HyMemoryClient:
         include_sources: Optional[List[str]] = None,
         exclude_sources: Optional[List[str]] = None,
         limit: int = 10,
-        min_score: float = 0.4,
+        min_score: Any = _SEARCH_UNSET,
         working_fact_min_score: Optional[float] = None,
         working_experience_min_score: Optional[float] = None,
         schema_min_score: float = 0.4,
-        schema_limit: int = 10,
+        schema_limit: Any = _SEARCH_UNSET,
         intention_limit: int = 0,
         created_after: Optional[float] = None,
         reader: str = "",
+        native_mode: str = "hybrid",
+        native_threshold: Any = None,
         workspace_id: Optional[str] = None,
         branch: Optional[str] = None,
         request_id: Optional[str] = None,
@@ -3948,7 +3963,7 @@ class HyMemoryClient:
         statuses: Optional[List[Any]] = None,
         embed_override: Optional[Dict[str, Any]] = None,
         query_embedding: Optional[List[float]] = None,
-        rerank: bool = True,
+        rerank: Any = _SEARCH_UNSET,
     ) -> Dict[str, Any]:
         """搜索记忆（异步）。详见 search() docstring。
 
@@ -3974,7 +3989,7 @@ class HyMemoryClient:
                     working_experience_min_score=working_experience_min_score,
                     schema_min_score=schema_min_score, schema_limit=schema_limit,
                     intention_limit=intention_limit, created_after=created_after,
-                    reader=reader, workspace_id=workspace_id, branch=branch,
+                    reader=reader, native_mode=native_mode, native_threshold=native_threshold, workspace_id=workspace_id, branch=branch,
                     request_id=request_id, layers=layers, statuses=statuses,
                     query_embedding=query_embedding,
                     rerank=rerank,
@@ -3989,7 +4004,7 @@ class HyMemoryClient:
             working_experience_min_score=working_experience_min_score,
             schema_min_score=schema_min_score, schema_limit=schema_limit,
             intention_limit=intention_limit, created_after=created_after,
-            reader=reader, workspace_id=workspace_id, branch=branch,
+            reader=reader, native_mode=native_mode, native_threshold=native_threshold, workspace_id=workspace_id, branch=branch,
             request_id=request_id, layers=layers, statuses=statuses,
             query_embedding=query_embedding,
             rerank=rerank,
@@ -4008,27 +4023,51 @@ class HyMemoryClient:
         include_sources: Optional[List[str]] = None,
         exclude_sources: Optional[List[str]] = None,
         limit: int = 10,
-        min_score: float = 0.4,
+        min_score: Any = _SEARCH_UNSET,
         working_fact_min_score: Optional[float] = None,
         working_experience_min_score: Optional[float] = None,
         schema_min_score: float = 0.4,
-        schema_limit: int = 10,
+        schema_limit: Any = _SEARCH_UNSET,
         intention_limit: int = 0,
         created_after: Optional[float] = None,
         reader: str = "",
+        native_mode: str = "hybrid",
+        native_threshold: Any = None,
         workspace_id: Optional[str] = None,
         branch: Optional[str] = None,
         request_id: Optional[str] = None,
         layers: Optional[List[Any]] = None,
         statuses: Optional[List[Any]] = None,
         query_embedding: Optional[List[float]] = None,
-        rerank: bool = True,
+        rerank: Any = _SEARCH_UNSET,
     ) -> Dict[str, Any]:
         """搜索记忆（异步）。详见 search() docstring。
 
         layers（默认空）：只召回指定层级，接受字符串或 MemoryLayer。
         过滤在召回阶段生效（而非召回后再筛），避免无关层级挤占 limit 名额。
         """
+        from .pipelines._retrieval.config import resolve_reader_name
+        from .retrieval import NativeRetrievalError
+        reader = resolve_reader_name(reader)
+        is_native = reader == "native"
+        if is_native:
+            from .data.qdrant_native import validate_threshold
+            validate_threshold(native_threshold, native_mode)
+            if native_mode not in ("dense", "keyword", "hybrid"):
+                raise NativeRetrievalError("invalid_request", "unknown native mode")
+            if min_score is not _SEARCH_UNSET and min_score is not None:
+                raise NativeRetrievalError("invalid_request", "use native_threshold instead of min_score")
+            if schema_limit is not _SEARCH_UNSET and (type(schema_limit) is not int or schema_limit != 0):
+                raise NativeRetrievalError("invalid_request", "native schema_limit must be zero")
+            if intention_limit != 0 or (rerank is not _SEARCH_UNSET and rerank is not False):
+                raise NativeRetrievalError("invalid_request", "native intention/rerank is unsupported")
+            if type(limit) is not int or not 0 <= limit <= 100:
+                raise NativeRetrievalError("invalid_request", "native limit must be 0..100")
+            min_score, schema_limit, rerank = None, 0, False
+        else:
+            min_score = 0.4 if min_score is _SEARCH_UNSET else min_score
+            schema_limit = 10 if schema_limit is _SEARCH_UNSET else schema_limit
+            rerank = True if rerank is _SEARCH_UNSET else rerank
         # ── 入参归一化 ──
         if queries is not None and query is not None:
             raise ValueError("query and queries are mutually exclusive; choose one")
@@ -4106,6 +4145,15 @@ class HyMemoryClient:
                 "Use single agent_id with multiple session_ids, or multiple agent_ids without session_ids."
             )
 
+        if is_native:
+            from .models.memory import MemoryLayer
+            from .pipelines._retrieval.config import VDB_RECALL_LAYERS
+            normalized_native_layers = self._normalize_layers(layers)
+            if (lite_mode or scene_all or scene_norm == "productivity" or statuses is not None
+                    or (normalized_native_layers and any(layer not in VDB_RECALL_LAYERS for layer in normalized_native_layers))):
+                raise NativeRetrievalError("unsupported", "native reader supports pro/ultra chat L2/L3/L4 only")
+            if any(not isinstance(u, str) or not u.strip() for u in effective_user_ids):
+                raise NativeRetrievalError("invalid_request", "native user IDs must be nonempty strings")
         if statuses is not None:
             from .models.memory import MemoryLayer
 
@@ -4337,6 +4385,9 @@ class HyMemoryClient:
                 f"target({len(target_query or '')} chars)"
             )
 
+        if is_native and decided_scene == "productivity":
+            raise NativeRetrievalError("unsupported", "native reader cannot route to working/coding")
+
         # ────────────────────────────────────────────────────────────
         # 场景判定落 pipeline log（search 的第一步，在 reader 之前）
         # ────────────────────────────────────────────────────────────
@@ -4457,6 +4508,7 @@ class HyMemoryClient:
 
         read_req = ReadRequest(
             query=effective_target_query,
+            raw_query=target_query, native_mode=native_mode, native_threshold=native_threshold,
             user_ids=effective_user_ids,
             agent_ids=effective_agent_ids,
             session_ids=effective_session_ids,
@@ -4485,6 +4537,19 @@ class HyMemoryClient:
         reader_impl = await self._registry.get_reader(reader_name=reader)
         logger.debug(f"[search] using reader: {reader_impl.VERSION}")
         result: ReadResponse = await reader_impl.read(read_req)
+
+        if is_native:
+            if not result.success:
+                raise NativeRetrievalError("backend", result.error_message or "native search failed")
+            return {
+                "request_id": request_id,
+                "memories": {"schema": [], "proactive": [], "normal": result.memories},
+                "native": result.extra.get("native", {}),
+                "rewrite": {"used": rewrite_used, "original_query": target_query,
+                            "effective_query": effective_target_query,
+                            "created_after": rewrite_created_after, "scene": decided_scene},
+                "elapsed_ms": round((time.perf_counter() - t0) * 1000, 2),
+            }
 
         if not result.success:
             logger.warning(f"[search] failed: {result.error_message}")

@@ -6,10 +6,11 @@ from hy_memory.pipelines.reader_hybrid import HybridReadPipeline
 from hy_memory.pipelines.reader_legacy import LegacyReadPipeline
 
 
-def test_only_legacy_and_hybrid_are_registered(monkeypatch):
+def test_legacy_hybrid_and_native_are_registered(monkeypatch):
     from hy_memory.pipelines._retrieval import config
 
-    assert config.ALL_READERS == ("legacy", "hybrid")
+    assert config.ALL_READERS == ("legacy", "hybrid", "native")
+    assert config.resolve_reader_name("native") == "native"
     assert config.resolve_reader_name("legacy") == "legacy"
     assert config.resolve_reader_name("hybrid") == "hybrid"
     assert config.resolve_reader_name("hybrid_v2") == "legacy"

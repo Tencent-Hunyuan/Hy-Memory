@@ -143,11 +143,7 @@ _HIDDEN_L0_RECALL_LIMIT = 10
 # 参与语义+BM25 融合排序，最终归入 normal 通道（不再算 profile）。
 # 与隐藏 L0 / Graph L6 通道互斥，杜绝双重召回。
 # 不含 L1_RAW（原始对话，append-only 不召回）、L5_KNOWLEDGE、L7（graph 专属通道）。
-_VDB_RECALL_LAYERS = [
-    MemoryLayer.L2_FACT,
-    MemoryLayer.L3_SUMMARY,
-    MemoryLayer.L4_IDENTITY,
-]
+from ._retrieval.config import VDB_RECALL_LAYERS as _VDB_RECALL_LAYERS
 
 
 def _graph_custom(hit: Dict[str, Any]) -> Dict[str, Any]:

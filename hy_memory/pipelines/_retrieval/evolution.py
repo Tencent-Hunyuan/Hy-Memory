@@ -23,6 +23,112 @@ from ...models.memory import MemoryNode
 logger = logging.getLogger(__name__)
 
 
+async def resolve_native_hits(vector_store, hits, request, *, created_after=None):
+    """Resolve complete directed evolution components, preserving backend order.
+
+    Reciprocal supersedes/superseded_by declarations describe the same edge.
+    User/source/layer visibility is checked on every fetched node; agent and
+    session scope apply only to the original retrieval seeds.
+    """
+    from ...retrieval import NativeRetrievalError
+    from ...models.memory import MemoryStatus
+    from ...utils.source_filter import source_allowed
+
+    def check_scope(node):
+        if node.user_id not in request.user_ids or node.layer not in request.layers or not source_allowed(node.source, request.include_sources, request.exclude_sources):
+            raise NativeRetrievalError("scope", "evolution component crosses the visible scope")
+
+    known = {}
+    for hit in hits:
+        node = hit.get("node")
+        if node is None or hit.get("node_id") != node.node_id:
+            raise NativeRetrievalError("integrity", "missing or mismatched native node")
+        check_scope(node)
+        known[node.node_id] = node
+    frontier = list(known.values())
+    while frontier:
+        missing = list(dict.fromkeys(nid for n in frontier for nid in _linked_ids(n) if nid not in known))
+        if len(known) + len(missing) > 1024:
+            raise NativeRetrievalError("budget", "native evolution exceeds 1024 nodes")
+        if not missing:
+            break
+        fetched = await vector_store.native_get_by_ids(missing)
+        if len(fetched) != len(missing) or {n.node_id for n in fetched} != set(missing):
+            raise NativeRetrievalError("integrity", "incomplete evolution batch")
+        for node in fetched:
+            check_scope(node)
+            known[node.node_id] = node
+        frontier = fetched
+
+    outgoing = {nid: set() for nid in known}
+    adjacency = {nid: set() for nid in known}
+    for nid, node in known.items():
+        for newer in node.superseded_by or []:
+            outgoing[nid].add(newer)
+        for older in node.supersedes or []:
+            outgoing[older].add(nid)
+    for older, newer_ids in outgoing.items():
+        for newer in newer_ids:
+            adjacency[older].add(newer)
+            adjacency[newer].add(older)
+
+    visiting, depths = set(), {}
+
+    def depth(nid):
+        if nid in visiting:
+            raise NativeRetrievalError("cycle", "directed evolution cycle")
+        if nid in depths:
+            return depths[nid]
+        visiting.add(nid)
+        if len(visiting) > 33:
+            raise NativeRetrievalError("budget", "native evolution exceeds 32 hops")
+        value = max((1 + depth(newer) for newer in outgoing[nid]), default=0)
+        visiting.remove(nid)
+        if value > 32:
+            raise NativeRetrievalError("budget", "native evolution exceeds 32 hops")
+        depths[nid] = value
+        return value
+
+    for nid in known:
+        depth(nid)
+
+    components = {}
+    for nid in known:
+        if nid in components:
+            continue
+        stack, members = [nid], set()
+        while stack:
+            current = stack.pop()
+            if current in members:
+                continue
+            members.add(current)
+            stack.extend(adjacency[current] - members)
+        sinks = [known[mid] for mid in members if not outgoing[mid]]
+        if len(sinks) != 1 or not sinks[0].is_latest:
+            raise NativeRetrievalError("integrity", "evolution has no unique confirmed head")
+        head = sinks[0]
+        for mid in members:
+            components[mid] = (head, members)
+
+    output, seen = [], set()
+    for hit in hits:
+        head, members = components[hit["node_id"]]
+        if head.node_id in seen:
+            continue
+        seen.add(head.node_id)
+        if head.status != MemoryStatus.ACTIVE:
+            continue
+        when = head.memory_at or head.gmt_created
+        if created_after is not None and when is not None and when.timestamp() < created_after:
+            continue
+        visible = [known[mid] for mid in sorted(members) if mid != head.node_id and known[mid].status in (MemoryStatus.ACTIVE, MemoryStatus.SUPERSEDED)]
+        output.append({**hit, "node": head, "node_id": head.node_id,
+                       "matched_id": hit.get("matched_id", hit["node_id"]),
+                       "evolution_chain": [_node_to_chain_item(n) for n in [head] + visible] if len(members) > 1 else [],
+                       "is_evolved": len(members) > 1})
+    return output
+
+
 def _fmt_time(node: MemoryNode) -> Optional[float]:
     """返回 node.memory_at 的 Unix timestamp；缺失返回 None。"""
     t = node.memory_at

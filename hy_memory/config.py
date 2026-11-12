@@ -330,6 +330,13 @@ class EmbedderConfig:
 class RecallConfig:
     """召回配置"""
 
+    reconcile_retriever: str = "default"
+
+    def validate_reconcile_retriever(self) -> None:
+        """Reject unknown retrieval strategies, including mutated configurations."""
+        if self.reconcile_retriever not in ("default", "native"):
+            raise ValueError("recall.reconcile_retriever must be 'default' or 'native'")
+
     # 默认召回数量
     default_limit: int = 10
     max_limit: int = 100
@@ -1386,6 +1393,7 @@ class MemoryConfig:
                         setattr(sub, key, value)
 
         config.business_store.validate()
+        config.recall.validate_reconcile_retriever()
 
         # basic_profile: fields 是 Dict[str, str]，整体替换（非空时）
         if "basic_profile" in config_dict:
@@ -1449,6 +1457,7 @@ class MemoryConfig:
                 "embedding_dims": self.embedder.embedding_dims,
             },
             "recall": {
+                "reconcile_retriever": self.recall.reconcile_retriever,
                 "default_limit": self.recall.default_limit,
                 "semantic_weight": self.recall.semantic_weight,
                 "recency_weight": self.recall.recency_weight,

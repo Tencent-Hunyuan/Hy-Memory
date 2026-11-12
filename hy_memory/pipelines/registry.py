@@ -149,19 +149,9 @@ class ComponentFactory:
         if self._shared_graph_store is not None:
             reader_kwargs["graph_store"] = self._shared_graph_store
 
-        # 用 _build_impl 直接构建指定 reader（绕过 MemoryReader dispatcher）
-        import os
-        old_env = os.environ.get("HY_MEMORY_READER", "")
-        os.environ["HY_MEMORY_READER"] = effective_name
-        try:
-            from .reader import MemoryReader
-            reader = MemoryReader(**reader_kwargs)
-            await reader.initialize()
-        finally:
-            if old_env:
-                os.environ["HY_MEMORY_READER"] = old_env
-            else:
-                os.environ.pop("HY_MEMORY_READER", None)
+        from .reader import MemoryReader
+        reader = MemoryReader(**reader_kwargs, reader_name=effective_name)
+        await reader.initialize()
 
         # 缓存
         self._readers[effective_name] = reader

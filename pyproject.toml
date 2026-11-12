@@ -35,6 +35,7 @@ dependencies = [
 
 [project.optional-dependencies]
 qdrant = ["qdrant-client", "fastembed"]
+qdrant-native = ["qdrant-client==1.20.0; python_version >= '3.10'"]
 faiss = ["faiss-cpu"]
 graph = ["neo4j"]
 mysql = ["aiomysql"]
