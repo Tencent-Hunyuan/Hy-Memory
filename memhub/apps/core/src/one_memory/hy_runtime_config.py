@@ -1,7 +1,8 @@
 """Pinned public HY Memory SDK identity and One Memory's local runtime policy.
 
-The embedded runtime remains local-first and explicitly owns its Chroma, Kuzu,
-SQLite, credentials, and permission boundaries.
+The embedded runtime is local-first and explicitly owns its stores (Kuzu +
+Chroma, or the servers a `storage_backends` setting names), SQLite,
+credentials and permission boundaries.
 """
 
 from __future__ import annotations
@@ -14,7 +15,7 @@ from pathlib import Path
 from typing import Literal, cast
 
 HY_MEMORY_DISTRIBUTION = "hy-memory"
-HY_MEMORY_VERSION = "2.0.14"
+HY_MEMORY_VERSION = "2.0.15"
 HY_MEMORY_NAMESPACE = "governed-v2"
 DiagnosticLogLevel = Literal["error", "warning", "info", "debug"]
 

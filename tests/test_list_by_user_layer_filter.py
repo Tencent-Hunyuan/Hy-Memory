@@ -106,6 +106,89 @@ class TestListByUserLayerFilter:
         assert len(internal_all) == 3
 
 
+class TestRawOnlyFilterReturnsEmptyCrossBackend:
+    """回归 #189：Chroma/Qdrant 的 raw-only 过滤此前误返回所有非 raw 层。
+
+    修复后，`layers=[L1_RAW]` 且 `allow_raw_layer=False` 应在查询 backend
+    之前就短路返回空列表。这里只构造 store 对象（不 initialize、不依赖
+    chromadb/qdrant_client 可用），验证短路分支本身的正确性；完整跨后端
+    集成覆盖在 CI 有 backend 依赖时由同一断言驱动。
+    """
+
+    @pytest.mark.parametrize("provider,cls", [
+        ("chroma", "ChromaVectorStore"),
+        ("qdrant", "QdrantVectorStore"),
+    ])
+    def test_raw_only_filter_returns_empty_without_backend(self, provider, cls):
+        import importlib
+        mod = importlib.import_module(f"hy_memory.data.vector_store_{provider}")
+        store_cls = getattr(mod, cls)
+        config = MemoryConfig.from_dict({
+            "vector_store": {
+                "provider": provider,
+                "collection_name": "test_raw_only",
+                "embedding_dims": DIMS,
+            },
+        })
+        vs = store_cls(config)
+
+        # 只点名 raw 且不允许 raw：必须返回空列表，而不是退回非 raw 层
+        nodes = run(vs.list_by_user(
+            user_id="u", layers=[MemoryLayer.L1_RAW], allow_raw_layer=False,
+        ))
+        assert nodes == []
+
+    @pytest.mark.parametrize("provider,cls,module", [
+        ("chroma", "ChromaVectorStore", "chromadb"),
+        ("qdrant", "QdrantVectorStore", "qdrant_client"),
+    ])
+    def test_layer_filters_against_real_backend(self, tmp_path, provider, cls, module):
+        """Real local backend: raw-only -> empty, mixed -> only the non-raw layers."""
+        pytest.importorskip(module)
+        import importlib
+        mod = importlib.import_module(f"hy_memory.data.vector_store_{provider}")
+        store_cls = getattr(mod, cls)
+        config = MemoryConfig.from_dict({
+            "vector_store": {
+                "provider": provider,
+                "collection_name": "test_raw_only_real",
+                "persist_directory": str(tmp_path / f"{provider}_data"),
+                "embedding_dims": DIMS,
+            },
+        })
+        vs = store_cls(config)
+        run(vs.initialize())
+        try:
+            u = "user_raw_only_real"
+            run(vs.upsert_batch([
+                _node(u, MemoryLayer.L1_RAW, "raw dialogue"),
+                _node(u, MemoryLayer.L0_BASIC_INFO, "The user's name is ivanye."),
+                _node(u, MemoryLayer.L2_FACT, "likes badminton"),
+            ]))
+
+            # raw-only with raw disabled: empty, not "every non-raw layer" (#189)
+            only_raw = run(vs.list_by_user(
+                user_id=u, layers=[MemoryLayer.L1_RAW], allow_raw_layer=False,
+            ))
+            assert only_raw == []
+
+            # mixed raw + fact with raw disabled: raw dropped, fact kept, L0 not leaked
+            mixed = run(vs.list_by_user(
+                user_id=u,
+                layers=[MemoryLayer.L1_RAW, MemoryLayer.L2_FACT],
+                allow_raw_layer=False,
+            ))
+            assert [n.layer for n in mixed] == [MemoryLayer.L2_FACT]
+
+            # raw explicitly allowed: the raw node is reachable
+            internal = run(vs.list_by_user(
+                user_id=u, layers=[MemoryLayer.L1_RAW], allow_raw_layer=True,
+            ))
+            assert [n.layer for n in internal] == [MemoryLayer.L1_RAW]
+        finally:
+            run(vs.close())
+
+
 class TestEvolutionChainExcludesRaw:
     def test_chain_drops_raw_nodes(self):
         from hy_memory.pipelines._retrieval.evolution import _expand_one_chain

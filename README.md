@@ -33,7 +33,7 @@ English | [中文](README.zh.md)
 ## Latest News
 
 * *<mark>[new]</mark>* 🔥🔥🔥 **[2026-10]**: 🚀 **Open-sourced** quantized **FP8** (**[Hy-Memory-30B-A3B-FP8](https://huggingface.co/tencent/Hy-Memory-30B-A3B-FP8)**) and **GGUF** (**[Hy-Memory-30B-A3B-GGUF](https://huggingface.co/tencent/Hy-Memory-30B-A3B-GGUF)**) versions of **Hy-Memory-30B-A3B** on Hugging Face!
-* *<mark>[new]</mark>* 🔥🔥🔥 **[2026-11]**: 📦 **Released [MemHub v1.0.6](https://github.com/Tencent-Hunyuan/Hy-Memory/releases/tag/v1.0.6)** with interfaces in 11 languages, memory modes (lite / pro / ultra with nightly evolve), safe embedding-model switching, multi-user support for the CLI and API, memory writes that retry themselves and pause while the model provider is down, and more reliable upgrades, on **`hy-memory==2.0.14`**. See the release notes for details.
+* *<mark>[new]</mark>* 🔥🔥🔥 **[2026-11]**: 📦 **Released [MemHub v1.0.6](https://github.com/Tencent-Hunyuan/Hy-Memory/releases/tag/v1.0.6)** with interfaces in 11 languages, memory modes (lite / pro / ultra with nightly evolve), safe embedding-model switching, multi-user support for the CLI and API, memory writes that retry themselves and pause while the model provider is down, and more reliable upgrades, on **`hy-memory==2.0.15`**. See the release notes for details.
 * *<mark>[new]</mark>* 🔥🔥🔥 **[2026-10]**: 📦 **Released [MemHub v1.0.5](https://github.com/Tencent-Hunyuan/Hy-Memory/releases/tag/v1.0.5)** with Chinese, English and Spanish interfaces, one-time pairing codes for more custom Harnesses, and smoother browsing, search, startup and recovery, on **`hy-memory==2.0.8`**. See the release notes for details.
 * *<mark>[new]</mark>* 🔥🔥🔥 **[2026-10]**: 📦 **Released [MemHub v1.0.4](https://github.com/Tencent-Hunyuan/Hy-Memory/releases/tag/v1.0.4)** and **[memhub-cli 1.0.5](https://www.npmjs.com/package/memhub-cli/v/1.0.5)**, with a signed macOS desktop app and verified macOS/Linux Runtimes!
 * *<mark>[new]</mark>* 🔥🔥🔥 **[2026-10]**: 🚀 **Released** **Hy Memory 2.0 (`hy-memory==2.0.4`)** on [PyPI](https://pypi.org/project/hy-memory/2.0.4/) and open-sourced the **Hy-Memory** monorepo together with **[MemHub](memhub/README.md)**!
@@ -250,7 +250,7 @@ That version is usually not in the working tree or at HEAD either, so it cannot 
 
 - Vector stores: ChromaDB (default), Qdrant, FAISS
 - Graph stores (ultra mode): Kuzu (default), Neo4j
-- Working / Coding metadata: local SQLite
+- Working / Coding business storage: SQLite (default), optional PostgreSQL; [configuration](docs/business_storage.md)
 
 ### Documentation
 

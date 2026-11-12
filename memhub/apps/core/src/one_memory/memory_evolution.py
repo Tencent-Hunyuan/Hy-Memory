@@ -132,6 +132,10 @@ class GraphBuildState(BaseModel):
     started_at: datetime | None = None
     finished_at: datetime | None = None
     users: dict[str, GraphBuildUser] = Field(default_factory=dict)
+    #: Clear each user's fact projection before rebuilding it: set when a
+    #: restore put back older memories on a graph server the restore cannot
+    #: replace (`memory_backup`), so no node of a memory that is gone stays.
+    clear_first: bool = False
 
 
 class EvolveStateDocument(BaseModel):
@@ -621,7 +625,7 @@ class MemoryGraphBackfill:
                         user_id,
                         agent_id=None,
                         limit=10000,
-                        clear_first=False,
+                        clear_first=state.clear_first,
                     )
                 ok = isinstance(result, Mapping) and result.get("success") is True
                 state.users[user_id] = GraphBuildUser(

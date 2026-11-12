@@ -2,6 +2,7 @@
 
 import contextvars
 import json
+import os
 import threading
 import urllib.error
 from unittest.mock import Mock
@@ -126,6 +127,7 @@ def test_scope_nested_and_sanitization(provider, monkeypatch):
         "user_ids": ["owner-A"],
         "agent_ids": ["agent-A"],
         "limit": 5,
+        "min_score": 0.4,
     }
     assert call(provider, "add", text="save") == {
         "success": False,
@@ -931,3 +933,152 @@ def test_real_http_response_body_framing(
         assert result == {"success": False, "error": "transport_or_response_failure"}
     else:
         assert result["success"] is True
+
+
+def test_search_surfaces_score_and_metadata(provider, monkeypatch):
+    fixture = {
+        "memories": [
+            {
+                "memory_id": "memory-1",
+                "content": "fact",
+                "score": 0.72,
+                "retrieval_source": "vdb",
+                "layer": "l2_fact",
+                "tags": ["work"],
+            },
+            {
+                "memory_id": "memory-2",
+                "content": "no metadata here",
+            },
+        ]
+    }
+    transport(monkeypatch, fixture)
+    result = call(provider, query="remember")
+    assert result["success"]
+    first, second = result["memories"]
+    # score / retrieval_source / layer / tags 应透出，供调用方二次过滤（#346 问题 2）
+    assert first["score"] == 0.72
+    assert first["retrieval_source"] == "vdb"
+    assert first["layer"] == "l2_fact"
+    assert first["tags"] == ["work"]
+    # 缺失字段的条目保持干净的 {memory_id, content}，不写 None / 空占位
+    assert second == {"memory_id": "memory-2", "content": "no metadata here"}
+
+
+def test_search_surfaces_metadata_through_prefetch(provider, monkeypatch):
+    monkeypatch.setattr(
+        provider,
+        "_search",
+        lambda query, limit: [
+            {
+                "memory_id": "m1",
+                "content": "reference",
+                "score": 0.88,
+                "retrieval_source": "vdb",
+                "layer": "l2_fact",
+                "tags": ["important"],
+            }
+        ],
+    )
+    provider.queue_prefetch("query")
+    provider._queue.join()
+    injected = prefetched_items(provider.prefetch("next"))
+    assert injected[0]["score"] == 0.88
+    assert injected[0]["retrieval_source"] == "vdb"
+    assert injected[0]["layer"] == "l2_fact"
+    assert injected[0]["tags"] == ["important"]
+
+
+def test_search_drops_malformed_tags_and_metadata(provider, monkeypatch):
+    transport(
+        monkeypatch,
+        {
+            "memories": [
+                {
+                    "memory_id": "memory-1",
+                    "content": "fact",
+                    "score": True,
+                    "retrieval_source": "x" * 65,
+                    "layer": 7,
+                    "tags": ["ok", 3, None, "", "t" * 65, {"nested": "tag"}],
+                },
+                {"memory_id": "memory-2", "content": "fact", "tags": "work"},
+            ]
+        },
+    )
+    first, second = call(provider, query="remember")["memories"]
+    assert first == {"memory_id": "memory-1", "content": "fact", "tags": ["ok"]}
+    assert second == {"memory_id": "memory-2", "content": "fact"}
+
+
+def test_search_tags_spend_the_max_chars_budget(provider, monkeypatch):
+    tag = "t" * 64
+    budget = provider.chars
+    transport(
+        monkeypatch,
+        {
+            "memories": [
+                {
+                    "memory_id": "memory-1",
+                    "content": "c" * (budget - 100),
+                    "tags": [tag, tag, tag],
+                },
+                {"memory_id": "memory-2", "content": "more", "tags": ["late"]},
+            ]
+        },
+    )
+    memories = call(provider, query="remember")["memories"]
+    used = sum(
+        len(item["content"]) + sum(len(t) for t in item.get("tags", []))
+        for item in memories
+    )
+    # 100 chars left after the first content: one 64-char tag fits, the next
+    # two do not, and the second memory spends what is left.
+    assert memories[0]["tags"] == [tag]
+    assert memories[1] == {"memory_id": "memory-2", "content": "more", "tags": ["late"]}
+    assert used == budget - 100 + 64 + 4 + 4 <= budget
+
+
+def _direct_provider(monkeypatch, min_score=None):
+    for key in list(os.environ):
+        if key.startswith("HY_MEMORY_"):
+            monkeypatch.delenv(key)
+    monkeypatch.setenv("HY_MEMORY_USER_ID", "owner-A")
+    monkeypatch.setenv("HY_MEMORY_AGENT_ID", "agent-A")
+    if min_score is not None:
+        monkeypatch.setenv("HY_MEMORY_MIN_SCORE", min_score)
+    instance = HyMemoryProvider()
+    instance.initialize("session-A", hermes_home="/profile/A", platform="cli")
+    return instance
+
+
+@pytest.mark.parametrize(
+    ("configured", "expected"),
+    [(None, 0.4), ("0.62", 0.62), ("0", 0.0), ("1", 1.0)],
+)
+def test_search_forwards_configured_min_score(monkeypatch, configured, expected):
+    """The SDK's 0.4 default must not be forced on every direct-mode caller."""
+    instance = _direct_provider(monkeypatch, configured)
+    calls = transport(monkeypatch, {"memories": []})
+    try:
+        assert call(instance, query="remember") == {"success": True, "memories": []}
+        payload = json.loads(calls[0][0].data)
+        assert payload["min_score"] == expected
+        assert payload["query"] == "remember"
+        assert payload["limit"] == 5
+    finally:
+        instance.shutdown()
+
+
+@pytest.mark.parametrize("value", ["1.5", "-0.1", "nan", "not-a-number"])
+def test_invalid_min_score_disables_provider(monkeypatch, value):
+    """A bad floor is a configuration error, never a request with a wrong type."""
+    for key in list(os.environ):
+        if key.startswith("HY_MEMORY_"):
+            monkeypatch.delenv(key)
+    monkeypatch.setenv("HY_MEMORY_USER_ID", "owner-A")
+    monkeypatch.setenv("HY_MEMORY_AGENT_ID", "agent-A")
+    monkeypatch.setenv("HY_MEMORY_MIN_SCORE", value)
+    instance = HyMemoryProvider()
+    assert instance._config_error == "invalid_configuration"
+    assert not instance.is_available()

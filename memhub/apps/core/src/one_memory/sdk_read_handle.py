@@ -17,9 +17,11 @@ task (one HTTP request, one retention pass).
 
 The memory mode (lite / pro / ultra) is fixed per SDK client, so a mode change
 rebuilds and retires the same way, and so do the SDK features
-(`memory_features`) and the SDK prompt language (`ui_language`): handles are
-keyed by (space, profile, mode, features, language). None of mode, features
-or language names a collection; each is a separate client parameter.
+(`memory_features`), the SDK prompt language (`ui_language`) and the storage
+backends (`storage_backends`): handles are keyed by (space, profile, mode,
+features, language, storage). None of mode, features or language names a
+collection; each is a separate client parameter. Storage moves the whole
+space to another store, which is why it rebuilds as well.
 """
 
 from __future__ import annotations
@@ -50,10 +52,12 @@ from one_memory.hy_sdk_types import HySdkRuntimeError
 from one_memory.memory_features import FeatureOverrides
 from one_memory.model_profiles import ModelProfileSnapshot, ModelProfileStore, ProviderKind
 from one_memory.secrets import SecretStore, SecretStoreUnavailableError
+from one_memory.storage_backends import ResolvedStorage, storage_kwargs
 
 _BUILTIN = (BUILTIN_RETRIEVAL_PROFILE_ID, 0)
-#: (space id, profile id, revision, memory mode, features, SDK language)
-_HandleKey = tuple[str, str, int, str, FeatureOverrides, str | None]
+#: (space id, profile id, revision, memory mode, features, SDK language,
+#: storage backends)
+_HandleKey = tuple[str, str, int, str, FeatureOverrides, str | None, ResolvedStorage | None]
 
 
 class ActiveProfileReadHandle(SdkClientHandle):
@@ -70,6 +74,7 @@ class ActiveProfileReadHandle(SdkClientHandle):
         spaces: EmbeddingSpaceStore | None = None,
         health: EmbeddingHealth | None = None,
         language: Callable[[], str | None] = lambda: None,
+        storage: Callable[[], ResolvedStorage | None] = lambda: None,
     ) -> None:
         super().__init__(builtin_retrieval_snapshot(), api_key=None, data_dir=data_dir)
         self.profiles = profiles
@@ -78,6 +83,7 @@ class ActiveProfileReadHandle(SdkClientHandle):
         self.memory_mode = memory_mode
         self.current_features = features
         self.current_language = language
+        self.current_storage = storage
         #: None only for a profile store without a database (test doubles).
         self.spaces = spaces if spaces is not None else registry_for(profiles)
         self.health = health or EmbeddingHealth()
@@ -121,12 +127,14 @@ class ActiveProfileReadHandle(SdkClientHandle):
         space, identity = await in_sdk_read(self._resolve)
         selected_mode, features = mode or self.memory_mode(), self.current_features()
         language = self.current_language()
+        storage = await in_sdk_read(self.current_storage)
         key = (
             space.space_id if space is not None else "",
             *identity,
             selected_mode,
             features,
             language,
+            storage,
         )
         async with self._handle_lock:
             handle = self._handles.get(key)
@@ -134,7 +142,7 @@ class ActiveProfileReadHandle(SdkClientHandle):
                 # Only on a change of space or profile: resolving a key can
                 # reach the system keychain, so it is not done on every read.
                 handle = await in_sdk_read(
-                    self._build, space, identity, selected_mode, features, language
+                    self._build, space, identity, selected_mode, features, language, storage
                 )
                 self._handles[key] = handle
             self._retired.update(value for name, value in self._handles.items() if name != key)
@@ -223,11 +231,13 @@ class ActiveProfileReadHandle(SdkClientHandle):
         mode: str,
         features: FeatureOverrides = (),
         language: str | None = None,
+        storage: ResolvedStorage | None = None,
     ) -> SdkClientHandle:
         # Without a registry (a profile store with no database) the handle
         # opens the space its profile names, exactly as before.
         named: dict[str, Any] = {"space": space} if space is not None else {}
         named.update(language_kwargs(language))
+        named.update(storage_kwargs(storage))
         if identity == _BUILTIN:
             return SdkClientHandle(
                 builtin_retrieval_snapshot(),

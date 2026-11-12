@@ -87,12 +87,68 @@ export interface PipelineSummary {
     }
   >;
   graph_build: string | null;
+  /** The ultra graph store (`graph_store.state`); null from an older Core. */
+  graph_store: string | null;
+  /** Graphs quarantined after they kept taking Core down while opening. */
+  graph_quarantine_count: number;
   /** SDK features (`memory_features`) whose value differs from the default. */
   features: Record<string, boolean | number>;
   /** The App's display language; null = never chosen or "follow the system". */
   ui_language: string | null;
   /** The SDK prompt language: `auto` (zh/en detection) or the code passed. */
   sdk_language: string;
+  /** The graph and vector stores (`pipeline.storage_backends`); null from an
+   * older Core without the setting. */
+  storage_backends: StorageBackendsSummary | null;
+}
+
+export interface StorageBackendsSummary {
+  graph: string;
+  vector: string;
+  is_default: boolean;
+  label: string;
+  health: "ok" | "local" | "failed" | "unknown";
+  health_code: string | null;
+}
+
+const STORAGE_HEALTH = new Set(["ok", "local", "failed", "unknown"]);
+
+function describeStorageBackends(
+  value: unknown,
+): StorageBackendsSummary | null {
+  if (!value || typeof value !== "object") return null;
+  const item = value as Record<string, unknown>;
+  if (
+    typeof item.graph !== "string" ||
+    typeof item.vector !== "string" ||
+    typeof item.is_default !== "boolean" ||
+    typeof item.label !== "string" ||
+    !STORAGE_HEALTH.has(String(item.health))
+  ) {
+    return null;
+  }
+  return {
+    graph: item.graph,
+    vector: item.vector,
+    is_default: item.is_default,
+    label: item.label,
+    health: item.health as StorageBackendsSummary["health"],
+    health_code: typeof item.health_code === "string" ? item.health_code : null,
+  };
+}
+
+/** `存储后端：Neo4j + Qdrant（通过 CLI 配置）`, with the servers' health. */
+export function storageBackendsLine(storage: StorageBackendsSummary): string {
+  const origin = storage.is_default ? "默认" : "通过 CLI 配置";
+  const health =
+    storage.health === "failed"
+      ? `，连接失败：${storage.health_code ?? "storage_backend_probe_failed"}`
+      : storage.health === "ok"
+        ? "，连接正常"
+        : storage.health === "unknown"
+          ? "，尚未检查连接"
+          : "";
+  return `${storage.label}（${origin}${health}）`;
 }
 
 const MODES = new Set(["lite", "pro", "ultra"]);
@@ -150,6 +206,10 @@ export function describePipeline(value: unknown): PipelineSummary | null {
     item.graph_build && typeof item.graph_build === "object"
       ? (item.graph_build as Record<string, unknown>)
       : {};
+  const graphStore =
+    item.graph_store && typeof item.graph_store === "object"
+      ? (item.graph_store as Record<string, unknown>)
+      : {};
   return {
     mode: item.mode as PipelineSummary["mode"],
     configured_mode: item.configured_mode as PipelineSummary["mode"],
@@ -165,11 +225,17 @@ export function describePipeline(value: unknown): PipelineSummary | null {
     evolve_running: Array.isArray(evolve.running) ? evolve.running.length : 0,
     evolve_users: users,
     graph_build: typeof graph.state === "string" ? graph.state : null,
+    graph_store: typeof graphStore.state === "string" ? graphStore.state : null,
+    graph_quarantine_count:
+      typeof graphStore.quarantine_count === "number"
+        ? graphStore.quarantine_count
+        : 0,
     features,
     ui_language: typeof item.ui_language === "string" ? item.ui_language : null,
     // An older Runtime has no setting: it always left the SDK on auto.
     sdk_language:
       typeof item.sdk_language === "string" ? item.sdk_language : "auto",
+    storage_backends: describeStorageBackends(item.storage_backends),
   };
 }
 
@@ -251,6 +317,11 @@ export async function composeStatusReport(options: {
   if (bridge.state === "degraded" || bridge.state === "untrusted") {
     degraded.push("bridge");
   }
+  // A configured server that did not answer the last probe: memories cannot
+  // be written or read there, whatever the rest says.
+  if (pipeline?.storage_backends?.health === "failed") {
+    degraded.push("storage_backends");
+  }
   const notChecked: string[] = SECTION_NAMES.filter(
     (name) => sections[name]?.state === "not_checked",
   );
@@ -317,6 +388,11 @@ export function renderStatusText(
     );
   }
   if (report.pipeline) lines.push(`记忆模式：${pipelineLine(report.pipeline)}`);
+  if (report.pipeline?.storage_backends) {
+    lines.push(
+      `存储后端：${storageBackendsLine(report.pipeline.storage_backends)}`,
+    );
+  }
   const embeddingSwitch = describeEmbeddingSwitchSummary(
     report.sections.processing?.embedding_switch,
   );
@@ -387,6 +463,8 @@ export function pipelineLine(pipeline: PipelineSummary): string {
     );
     if (pipeline.evolve_running > 0)
       parts.push(`，进行中 ${pipeline.evolve_running}`);
+    const graphStore = graphStoreText(pipeline);
+    if (graphStore) parts.push(`，${graphStore}`);
   }
   const changed = Object.entries(pipeline.features);
   if (changed.length > 0) {
@@ -407,6 +485,22 @@ export function pipelineLine(pipeline: PipelineSummary): string {
     }`,
   );
   return parts.join("");
+}
+
+const GRAPH_STORE_TEXT: Record<string, string> = {
+  opening: "知识图谱正在打开",
+  rebuilding_after_quarantine: "知识图谱文件损坏，已隔离并正在重建",
+  unavailable: "知识图谱暂不可用",
+};
+
+/** The ultra graph store, only when it is not simply ready. */
+function graphStoreText(pipeline: PipelineSummary): string | null {
+  const state = pipeline.graph_store
+    ? GRAPH_STORE_TEXT[pipeline.graph_store]
+    : undefined;
+  const count = pipeline.graph_quarantine_count;
+  if (state) return count > 0 ? `${state}（累计隔离 ${count} 次）` : state;
+  return count > 0 ? `知识图谱累计隔离 ${count} 次` : null;
 }
 
 function runtimeLine(report: StatusDocument): string {

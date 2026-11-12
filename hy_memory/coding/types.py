@@ -32,6 +32,8 @@ class CodingWriteError(RuntimeError):
     - LLM_ERROR          抽取 LLM 调用失败
     - EMPTY_RESPONSE     抽取 LLM 返回 200 但 content 为空
     - JSON_PARSE_FAILED  抽取 LLM 的回复解析不出 JSON 对象
+    - OUTPUT_TRUNCATED   抽取 LLM 的回复被 token 预算截断（finish_reason=length），
+                         解析不出完整 JSON 对象；提高 max_tokens 后重试可恢复
     - EMBEDDING_FAILED   经验 / 事实向量化失败（不落没有向量的节点）
     - RECONCILE_FAILED   经验 / 事实 reconcile 的模型决策失败；具体原因在 cause
                          （LLM_UNAVAILABLE / EMPTY_RESPONSE / JSON_PARSE_FAILED），

@@ -27,7 +27,10 @@ import weakref
 from ..models.memory import MemoryNode, MemoryLayer, MemoryStatus
 from ..config import MemoryConfig
 from ..structure import parse_hierarchy_path_payload
-from ..utils.async_executor import run_in_executor_guarded
+from ..utils.async_executor import (
+    await_concurrent_future_guarded,
+    run_in_executor_guarded,
+)
 from .graph_store_base import GraphStoreBase, embed_text_for_graph
 
 logger = logging.getLogger(__name__)
@@ -81,6 +84,137 @@ async def _run_in_kuzu_pool(func, *args, **kwargs):
 # 本进程里已打开、尚未 close 的 store。drop_graph 据此拒绝删掉一个正被
 # 活着的 client 使用的图库。WeakSet：store 被回收后自动消失。
 _LIVE_STORES: "weakref.WeakSet[KuzuGraphStore]" = weakref.WeakSet()
+
+# 同一进程内同一图库只开一个 `kuzu.Database`，多个 store（MemHub 每个 client
+# lease 一个）共用它、各持一个 Connection，按引用计数关闭。
+# 原因：Kuzu 的文件锁是 fcntl 锁，按进程生效，同进程第二次
+# `kuzu.Database(path)` 不会被拒；两个对象各有一份 catalog / 页分配状态，各自
+# CHECKPOINT 时互相覆盖。实测：两个 store 共写 140 条，重开只剩 100 条；裸
+# kuzu 双开还出现段错误和恢复时"主键重复"（PrimaryKeyIndex 损坏）。
+# 共用是安全的：所有查询都串行在单线程的 _kuzu_executor 上。
+class _SharedDatabase:
+    __slots__ = ("db", "refs")
+
+    def __init__(self, db: Any):
+        self.db = db
+        self.refs = 1
+
+
+_SHARED_DBS: Dict[str, _SharedDatabase] = {}
+_PATH_LOCKS: Dict[str, "threading.RLock"] = {}
+_SHARED_DBS_LOCK = threading.Lock()
+
+
+def _path_lock(real_path: str) -> "threading.RLock":
+    with _SHARED_DBS_LOCK:
+        return _PATH_LOCKS.setdefault(real_path, threading.RLock())
+
+
+def _acquire_database(
+    kuzu_mod: Any, real_path: str, db_path: str, open_kwargs: Dict[str, Any]
+) -> Tuple[Any, bool]:
+    """取本进程里该路径的 Database（没有就打开）。返回 (db, 是否新打开)。"""
+    with _path_lock(real_path):
+        shared = _SHARED_DBS.get(real_path)
+        if shared is not None:
+            shared.refs += 1
+            return shared.db, False
+        db = kuzu_mod.Database(db_path, **open_kwargs)
+        _SHARED_DBS[real_path] = _SharedDatabase(db)
+        return db, True
+
+
+def _release_database(real_path: str, conn: Any, *, checkpoint: bool) -> None:
+    """关掉自己的 Connection、放掉一个引用；最后一个引用 CHECKPOINT 后关 Database。
+
+    整段持有路径锁：关库期间不会有新 store 再打开同一个文件。
+    """
+    with _path_lock(real_path):
+        shared = _SHARED_DBS.get(real_path)
+        last = shared is not None and shared.refs <= 1
+        if last and checkpoint and conn is not None:
+            try:
+                conn.execute("CHECKPOINT;")
+            except Exception as e:
+                logger.warning(f"Kuzu CHECKPOINT on close failed: {e}")
+        _close_quietly(conn, None)
+        if shared is None:
+            return
+        shared.refs -= 1
+        if shared.refs <= 0:
+            del _SHARED_DBS[real_path]
+            _close_quietly(None, shared.db)
+
+
+# 打开 + schema 检查 + DDL 在这里跑，不占 event loop，也不占单线程的
+# _kuzu_executor（打开可能因文件锁阻塞，不能把所有查询一起堵住）。
+_kuzu_open_executor = concurrent.futures.ThreadPoolExecutor(
+    max_workers=2, thread_name_prefix="kuzu-open"
+)
+_KUZU_OPEN_TIMEOUT_S = 5.0
+_DEFAULT_BUFFER_POOL_MB = 512
+_DEFAULT_MAX_THREADS = 4
+_MIN_BUFFER_POOL_MB = 64
+
+
+def kuzu_database_kwargs(graph_config: Any = None) -> Dict[str, Any]:
+    """`kuzu.Database(...)` 的资源参数，所有打开图库的地方共用。
+
+    - `buffer_pool_size`：Kuzu 默认取物理内存的 ~80%（24 GB 机器上约 19 GB），
+      一个只有几千条记忆的嵌入式图用不到，默认压到 512 MB。实测回放 200 MB
+      的 WAL 在 512 MB 下正常完成，64 MB 会报 buffer pool full，所以下限 64。
+      0 表示沿用 Kuzu 默认。
+    - `max_num_threads`：SDK 的查询全部串行在一个线程上，Kuzu 内部的并行
+      worker 对这个规模的图没有收益，每个 worker 却各自持有执行期缓冲。默认 4；
+      0 表示沿用 Kuzu 默认（全部核）。
+    - `max_db_size` 不设：它只限制 buffer pool 预留的虚拟地址空间（默认 8 TB，
+      不占 RSS），设小了只会让库长大后写失败，不限制内存。
+    """
+    pool_mb = getattr(graph_config, "buffer_pool_mb", None) if graph_config else None
+    threads = getattr(graph_config, "max_threads", None) if graph_config else None
+    if pool_mb is None:
+        pool_mb = _env_int("MEMORY_GRAPH_BUFFER_POOL_MB", _DEFAULT_BUFFER_POOL_MB)
+    if threads is None:
+        threads = _env_int("MEMORY_GRAPH_MAX_THREADS", _DEFAULT_MAX_THREADS)
+    kwargs: Dict[str, Any] = {}
+    pool_mb = int(pool_mb)
+    if pool_mb > 0:
+        kwargs["buffer_pool_size"] = max(pool_mb, _MIN_BUFFER_POOL_MB) << 20
+    threads = int(threads)
+    if threads > 0:
+        kwargs["max_num_threads"] = threads
+    return kwargs
+
+
+def _env_int(key: str, default: int) -> int:
+    import os
+    try:
+        return int(os.environ.get(key, default))
+    except (TypeError, ValueError):
+        return default
+
+
+_CRITICAL_TABLES = ("User", "Memory", "Topic")
+
+
+def _dispose_late_open(real_path: str, future: "concurrent.futures.Future") -> None:
+    """超时之后才完成的打开：放掉它拿到的引用。"""
+    try:
+        db, conn, _missing, _errors = future.result()
+    except BaseException:
+        return  # 失败路径已在线程内释放
+    if db is not None:
+        _release_database(real_path, conn, checkpoint=True)
+
+
+def _close_quietly(conn: Any, db: Any) -> None:
+    for obj in (conn, db):
+        if obj is None:
+            continue
+        try:
+            obj.close()
+        except Exception:
+            pass
 
 
 def open_graph_paths() -> List[str]:
@@ -304,6 +438,7 @@ class KuzuGraphStore(GraphStoreBase):
         self._db = None
         self._conn = None
         self._available = False  # 是否成功初始化
+        self._db_ref: Optional[str] = None  # 持有 _SHARED_DBS 引用的 realpath
 
         # embedding 维度（从 VectorStore 或 Embedder 配置中取）
         vs_dims = getattr(getattr(config, 'vector_store', None), 'embedding_dims', None)
@@ -312,6 +447,7 @@ class KuzuGraphStore(GraphStoreBase):
 
         # 图数据库存储路径
         graph_config = getattr(config, 'graph_store', None)
+        self._open_kwargs = kuzu_database_kwargs(graph_config)
         if graph_config and hasattr(graph_config, 'db_path'):
             self._db_path = graph_config.db_path
         else:
@@ -351,34 +487,69 @@ class KuzuGraphStore(GraphStoreBase):
             except Exception as rm_err:
                 logger.warning(f"Could not clean up {db_path}: {rm_err}")
 
-        def _open_kuzu_db():
-            """在线程池中执行 Kuzu Database 构造（可能阻塞获取文件锁）"""
-            db = kuzu.Database(self._db_path)
-            conn = kuzu.Connection(db)
-            return db, conn
+        import os as _os
+        real_path = _os.path.realpath(self._db_path)
+        dims = self._embedding_dims
+        open_kwargs = dict(self._open_kwargs)
 
+        def _open_and_prepare():
+            """打开 + schema 检查 + DDL + 向量索引，整体在 open 线程池里跑。
+
+            kuzu 0.11 的 `Database()` 构造期间不释放 GIL（WAL 回放、存储反序列化
+            都在里面）。这一段卡住时 event loop 一样停住，外层超时也来不及触发；
+            放进线程只能保证 *打开之后* 的 schema 检查和 DDL 不占 loop。
+
+            全程持有路径锁：同进程第二个 store 要等第一个把 schema 建完再挂上来。
+            """
+            with _path_lock(real_path):
+                return _open_locked()
+
+        def _open_locked():
+            db, fresh = _acquire_database(kuzu, real_path, self._db_path, open_kwargs)
+            conn = None
+            try:
+                conn = kuzu.Connection(db)
+                if fresh:
+                    missing, ddl_errors = self._prepare_schema(conn, dims)
+                else:
+                    # 同进程已有 store 打开并建好了 schema，不再跑 DDL
+                    existing = self._list_tables(conn)
+                    missing = [t for t in _CRITICAL_TABLES if t not in existing]
+                    ddl_errors = []
+            except BaseException:
+                _release_database(real_path, conn, checkpoint=False)
+                raise
+            if missing:
+                _release_database(real_path, conn, checkpoint=False)
+                return None, None, missing, ddl_errors
+            return db, conn, missing, ddl_errors
+
+        loop = asyncio.get_running_loop()
+        future = _kuzu_open_executor.submit(_open_and_prepare)
         try:
-            # 用 guarded executor await，避免这台机器上已完成的线程任务丢失
-            # event-loop wakeup 而被误判成文件锁超时。
-            db, conn = await asyncio.wait_for(
-                run_in_executor_guarded(None, _open_kuzu_db),
-                timeout=5.0,
+            # guarded await：避免已完成的线程任务丢失 event-loop wakeup
+            # 而被误判成文件锁超时。
+            db, conn, missing, ddl_errors = await asyncio.wait_for(
+                await_concurrent_future_guarded(future, loop),
+                timeout=_KUZU_OPEN_TIMEOUT_S,
             )
-            self._db = db
-            self._conn = conn
-            _LIVE_STORES.add(self)
         except asyncio.TimeoutError:
             logger.warning(
-                f"GraphStore init timed out after 5s (Kuzu file lock contention). "
+                f"GraphStore init timed out after {_KUZU_OPEN_TIMEOUT_S:g}s "
+                f"(Kuzu file lock contention). "
                 f"Degrading to no-op mode. This is expected in multi-worker environments."
             )
             self._db = None
             self._conn = None
             self._available = False
+            # 线程里的打开还在跑：等它结束后放掉引用，不让一个没人管的
+            # Database 对象继续持有这个库。
+            future.add_done_callback(
+                functools.partial(_dispose_late_open, real_path)
+            )
             return
         except Exception as db_err:
             # Kuzu 初始化失败 — 降级为 no-op，记录完整诊断信息
-            import os as _os
             try:
                 import kuzu as _kuzu_mod
                 _kuzu_ver = getattr(_kuzu_mod, '__version__', 'unknown')
@@ -396,21 +567,45 @@ class KuzuGraphStore(GraphStoreBase):
             self._available = False
             return
 
-        # 获取 embedding 维度 → 动态生成 Memory 表 DDL
-        dims = self._embedding_dims
+        if missing:
+            logger.error(
+                f"GraphStore schema incomplete: missing tables {missing}. "
+                f"DDL errors: {ddl_errors}. Degrading to no-op."
+            )
+            self._db = None
+            self._conn = None
+            self._available = False
+            return
+
+        self._db = db
+        self._conn = conn
+        self._db_ref = real_path
+        _LIVE_STORES.add(self)
+        self._available = True
+        logger.info(
+            f"GraphStore initialized (Kuzu), db_path={self._db_path}, "
+            f"embedding_dims={dims}, open_kwargs={open_kwargs}"
+        )
+
+    def _prepare_schema(
+        self, conn: Any, dims: int
+    ) -> Tuple[List[str], List[Tuple[str, str]]]:
+        """【open 线程内调用】建缺失的表和向量索引，返回 (缺失的关键表, DDL 错误)。"""
+        # embedding 维度 → 动态生成 Memory 表 DDL
         ddl_tables = dict(_SCHEMA_DDL_TABLES)
         ddl_tables["Memory"] = _make_memory_ddl(dims)
 
         # 执行 Schema DDL (先检查表是否存在，不存在才创建)
-        ddl_errors = []
+        existing = self._list_tables(conn)
+        ddl_errors: List[Tuple[str, str]] = []
         for table_name, ddl_stmt in ddl_tables.items():
             if ddl_stmt is None:
                 continue
-            if self._table_exists(table_name):
+            if table_name in existing:
                 logger.debug(f"Table {table_name} already exists, skipping")
                 continue
             try:
-                self._conn.execute(ddl_stmt + ";")
+                conn.execute(ddl_stmt + ";")
                 logger.debug(f"Created table {table_name}")
             except Exception as e:
                 err_msg = str(e)
@@ -422,25 +617,16 @@ class KuzuGraphStore(GraphStoreBase):
                     logger.warning(f"Schema DDL failed for {table_name}: {e}")
 
         # 检查关键表是否存在
-        critical_tables = ["User", "Memory", "Topic"]
-        missing = [t for t in critical_tables if not self._table_exists(t)]
+        existing = self._list_tables(conn)
+        missing = [t for t in _CRITICAL_TABLES if t not in existing]
         if missing:
-            logger.error(
-                f"GraphStore schema incomplete: missing tables {missing}. "
-                f"DDL errors: {ddl_errors}. Degrading to no-op."
-            )
-            self._db = None
-            self._conn = None
-            self._available = False
-            return
+            return missing, ddl_errors
 
         # 创建 HNSW 向量索引（已有则跳过）
-        self._ensure_vector_indexes(dims)
+        self._ensure_vector_indexes(dims, conn)
+        return [], ddl_errors
 
-        self._available = True
-        logger.info(f"GraphStore initialized (Kuzu), db_path={self._db_path}, embedding_dims={dims}")
-
-    def _ensure_vector_indexes(self, dims: int) -> None:
+    def _ensure_vector_indexes(self, dims: int, conn: Any = None) -> None:
         """确保 Memory 表上的 HNSW 向量索引存在
 
         注意: Kuzu 不允许 SET 被索引的列。因此：
@@ -448,8 +634,9 @@ class KuzuGraphStore(GraphStoreBase):
         - beh_embedding (V_beh): 不建索引，允许 sweeper 后续 SET 写入
         beh_embedding 的检索走内存矩阵计算（N < 100，毫秒级）
         """
+        conn = conn if conn is not None else self._conn
         try:
-            self._conn.execute(
+            conn.execute(
                 "CALL CREATE_VECTOR_INDEX('Memory', 'memory_content_idx', 'embedding', "
                 "metric := 'cosine');"
             )
@@ -508,26 +695,30 @@ class KuzuGraphStore(GraphStoreBase):
         return self._conn.execute(query)
 
     def _table_exists(self, table_name: str) -> bool:
-        """检查 Kuzu 中某个 node/rel table 是否存在（仅 init 期同步调用）
+        """检查 Kuzu 中某个 node/rel table 是否存在（仅 init 期同步调用）"""
+        if self._conn is None:
+            return False
+        return table_name in self._list_tables(self._conn)
+
+    @staticmethod
+    def _list_tables(conn: Any) -> set:
+        """库里所有 node/rel table 名。
 
         兼容不同 Kuzu 版本:
         - Kuzu 0.4.x: show_tables() 返回 [name, type, comment]
         - Kuzu 0.11+: show_tables() 返回 [id, name, type, database, comment]
         """
-        if self._conn is None:
-            return False
+        names: set = set()
         try:
-            result = self._conn.execute("CALL show_tables() RETURN *;")
+            result = conn.execute("CALL show_tables() RETURN *;")
             while result.has_next():
-                row = result.get_next()
-                # 遍历所有列查找表名（兼容不同版本）
-                for col in row:
-                    if col == table_name:
-                        return True
-            return False
+                # 收集所有字符串列（兼容不同版本的列布局）
+                for col in result.get_next():
+                    if isinstance(col, str):
+                        names.add(col)
         except Exception as e:
-            logger.debug(f"_table_exists check failed: {e}")
-            return False
+            logger.debug(f"show_tables failed: {e}")
+        return names
 
 
     # ================================================================
@@ -2455,27 +2646,35 @@ class KuzuGraphStore(GraphStoreBase):
         except Exception as e:
             return {"backend": "kuzu", "error": str(e)}
 
+    async def checkpoint(self) -> bool:
+        """把 WAL 合并进主文件。批量写（回填、重建）之后调用，不把大 WAL 留给下次打开。"""
+        if not self._available or self._conn is None:
+            return False
+        try:
+            await self._run("CHECKPOINT;")
+            return True
+        except Exception as e:
+            logger.warning(f"Kuzu CHECKPOINT failed: {e}")
+            return False
+
     async def close(self) -> None:
-        """关闭连接"""
-        conn, db = self._conn, self._db
+        """关闭本 store 的连接；同路径最后一个 store 关闭时先 CHECKPOINT 再关库。
+
+        Kuzu 的 `Database.close()` 自己也会 checkpoint；这里先显式做一次，失败
+        能记日志，之后的 close 即使出错 WAL 也已落进主文件。
+        """
+        conn, real_path = self._conn, self._db_ref
         _LIVE_STORES.discard(self)
         self._conn = None
         self._db = None
+        self._db_ref = None
         self._available = False
+        if real_path is None:
+            return
 
-        def _close():
-            if conn is not None:
-                try:
-                    conn.close()
-                except Exception:
-                    pass
-            if db is not None:
-                try:
-                    db.close()
-                except Exception:
-                    pass
-
-        await _run_in_kuzu_pool(_close)
+        await _run_in_kuzu_pool(
+            functools.partial(_release_database, real_path, conn, checkpoint=True)
+        )
         logger.info("GraphStore (Kuzu) closed")
 
     # ================================================================

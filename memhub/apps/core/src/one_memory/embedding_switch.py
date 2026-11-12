@@ -74,6 +74,7 @@ from one_memory.model_profiles import (
     ProviderKind,
 )
 from one_memory.secrets import SecretStore, SecretStoreUnavailableError
+from one_memory.storage_backends import EMBEDDING_SWITCH_UNSUPPORTED, SCAN_SKIPPED
 
 logger = logging.getLogger(__name__)
 
@@ -346,6 +347,9 @@ class EmbeddingSwitchService:
         graph_enabled: Callable[[], bool] = lambda: False,
         worker_enabled: bool = True,
         drain_timeout_s: float = DEFAULT_DRAIN_TIMEOUT_SECONDS,
+        storage_refusal: Callable[[], str | None] = lambda: None,
+        chroma_is_live: Callable[[], bool] = lambda: True,
+        kuzu_is_live: Callable[[], bool] = lambda: True,
     ) -> None:
         self.database_path = database_path
         self.data_dir = data_dir
@@ -361,6 +365,17 @@ class EmbeddingSwitchService:
         self.graph_enabled = graph_enabled
         self.worker_enabled = worker_enabled
         self.drain_timeout_s = drain_timeout_s
+        #: Why the configured storage backends cannot be re-embedded
+        #: (`storage_backends.embedding_switch_refusal`); None on Kuzu + Chroma.
+        self.storage_refusal = storage_refusal
+        #: False while another vector store is configured (`storage_backends`).
+        #: Then nothing here opens the home's Chroma files: they hold the
+        #: memories of the store that was left, and stay exactly as they were.
+        self.chroma_is_live = chroma_is_live
+        #: False while a Neo4j/Memgraph graph is configured. Then a switch
+        #: (allowed outside ultra) neither re-embeds, verifies nor drops a Kuzu
+        #: graph: those files are the graph of the store that was left.
+        self.kuzu_is_live = kuzu_is_live
         self.pid = os.getpid()
         #: "pending" until the startup scan decided, then "done"/"failed"/"unavailable".
         self.scan_state: Literal["pending", "scanning", "done", "failed", "unavailable"] = "pending"
@@ -504,7 +519,9 @@ class EmbeddingSwitchService:
                 blockers=blockers,
                 **base,
             )
-        if await self._home_is_empty():
+        storage_refusal = self.storage_refusal()
+        chroma_live = self.chroma_is_live()
+        if chroma_live and await self._home_is_empty():
             return EmbeddingSwitchPlan(
                 needed=False,
                 reason="empty_home",
@@ -512,14 +529,16 @@ class EmbeddingSwitchService:
                 blockers=blockers,
                 **base,
             )
-        unavailable = self.backend.unavailable_reason()
+        # A custom backend's vectors are not in the home's Chroma store, so it
+        # is never called empty: its memories would be left behind unseen.
+        unavailable = storage_refusal or self.backend.unavailable_reason()
         if unavailable is not None:
             blockers.append(unavailable)
         if identity.dims is None:
             blockers.append("embedding_dimensions_unknown")
         if not await asyncio.to_thread(self._probed, target):
             blockers.append("embedding_probe_required")
-        if await asyncio.to_thread(self._legacy_vectors_waiting, live):
+        if chroma_live and await asyncio.to_thread(self._legacy_vectors_waiting, live):
             blockers.append("embedding_switch_requires_migration")
         sources: list[PlannedSource] = []
         users: int | None = None
@@ -557,7 +576,7 @@ class EmbeddingSwitchService:
         total = sum(item.vectors for item in sources)
         graph_vectors: int | None = None
         graph = self._graph_path(live)
-        if graph.exists() and unavailable is None:
+        if graph.exists() and unavailable is None and self.kuzu_is_live():
             try:
                 graph_vectors = await self.backend.graph_vectors(graph)
             except Exception:  # noqa: BLE001 - a client may hold it open: null, not a refusal
@@ -900,7 +919,17 @@ class EmbeddingSwitchService:
             self.release_scan_hold()
 
     async def scan_and_merge(self) -> str | None:
-        """The startup scan. Returns the merge job it started, if any."""
+        """The startup scan. Returns the merge job it started, if any.
+
+        Skipped on a custom storage backend: the scan reads the home's Chroma
+        store, which then holds only the memories of the backend that was left.
+        Merging those into nothing, or retiring them, would rewrite data the
+        person did not ask to move. `scan_state` is `done` and `scan_error`
+        names the skip.
+        """
+        if not self.chroma_is_live():
+            self.scan_state, self.scan_error = "done", SCAN_SKIPPED
+            return None
         reason = self.backend.unavailable_reason()
         if reason is not None:
             self.scan_state, self.scan_error = "unavailable", reason
@@ -1228,7 +1257,7 @@ class EmbeddingSwitchService:
         # Whatever the mode: a pro home can hold the graph of its ultra days,
         # and it would otherwise be dropped with the old space.
         source_graph = self._graph_path(source)
-        if not _graph_has_files(source_graph):
+        if not self.kuzu_is_live() or not _graph_has_files(source_graph):
             return
         target_dims = target.dims or target.name_dims
         if target_dims is None:
@@ -1296,7 +1325,7 @@ class EmbeddingSwitchService:
                 for user, count in (live_scan.per_user if live_scan else {}).items():
                     if check.per_user.get(user, 0) < count:
                         problems.append(f"user {user!r}: target holds fewer records")
-            if _graph_has_files(self._graph_path(source)):
+            if self.kuzu_is_live() and _graph_has_files(self._graph_path(source)):
                 dims = target.dims or target.name_dims or 0
                 # Reads are served between the copy and here: a client may
                 # hold the graph again, and the SDK refuses to open it then.
@@ -1459,7 +1488,7 @@ class EmbeddingSwitchService:
 
     async def sweep_retired(self, *, now: datetime | None = None) -> list[str]:
         """Drop every retired space past its keep-until date. Never the live one."""
-        if self.backend.unavailable_reason() is not None:
+        if not self.chroma_is_live() or self.backend.unavailable_reason() is not None:
             return []
         dropped: list[str] = []
         for space in await asyncio.to_thread(self.spaces.expired, now=now):
@@ -1474,9 +1503,17 @@ class EmbeddingSwitchService:
             raise EmbeddingSwitchError("embedding_space_not_found")
         if space.state != "retired":
             raise EmbeddingSwitchError("embedding_space_not_retired")
+        if not self.chroma_is_live():
+            # A retired space lives in the Chroma store this home used before;
+            # on another vector store that store is left exactly as it was.
+            raise EmbeddingSwitchError(EMBEDDING_SWITCH_UNSUPPORTED)
         await self.backend.drop(self._physical(space))
         live = await asyncio.to_thread(self.spaces.live)
-        if space.graph_dir and (live is None or live.graph_dir != space.graph_dir):
+        if (
+            self.kuzu_is_live()
+            and space.graph_dir
+            and (live is None or live.graph_dir != space.graph_dir)
+        ):
             graph = self._graph_path(space)
             if _graph_has_files(graph):
                 await self.backend.drop_graph(graph)

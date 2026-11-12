@@ -1038,6 +1038,24 @@ export interface EvolveOverview {
   running: EvolveRunReceipt[];
 }
 
+/** The ultra graph's own state (Core `graph_open_guard`). */
+export interface GraphStoreStatus {
+  state:
+    | "not_used"
+    | "opening"
+    | "ready"
+    | "rebuilding_after_quarantine"
+    | "unavailable";
+  /** Every quarantine this home has seen (fewer copies are kept). */
+  quarantine_count: number;
+  last_quarantined_at: string | null;
+  /** A probe outcome (`timeout`, `rss_cap`, `crashed`, `exit_nonzero`) or
+   *  `core_died_during_probe`; optional for an older Core. */
+  last_quarantine_reason?: string | null;
+  /** Starts that died while opening the graph, not yet resolved. */
+  failed_open_attempts: number;
+}
+
 export interface MemoryModeState {
   mode: MemoryPipelineMode;
   configured_mode: MemoryPipelineMode;
@@ -1045,6 +1063,8 @@ export interface MemoryModeState {
   forced_by_env: boolean;
   modes: MemoryPipelineMode[];
   graph_build: GraphBuildState;
+  /** Optional: an older Core does not report it. */
+  graph_store?: GraphStoreStatus;
 }
 
 export interface MemoryModeChange extends MemoryModeState {
@@ -1081,9 +1101,24 @@ export interface MemoryPipelineStatus {
   evolve: EvolveOverview;
   last_evolve_at: string | null;
   graph_build: GraphBuildState;
+  graph_store?: GraphStoreStatus;
   features: Record<string, boolean | number>;
   ui_language?: string | null;
   sdk_language?: string;
+  /** The SDK graph and vector stores (`storage_backends`), configured only
+   *  through the CLI/API; absent from an older Core. */
+  storage_backends?: StorageBackendsSummary | null;
+}
+
+/** `pipeline.storage_backends` (docs/contracts/storage-backends-v1.md §4). */
+export interface StorageBackendsSummary {
+  graph: "kuzu" | "neo4j" | "memgraph";
+  vector: "chroma" | "qdrant" | "faiss";
+  is_default: boolean;
+  /** `Neo4j + Qdrant`: graph first; product names, never translated. */
+  label: string;
+  health: "ok" | "local" | "failed" | "unknown";
+  health_code: string | null;
 }
 
 export interface MemoryProcessingSummary {
@@ -1108,14 +1143,16 @@ export interface MemoryProcessingSummary {
   running: number;
   /** Rows marked `running` that no worker currently owns.
    *
-   * The difference between `running` and `in_flight_count`, floored at zero.
+   * On the SDK data plane: `running` rows whose lease is missing or has
+   * lapsed, counted in the same read as `running`. On the legacy plane: the
+   * difference between `running` and `in_flight_count`, floored at zero.
    * Non-zero means work is stranded: those tasks hold their harness's slot
    * until they are recovered, and a harness is serial, so nothing else from
    * that harness can run behind them. */
   /* Optional so that existing producers and fixtures stay valid; Core always
-   * sends it, and a reader that does not see it should treat it as unknown
-   * rather than as zero. */
-  stranded_running?: number;
+   * sends it. A reader that does not see it, or sees `null`, should treat it
+   * as unknown rather than as zero. */
+  stranded_running?: number | null;
   /** Failed and never attempted because the continuous policy was not in
    * force. Included in `failed`, but not a real extraction failure: nothing
    * was sent to HY. A revoked policy otherwise reads as a broken pipeline. */
@@ -1336,9 +1373,15 @@ export interface MemoryAddReceipt {
 }
 
 export type {
+  BackupBackend,
+  BackupEstimate,
+  BackupFailureCode,
+  BackupRequest,
   BackupRestoreFailureCode,
   BackupRestoreRequest,
   BackupRestoreResult,
+  BackupRestoreVerification,
+  BackupResult,
 } from "./backup-restore.js";
 export type {
   ContextItem,

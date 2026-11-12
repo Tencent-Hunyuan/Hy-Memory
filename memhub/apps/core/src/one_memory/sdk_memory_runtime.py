@@ -278,6 +278,27 @@ class SdkMemoryRuntime:
             )
         return running, running
 
+    def stranded_depths(self, *, now: datetime | None = None) -> tuple[int, int]:
+        """`(running, stranded)` on the SDK data plane.
+
+        A row is stranded when it is `running` with no live lease: its worker
+        is gone and nothing will finish it. `reclaim_expired` recovers it on
+        the next drain tick, so this is the number that says the queue is
+        stuck *right now* rather than merely busy.
+
+        The two counts come from one read so they describe the same instant.
+        """
+        current = (now or datetime.now(UTC)).isoformat()
+        with main_database(self.write_queue.database_path).read() as database:
+            running, stranded = database.execute(
+                "SELECT COUNT(*), COALESCE(SUM(CASE WHEN lease_owner IS NULL"
+                " OR lease_expires_at IS NULL OR lease_expires_at < ?"
+                " THEN 1 ELSE 0 END), 0)"
+                " FROM memory_write_jobs WHERE state='running'",
+                (current,),
+            ).fetchone()
+        return int(running), int(stranded)
+
     def status_counts(self) -> dict[str, int]:
         """Jobs per state, with a suspended source's waiting jobs as `suspended`.
 

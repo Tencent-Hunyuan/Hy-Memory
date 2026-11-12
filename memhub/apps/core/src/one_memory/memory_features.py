@@ -21,10 +21,12 @@ exercises (query rewrite needs `queries=[...]`, session narratives need
 cross-encoder download, access write-back); and everything MemHub already
 controls elsewhere (pipeline log, trace, memory operations, telemetry, mode).
 
-Beside the on/off features there is one numeric parameter,
-`intention_dedup_threshold` (`PARAMETERS`): the cosine similarity at which the
-read-time intention dedup treats two intentions as copies. It is set, stored,
-reset and keyed exactly like a feature.
+Beside the on/off features there are numeric parameters (`PARAMETERS`):
+`intention_dedup_threshold`, the cosine similarity at which the read-time
+intention dedup treats two intentions as copies, and `agent_max_tokens`, the
+output budget of the SDK's agent calls (evolve, System 2), which some local
+models need raised. They are set, stored, reset and keyed exactly like a
+feature.
 
 No SDK import here: only `hy_sdk_runtime` and `hy_sdk_migration` import it.
 `config_state` imports this module, so it imports nothing from there.
@@ -49,7 +51,7 @@ MemoryFeatureName = Literal[
     "few_shot",
 ]
 #: Numeric settings beside the on/off features.
-MemoryParameterName = Literal["intention_dedup_threshold"]
+MemoryParameterName = Literal["intention_dedup_threshold", "agent_max_tokens"]
 #: Every key of the setting: a feature or a parameter.
 MemorySettingName = MemoryFeatureName | MemoryParameterName
 #: Read features change search; write features change what extraction stores.
@@ -66,8 +68,8 @@ FeatureReason = Literal[
     "requires_graph_rerank",
     "requires_intention_dedup",
 ]
-#: A feature is on or off; a parameter is a number.
-type SettingValue = bool | float
+#: A feature is on or off; a parameter is a number (an int for an integer one).
+type SettingValue = bool | int | float
 #: A client's features as a hashable key: sorted (name, value) pairs, set ones only.
 type FeatureOverrides = tuple[tuple[str, SettingValue], ...]
 
@@ -78,6 +80,11 @@ type FeatureOverrides = tuple[tuple[str, SettingValue], ...]
 #: intentions that are not copies. 1.0 keeps only exact copies' dedup.
 INTENTION_DEDUP_THRESHOLD_MIN = 0.8
 INTENTION_DEDUP_THRESHOLD_MAX = 1.0
+#: The range a person may set `agent_max_tokens` to. Below 512 an evolve or
+#: System 2 answer cannot hold its operation list; above 32000 no model MemHub
+#: supports returns that much in one answer.
+AGENT_MAX_TOKENS_MIN = 512
+AGENT_MAX_TOKENS_MAX = 32000
 
 _MODE_RANK: dict[str, int] = {"lite": 0, "pro": 1, "ultra": 2}
 
@@ -237,13 +244,18 @@ class ParameterSpec:
     """A numeric setting; it acts only while `requires_feature` acts."""
 
     name: MemoryParameterName
-    section: Literal["recall"]
+    section: Literal["recall", "llm"]
     field: str
     env: str
     minimum: float
     maximum: float
-    requires_feature: MemoryFeatureName
+    #: The feature it tunes; None = it acts whenever its mode does.
+    requires_feature: MemoryFeatureName | None
     description: str
+    #: Lowest mode it acts in (only used without `requires_feature`).
+    requires_mode: Literal["pro", "ultra"] = "pro"
+    #: A whole number: stored, keyed and written to the SDK as an int.
+    integer: bool = False
 
     @property
     def sdk_field(self) -> str:
@@ -263,6 +275,23 @@ PARAMETERS: tuple[ParameterSpec, ...] = (
             "Cosine similarity at or above which intention_dedup treats two "
             "intentions as copies. Higher keeps more. The SDK default is 0.95 "
             "(MEMORY_DEDUP_THRESHOLD also sets it when its own env var is unset)."
+        ),
+    ),
+    ParameterSpec(
+        name="agent_max_tokens",
+        section="llm",
+        field="agent_max_tokens",
+        env="MEMORY_AGENT_MAX_TOKENS",
+        minimum=AGENT_MAX_TOKENS_MIN,
+        maximum=AGENT_MAX_TOKENS_MAX,
+        requires_feature=None,
+        requires_mode="pro",
+        integer=True,
+        description=(
+            "Output token budget of the SDK's agent calls (evolve, System 2). "
+            "Raise it when a local model's answers are cut off "
+            "(invalid_operations_json, truncated). The SDK default is 2000, or "
+            "MEMORY_AGENT_MAX_TOKENS when that is set."
         ),
     ),
 )
@@ -301,6 +330,11 @@ class MemoryFeatures(BaseModel):
         le=INTENTION_DEDUP_THRESHOLD_MAX,
         allow_inf_nan=False,
     )
+    agent_max_tokens: int | None = Field(
+        default=None,
+        ge=AGENT_MAX_TOKENS_MIN,
+        le=AGENT_MAX_TOKENS_MAX,
+    )
 
     def overrides(self) -> FeatureOverrides:
         """The features a person set, as the client key."""
@@ -329,7 +363,17 @@ def _setting_value(name: str, value: SettingValue) -> SettingValue:
         return bool(value)
     if isinstance(value, bool) or not parameter.minimum <= float(value) <= parameter.maximum:
         raise ValueError("invalid_memory_feature_value")
+    if parameter.integer:
+        if float(value) != int(value):
+            raise ValueError("invalid_memory_feature_value")
+        return int(value)
     return float(value)
+
+
+def parameter_value(name: str, value: SettingValue) -> int | float:
+    """A parameter's value in its own type: int for an integer parameter."""
+    parameter = PARAMETERS_BY_NAME[name]
+    return int(value) if parameter.integer else float(value)
 
 
 def effective_features(
@@ -341,7 +385,7 @@ def effective_features(
     }
     for parameter in PARAMETERS:
         if parameter.name in defaults:
-            values[parameter.name] = float(defaults[parameter.name])
+            values[parameter.name] = parameter_value(parameter.name, defaults[parameter.name])
     values.update(dict(overrides))
     return values
 
@@ -351,10 +395,15 @@ def feature_activity(
 ) -> FeatureReason | None:
     """None when the feature acts in this mode; else why it does not.
 
-    A parameter acts exactly when the feature it tunes acts.
+    A parameter acts exactly when the feature it tunes acts; one that tunes
+    no feature acts whenever its mode does.
     """
     parameter = PARAMETERS_BY_NAME.get(name)
-    if parameter is not None:
+    if parameter is not None and parameter.requires_feature is None:
+        if _MODE_RANK.get(mode, 0) < _MODE_RANK[parameter.requires_mode]:
+            return "requires_ultra" if parameter.requires_mode == "ultra" else "requires_pro"
+        return None
+    if parameter is not None and parameter.requires_feature is not None:
         reason = feature_activity(parameter.requires_feature, effective, mode)
         return "requires_intention_dedup" if reason == "disabled" else reason
     spec = FEATURES_BY_NAME[name]

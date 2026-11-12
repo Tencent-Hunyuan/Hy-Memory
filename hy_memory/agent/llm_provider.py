@@ -219,6 +219,7 @@ class LLMConfig:
     retry_delay: float = 1.0  # 初始 delay，每次递增
     extra_headers: Optional[Dict[str, str]] = None
     extra_body: Optional[Dict[str, Any]] = None
+    output_token_parameter: str = "max_tokens"
 
 
 class LLMProvider:
@@ -297,6 +298,10 @@ class LLMProvider:
         self._llm_config = self._build_llm_config()
         self._client = None
         self._clients = weakref.WeakKeyDictionary()
+        # Per-loop leases prevent one failed request from closing a client
+        # that is still serving other calls. Retired clients cannot be reused.
+        self._client_users = weakref.WeakKeyDictionary()
+        self._retired_clients = weakref.WeakKeyDictionary()
         
         # 统计
         self._total_calls = 0
@@ -308,6 +313,8 @@ class LLMProvider:
     def _build_llm_config(self) -> LLMConfig:
         """从配置构建 LLM 配置"""
         llm = self.config.llm
+        if llm.output_token_parameter not in ("max_tokens", "max_completion_tokens"):
+            raise ValueError("output_token_parameter must be max_tokens or max_completion_tokens")
         return LLMConfig(
             backend=LLMBackend.OPENAI,
             model=llm.model,
@@ -319,6 +326,7 @@ class LLMProvider:
                 None if getattr(llm, "omit_temperature", False)
                 else llm.temperature
             ),
+            output_token_parameter=llm.output_token_parameter,
             timeout=llm.timeout or 120,
             max_retries=llm.max_retries if llm.max_retries is not None else 5,
             retry_delay=llm.retry_delay if llm.retry_delay is not None else 1.0,
@@ -523,7 +531,7 @@ class LLMProvider:
         kwargs: Dict[str, Any] = {
             "model": self._llm_config.model,
             "messages": messages,
-            "max_tokens": max_tokens,
+            self._llm_config.output_token_parameter: max_tokens,
         }
         # 解析到 None → **整个参数不发**（Opus 5 等网关只接受 1 或不传）
         _temp = self._resolve_temperature(temperature)
@@ -543,20 +551,35 @@ class LLMProvider:
         if self._llm_config.extra_body:
             kwargs["extra_body"] = self._llm_config.extra_body
 
+        users = self._client_users.setdefault(loop, {})
+        retired = self._retired_clients.setdefault(loop, set())
+        users[client] = users.get(client, 0) + 1
         try:
             async with llm_slot():
                 response = await client.chat.completions.create(**kwargs)
         except Exception:
-            # A transport failure may poison a pooled connection.  Evict only
-            # this endpoint so the outer retry creates a clean client.
-            clients.pop(client_key, None)
-            try:
-                closed = client.close()
-                if asyncio.iscoroutine(closed):
-                    await closed
-            except Exception:
-                pass
+            # A failing call may belong to an already retired generation. Do
+            # not evict a newer client created while that call was in flight.
+            if clients.get(client_key) is client:
+                clients.pop(client_key)
+            retired.add(client)
             raise
+        finally:
+            users[client] -= 1
+            if users[client] == 0:
+                users.pop(client)
+                if client in retired:
+                    try:
+                        closed = client.close()
+                        if asyncio.iscoroutine(closed):
+                            await closed
+                    except Exception:
+                        # Keep the retired client reachable for close() to
+                        # attempt cleanup again after a close error. A transport
+                        # that marks itself closed before raising may not retry.
+                        pass
+                    else:
+                        retired.discard(client)
 
         msg, usage, _finish, _choices_count = self._extract_response(response)
         _reasoning_content, _reasoning_tokens = self._extract_reasoning(msg, usage)
@@ -576,12 +599,18 @@ class LLMProvider:
         )
 
     async def close(self) -> None:
-        clients = [
+        clients = {
             client
             for per_loop in list(self._clients.values())
             for client in list(per_loop.values())
-        ]
+        }
+        clients.update(
+            client
+            for per_loop in list(self._retired_clients.values())
+            for client in list(per_loop)
+        )
         self._clients.clear()
+        self._retired_clients.clear()
         for client in clients:
             try:
                 closed = client.close()

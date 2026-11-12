@@ -330,21 +330,30 @@ interface HostConfig {
 
 /** OpenCode states the whole invocation as one array and calls the env block
  * `environment`. Converting at the edges keeps one notion of "our entry"
- * instead of a second copy of the ownership and rollback rules. */
+ * instead of a second copy of the ownership and rollback rules.
+ *
+ * V1 keeps servers flat under `mcp` and enables them with `enabled`; V2 groups
+ * them under `mcp.servers` and disables with `disabled`. V2 still reads the
+ * flat shape, so a config that has not adopted the nested map is written flat
+ * and stays readable by both. */
 interface OpencodeServer {
   type: "local";
   command: string[];
   environment: Record<string, string>;
-  enabled: true;
+  enabled?: true;
+  disabled?: false;
 }
 
-function toOpencodeServer(server: ManagedServer): OpencodeServer {
-  return {
-    type: "local",
+function toOpencodeServer(
+  server: ManagedServer,
+  native = false,
+): OpencodeServer {
+  const shared = {
+    type: "local" as const,
     command: [server.command, ...server.args],
     environment: server.env,
-    enabled: true,
   };
+  return native ? { ...shared, disabled: false } : { ...shared, enabled: true };
 }
 
 function fromOpencodeServer(value: unknown): unknown {
@@ -2663,8 +2672,9 @@ function readInstalledServer(
         };
   }
   const config = parseHostConfig(raw, layout);
-  const value = jsonServers(config, layout)?.[SERVER_NAME];
-  if (value === undefined) return { managed: null, foreign: null };
+  const entry = jsonServerEntry(config, layout);
+  if (entry === undefined) return { managed: null, foreign: null };
+  const value = entry.value;
   const candidate =
     layout.format === "opencode" ? fromOpencodeServer(value) : value;
   if (isManagedServer(candidate)) return { managed: candidate, foreign: null };
@@ -2678,39 +2688,67 @@ function readInstalledServer(
   };
 }
 
-/** Where in the document this host keeps its servers.
+/** Candidate server maps, most specific first.
  *
  * Four JSON hosts, three answers, each read off the installed binary: Cursor,
- * Claude Code, WorkBuddy and Qwen Code use a top-level `mcpServers`; OpenCode
- * uses `mcp`; OpenClaw nests one deeper under `mcp.servers`. Keeping this as a
- * path rather than a branch per host is what stops the next host from adding a
- * fourth copy of the merge and rollback logic.
+ * Claude Code, WorkBuddy and Qwen Code use a top-level `mcpServers`; OpenClaw
+ * nests one deeper under `mcp.servers`. OpenCode 2 groups servers under
+ * `mcp.servers` too, but still reads the flat `mcp` map that V1 wrote — an
+ * install therefore uses the nested map only when the config already does, so
+ * a V1 host keeps working and no entry is left duplicated in both places.
  */
-function serverPath(layout: RecallHostLayout): string[] {
-  if (layout.format === "opencode") return ["mcp"];
-  if (layout.format === "openclaw") return ["mcp", "servers"];
-  return ["mcpServers"];
+function serverPaths(layout: RecallHostLayout, config: HostConfig): string[][] {
+  if (layout.format === "opencode") {
+    const mcp = config.mcp;
+    const nested =
+      mcp && typeof mcp === "object" && !Array.isArray(mcp)
+        ? (mcp as Record<string, unknown>).servers
+        : undefined;
+    return nested === undefined ? [["mcp"]] : [["mcp", "servers"], ["mcp"]];
+  }
+  if (layout.format === "openclaw") return [["mcp", "servers"]];
+  return [["mcpServers"]];
 }
 
-/** The map of servers, wherever this host keeps it. */
-function jsonServers(
-  config: HostConfig,
-  layout: RecallHostLayout,
-): Record<string, unknown> | undefined {
+/** Where a fresh entry goes: the first candidate is the host's own shape. */
+function serverPath(layout: RecallHostLayout, config: HostConfig): string[] {
+  return serverPaths(layout, config)[0];
+}
+
+function nodeAt(config: HostConfig, path: string[]): unknown {
   let node: unknown = config;
-  for (const key of serverPath(layout)) {
+  for (const key of path) {
     if (!node || typeof node !== "object") return undefined;
     node = (node as Record<string, unknown>)[key];
   }
-  return node as Record<string, unknown> | undefined;
+  return node;
+}
+
+/** Our entry wherever this host keeps it, with its path for removal. */
+function jsonServerEntry(
+  config: HostConfig,
+  layout: RecallHostLayout,
+): { path: string[]; value: unknown } | undefined {
+  for (const path of serverPaths(layout, config)) {
+    const map = nodeAt(config, path);
+    if (!map || typeof map !== "object") continue;
+    if (SERVER_NAME in (map as Record<string, unknown>)) {
+      return { path, value: (map as Record<string, unknown>)[SERVER_NAME] };
+    }
+  }
+  return undefined;
+}
+
+function isNestedOpencodePath(path: string[]): boolean {
+  return path.length === 2 && path[0] === "mcp" && path[1] === "servers";
 }
 
 function putJsonServer(
   config: HostConfig,
   layout: RecallHostLayout,
   value: unknown,
+  path = serverPath(layout, config),
 ): void {
-  const path = serverPath(layout);
   let node = config as Record<string, unknown>;
   for (const key of path.slice(0, -1)) {
     const existing = node[key];
@@ -2756,10 +2794,18 @@ function writeInstalledServer(
     return putDshServer(raw ?? "", server);
   }
   const config = parseHostConfig(raw, layout);
+  // Keep an existing entry where it already is; a fresh one takes the path the
+  // host's own shape uses. Moving a working entry between the flat and nested
+  // maps would leave a duplicate that V2 could read twice.
+  const path =
+    jsonServerEntry(config, layout)?.path ?? serverPath(layout, config);
   putJsonServer(
     config,
     layout,
-    layout.format === "opencode" ? toOpencodeServer(server) : server,
+    layout.format === "opencode"
+      ? toOpencodeServer(server, isNestedOpencodePath(path))
+      : server,
+    path,
   );
   return `${JSON.stringify(config, null, 2)}\n`;
 }
@@ -2824,19 +2870,22 @@ function removeInstalledServer(
       : removeDshServer(raw ?? "");
   }
   const config = parseHostConfig(raw, layout);
+  const entry = jsonServerEntry(config, layout);
+  const path = entry?.path ?? serverPath(layout, config);
   // A displaced entry is reinstated exactly as the host wrote it; a previous
-  // managed one is ours, so it goes back in this host's spelling.
+  // managed one is ours, so it goes back in the spelling of the place it
+  // occupied.
   const reinstated =
     (restore.previous !== null
       ? layout.format === "opencode"
-        ? toOpencodeServer(restore.previous)
+        ? toOpencodeServer(restore.previous, isNestedOpencodePath(path))
         : restore.previous
       : null) ??
     (restore.displaced ? JSON.parse(restore.displaced.text) : null);
   if (reinstated !== null) {
-    putJsonServer(config, layout, reinstated);
-  } else {
-    delete jsonServers(config, layout)?.[SERVER_NAME];
+    putJsonServer(config, layout, reinstated, path);
+  } else if (entry !== undefined) {
+    delete (nodeAt(config, path) as Record<string, unknown>)[SERVER_NAME];
   }
   return `${JSON.stringify(config, null, 2)}\n`;
 }

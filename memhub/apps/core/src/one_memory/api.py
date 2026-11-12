@@ -1,6 +1,5 @@
 import asyncio
 import hashlib
-import importlib.util
 import json
 import logging
 import os
@@ -53,6 +52,7 @@ from one_memory.background_work import (
     shutdown_bulk_pool,
     warm_bulk_pool,
 )
+from one_memory.backup_routes import BackupHooks
 from one_memory.config import Settings, load_settings
 from one_memory.context_routes import sdk_context_router
 from one_memory.conversation_processing import (
@@ -94,11 +94,13 @@ from one_memory.external_memory_access import (
 )
 from one_memory.extraction_settings import ExtractionSettings, ExtractionSettingsStore
 from one_memory.file_imports import FileImportStore, file_import_router
+from one_memory.graph_open_guard import GraphOpenGuard, GraphOpenOutcome, GraphStoreStatus
 from one_memory.hy_graph_admin import (
     GraphWidthDecision,
     GraphWidthMismatch,
     effective_memory_mode,
     graph_store_enabled,
+    live_graph_path,
 )
 from one_memory.hy_runtime_config import (
     HY_MEMORY_READER,
@@ -126,6 +128,7 @@ from one_memory.hy_sdk_types import (
     HySdkRawPage,
     HySdkRawRecord,
     HySdkReadError,
+    HySdkRuntimeError,
     HySdkUserProfile,
     LibraryHit,
     library_keyword_hits,
@@ -207,6 +210,7 @@ from one_memory.memory_evolution import (
     EvolveService,
     EvolveStateStore,
     GraphBuildState,
+    GraphBuildUser,
     MemoryGraphBackfill,
     UserEvolveState,
 )
@@ -226,6 +230,7 @@ from one_memory.memory_features import (
     effective_features,
     feature_activity,
     non_default_features,
+    parameter_value,
 )
 from one_memory.memory_governance import (
     MemoryGovernanceStore,
@@ -323,6 +328,19 @@ from one_memory.service_levels import (
 from one_memory.source_import_receipts import SourceImportReceipt, build_source_import_receipt
 from one_memory.source_read_access import SourceReadAccess
 from one_memory.source_totals import SourceTotals
+from one_memory.storage_backend_probe import StorageBackendHealth, driver_available
+from one_memory.storage_backend_routes import (
+    StorageBackendHooks,
+    StorageBackendsSummary,
+)
+from one_memory.storage_backend_routes import summary as storage_summary
+from one_memory.storage_backends import (
+    GRAPH_EXPORT_UNSUPPORTED,
+    ResolvedStorage,
+    StorageBackends,
+    StorageBackendStore,
+    embedding_switch_refusal,
+)
 from one_memory.strict_query import forbid_unknown_query_params
 from one_memory.target_schema import bootstrap_fresh_management_schema
 from one_memory.ui_language import (
@@ -376,28 +394,6 @@ class HealthResponse(BaseModel):
     # (`{kind, state, percent, eta_s}`): the loading screen and the status
     # line read it. Reads are served throughout; model writes are paused.
     embedding_switch: dict[str, object] | None = None
-
-
-class BackupRequest(BaseModel):
-    target: str
-
-
-class BackupResult(BaseModel):
-    target: str
-    bytes: int
-
-
-class BackupRestoreRequest(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    source: str = Field(min_length=1, max_length=4096)
-
-
-class BackupRestoreResponse(BaseModel):
-    state: Literal["restored"]
-    restored_bytes: int
-    previous_backup_path: str
-    source_schema_version: int
 
 
 class SourceResponse(BaseModel):
@@ -798,6 +794,9 @@ class MemoryModeState(BaseModel):
     forced_by_env: bool
     modes: tuple[MemoryMode, ...] = MEMORY_MODES
     graph_build: GraphBuildState
+    #: The ultra graph's own state: opening / ready / rebuilt after a
+    #: quarantine (`graph_open_guard`).
+    graph_store: GraphStoreStatus = Field(default_factory=GraphStoreStatus)
 
 
 class MemoryModeUpdate(BaseModel):
@@ -885,6 +884,10 @@ class PipelineStatus(BaseModel):
     #: Newest finished run across users, for a one-line status.
     last_evolve_at: datetime | None = None
     graph_build: GraphBuildState
+    #: The ultra graph's own state (`graph_open_guard`): `opening` while the
+    #: startup step runs, `rebuilding_after_quarantine` after a graph that
+    #: kept taking Core down was renamed aside, else `ready` / `not_used`.
+    graph_store: GraphStoreStatus = Field(default_factory=GraphStoreStatus)
     #: The SDK features (`memory_features`) whose value differs from the SDK
     #: default; empty while every feature is at its default. A parameter
     #: (`intention_dedup_threshold`) appears as its number.
@@ -894,6 +897,9 @@ class PipelineStatus(BaseModel):
     ui_language: UiLanguage | None = None
     #: The SDK prompt language: `auto` (the SDK detects zh/en) or a code.
     sdk_language: str = SDK_LANGUAGE_AUTO
+    #: The graph and vector stores (`storage_backends`) and whether they
+    #: answer; None from a Core without the setting wired (legacy tests).
+    storage_backends: StorageBackendsSummary | None = None
 
 
 class UiLanguageState(BaseModel):
@@ -954,19 +960,22 @@ class MemoryParameterState(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     name: MemoryParameterName
-    #: What clients are built with: `configured`, else `default`.
-    value: float
+    #: What clients are built with: `configured`, else `default`. An integer
+    #: parameter (`agent_max_tokens`) is an int throughout.
+    value: int | float
     #: What a person set; null = not set, the SDK default applies.
-    configured: float | None
+    configured: int | float | None
     #: The SDK default (its code default, or its own env var when set).
-    default: float
+    default: int | float
     #: The range a `PUT` accepts, inclusive.
-    minimum: float
-    maximum: float
-    #: Whether it acts: exactly when `requires_feature` acts.
+    minimum: int | float
+    maximum: int | float
+    #: Whether it acts: when `requires_feature` acts, or, without one, when
+    #: the mode reaches `requires_mode`.
     active: bool
     reason: FeatureReason | None
-    requires_feature: MemoryFeatureName
+    requires_feature: MemoryFeatureName | None
+    requires_mode: Literal["pro", "ultra"] = "pro"
     sdk_field: str
     env: str
     description: str
@@ -1361,6 +1370,14 @@ def create_app(
                 home=runtime_settings.source_home,
             )
             app.state.config_store = ConfigStore(runtime_settings.data_dir)
+            # The graph and vector stores every SDK client is built with
+            # (`storage_backends`), and their cached health for status.
+            app.state.storage_backends = StorageBackendStore(
+                app.state.config_store, app.state.secret_store
+            )
+            app.state.storage_backend_health = StorageBackendHealth(
+                resolved=lambda: _storage_resolved(app)
+            )
             app.state.source_candidate_store = SourceCandidateStore(
                 database_path, home=runtime_settings.source_home
             )
@@ -1379,6 +1396,9 @@ def create_app(
             }
             app.state.sedimentation_lock = asyncio.Lock()
             app.state.memory_mode_lock = asyncio.Lock()
+            # A backup pauses SDK writes for its copy (`memory_backup`).
+            app.state.backup_pause = False
+            app.state.backup_lock = asyncio.Lock()
             _follow_workbuddy_home(app, runtime_settings.source_home)
             app.state.source_detection = {}
 
@@ -1494,6 +1514,7 @@ def create_app(
                 spaces=app.state.embedding_spaces,
                 writes_open=lambda: _embedding_writes_open(app),
                 sdk_language=lambda: _sdk_language(app),
+                storage_backends=lambda: _storage_resolved(app),
             )
             app.state.sdk_memory_runtime = SdkMemoryRuntime(
                 coordinator=app.state.sdk_write_coordinator,
@@ -1627,6 +1648,11 @@ def create_app(
                         raise RuntimeError("embedding_switch_clients_busy")
                     await asyncio.sleep(0.2)
 
+            # The backup and the restore pause writes and close every SDK
+            # client the same way the embedding switch does.
+            app.state.sdk_writes_drained = embedding_writes_drained
+            app.state.quiesce_sdk_clients = quiesce_sdk_clients
+
             async def after_embedding_commit(job: EmbeddingSwitchJob) -> None:
                 from one_memory.hy_graph_admin import forget_graph_widths
 
@@ -1662,7 +1688,25 @@ def create_app(
                 graph_enabled=lambda: _memory_mode(app) == "ultra",
                 worker_enabled=runtime_settings.embedding_switch_worker,
                 drain_timeout_s=runtime_settings.embedding_switch_drain_timeout_seconds,
+                # The SDK re-embeds Chroma and Kuzu only; on another store the
+                # switch is refused and the old Chroma files are never opened.
+                storage_refusal=lambda: embedding_switch_refusal(
+                    _storage_settings(app), mode=_memory_mode(app)
+                ),
+                chroma_is_live=lambda: _storage_settings(app).vector.provider == "chroma",
+                kuzu_is_live=lambda: _storage_settings(app).graph.provider == "kuzu",
             )
+            app.state.storage_backend_hooks = StorageBackendHooks(
+                store=app.state.storage_backends,
+                health=app.state.storage_backend_health,
+                memory_mode=lambda: _memory_mode(app),
+                lifecycle_lock=app.state.memory_mode_lock,
+                busy=lambda: _storage_change_blocker(app),
+                after_change=lambda previous, current: _after_storage_change(
+                    app, previous, current
+                ),
+            )
+            app.state.backup_hooks = _backup_hooks(app, manage_runtime=manage_runtime)
             if app.state.memory_authority is not MemoryAuthority.SDK:
                 # Only an SDK-authority home has SDK spaces to scan and merge.
                 app.state.embedding_switch.release_scan_hold()
@@ -1886,6 +1930,11 @@ def create_app(
                         return
                     # The hold is this step's from here; shutdown leaves it.
                     app.state.sdk_stores_held = False
+                    if _storage_settings(app).vector.provider != "chroma":
+                        # Another vector store is configured: the Chroma files
+                        # belong to the store that was left and stay as they are.
+                        release_stores(runtime_settings.data_dir)
+                        return
                     work = asyncio.ensure_future(
                         asyncio.to_thread(
                             repair_sdk_metadata_from_bundle,
@@ -1929,6 +1978,15 @@ def create_app(
                     )
 
                 async def resume_graph_backfill() -> None:
+                    if (
+                        app.state.graph_open_outcome == "quarantined"
+                        and _memory_mode(app) == "ultra"
+                    ):
+                        # The quarantined graph is derived data: rebuild it
+                        # from every user's memories, the normal ultra path.
+                        users = await asyncio.to_thread(_known_user_ids, app)
+                        app.state.memory_graph_backfill.start(users)
+                        return
                     saved = app.state.evolve_state_store.graph_build()
                     if saved.state != "running":
                         return
@@ -2060,6 +2118,18 @@ def create_app(
                     duration_ms=elapsed_ms(recovery_started),
                     details={"count": len(failed)},
                 )
+
+            # The ultra graph's first open, as its own startup step before
+            # readiness (`graph_open_guard`): a graph that freezes or kills
+            # Core while opening used to do it after readiness, inside the
+            # first SDK client, and the Runtime relaunched into the same file
+            # forever. Here the Runtime sees a declared startup phase, and a
+            # graph that took two starts down is quarantined and rebuilt.
+            app.state.graph_open_guard = GraphOpenGuard(
+                runtime_settings.data_dir,
+                instance_id=runtime_settings.instance_id,
+            )
+            app.state.graph_open_outcome = await _open_graph_store_at_startup(app)
 
             app.state.recovery_task = None
             app.state.sdk_stores_held = False
@@ -2239,6 +2309,12 @@ def create_app(
     from one_memory.embedding_switch_routes import embedding_switch_router
 
     app.include_router(embedding_switch_router(protected))
+    from one_memory.storage_backend_routes import storage_backend_router
+
+    app.include_router(storage_backend_router(strict))
+    from one_memory.backup_routes import backup_router
+
+    app.include_router(backup_router(protected))
     from one_memory.live_capture import live_capture_router
 
     def file_polled(request: Request, source_id: str) -> bool:
@@ -2490,61 +2566,6 @@ def create_app(
     def runtime_identity() -> HealthResponse:
         """Authenticated proof that a discovery receipt names this Core."""
         return health()
-
-    @app.post(
-        "/api/v1/backup",
-        response_model=BackupResult,
-        dependencies=protected,
-    )
-    async def create_backup(request: BackupRequest) -> BackupResult:
-        """Copy the committed database to `target`, for the CLI's `backup create`.
-
-        Run in a thread: the copy is a blocking file operation, and doing it on
-        the event loop is exactly what the loop watchdog reports (real logs
-        showed `event loop blocked for 12.9s`). It also holds the writer for
-        the duration, so a long copy would otherwise stall every other caller.
-
-        A target outside the data directory is refused: the CLI can name any
-        path, and an unrestricted server-side write would turn a read-only
-        client into a file-write primitive.
-        """
-        settings = cast(Settings, app.state.settings)
-        data_dir = settings.data_dir.resolve()
-        target = Path(request.target)
-        resolved = target.resolve() if target.is_absolute() else (data_dir / target).resolve()
-        if not (resolved == data_dir or data_dir in resolved.parents):
-            raise HTTPException(status_code=422, detail="backup_target_outside_data_dir")
-        resolved.parent.mkdir(parents=True, exist_ok=True)
-        # `back_up` is on the database access point, not the evidence store.
-        await asyncio.to_thread(main_database(_evidence_store(app).database_path).back_up, resolved)
-        return BackupResult(target=str(resolved), bytes=resolved.stat().st_size)
-
-    @app.post(
-        "/api/v1/backup/restore",
-        response_model=BackupRestoreResponse,
-        dependencies=protected,
-    )
-    async def restore_backup(request: BackupRestoreRequest) -> BackupRestoreResponse:
-        """Restore a managed backup; only a non-runtime maintenance Core may do so."""
-        if manage_runtime:
-            raise HTTPException(status_code=409, detail="backup_restore_runtime_running")
-        from one_memory.managed_restore import RestoreRejected, restore_managed_backup
-
-        settings = cast(Settings, app.state.settings)
-        try:
-            result = await asyncio.to_thread(
-                restore_managed_backup,
-                data_dir=settings.data_dir,
-                source=request.source,
-            )
-        except RestoreRejected as error:
-            raise HTTPException(status_code=422, detail=error.code) from error
-        return BackupRestoreResponse(
-            state="restored",
-            restored_bytes=result.restored_bytes,
-            previous_backup_path=str(result.previous_backup_path),
-            source_schema_version=result.source_schema_version,
-        )
 
     def web_assets_root() -> Path | None:
         configured = os.environ.get("ONE_MEMORY_WEB_DIR")
@@ -5180,6 +5201,7 @@ def create_app(
                     request,
                     model_ready=lambda: _recall_model_ready(app),
                     recall_memories=target.recall_async,
+                    bounded_sdk_primary=isinstance(target, SdkRecallTarget),
                     has_memories=lambda: _library_has_memories(app, request.user_id),
                     raw_sources=lambda: _recall_raw_sources(app, request, access, started),
                     search_raw=lambda query, limit, sources: _search_sdk_raw(
@@ -5232,6 +5254,15 @@ def create_app(
         sdk_counts = (
             supervisor.status_counts() if app.state.memory_authority is MemoryAuthority.SDK else {}
         )
+        # On the SDK plane `in_flight_count` is the number of `running` rows, so
+        # the legacy `running - in_flight` difference is always zero there and
+        # reported a healthy queue whatever was stuck. `stranded_depths` counts
+        # the rows a worker no longer holds, from the same read as `running`.
+        sdk_stranded = (
+            supervisor.stranded_depths()[1]
+            if app.state.memory_authority is MemoryAuthority.SDK
+            else 0
+        )
         # `running` counts rows the store still marks running, which includes
         # work a worker has already given up on. Reporting that as "what is
         # running" is how a stalled queue looks busy, so the strand is given
@@ -5254,7 +5285,11 @@ def create_app(
             ),
             recent_completions=depths.recent_completions,
             running=sdk_counts.get("running", running_rows),
-            stranded_running=(0 if sdk_counts else max(0, running_rows - in_flight_count)),
+            stranded_running=(
+                sdk_stranded
+                if sdk_counts
+                else max(0, running_rows - in_flight_count)
+            ),
             unexecuted_policy_failures=store.unexecuted_policy_failures(),
             waiting_for_model=sdk_counts.get(
                 "waiting_for_model",
@@ -5553,6 +5588,9 @@ def create_app(
     )
     async def get_graph_width() -> GraphWidthStatus:
         """Report the mismatch. Never writes: this is polled by the app."""
+        if _storage_settings(app).graph.provider != "kuzu":
+            # Only a Kuzu file has a width to read; a server graph has none here.
+            return GraphWidthStatus()
         try:
             mismatch = await _sdk_memory_runtime(app).graph_width_mismatch()
         except HySdkError as error:
@@ -5580,6 +5618,10 @@ def create_app(
         """
         supervisor = _sdk_memory_runtime(app)
         _refuse_write_during_embedding_switch(app)
+        if _storage_settings(app).graph.provider != "kuzu":
+            # Export and rebuild copy or rename the Kuzu file. With a server
+            # graph that file is the store that was left: never touched.
+            raise HTTPException(status_code=409, detail=GRAPH_EXPORT_UNSUPPORTED)
         try:
             outcome = await supervisor.decide_graph_width(request.decision)
         except HySdkError as error:
@@ -5874,7 +5916,17 @@ def _known_user_ids(app: FastAPI) -> tuple[str, ...]:
 
 
 async def _users_with_memories(app: FastAPI) -> tuple[str, ...]:
-    """Known users the SDK holds any memory for: the nightly evolve's users."""
+    """Known users the SDK holds any memory for: the nightly evolve's users.
+
+    In a task of its own: a read client is held until the task that asked for
+    it ends (`ActiveProfileReadHandle`), and the evolve schedule's loop never
+    ends, so asking from it held a client for good and no backup or graph
+    re-embed could close every client.
+    """
+    return await asyncio.create_task(_users_with_memories_now(app))
+
+
+async def _users_with_memories_now(app: FastAPI) -> tuple[str, ...]:
     users = await asyncio.to_thread(_known_user_ids, app)
     client = await _sdk_client_handle(app).client()
     found: list[str] = []
@@ -6868,6 +6920,7 @@ def _sdk_client_handle(app: FastAPI) -> SdkClientHandle:
             features=lambda: _memory_features(app),
             spaces=getattr(app.state, "embedding_spaces", None),
             language=lambda: _sdk_language(app),
+            storage=lambda: _storage_resolved(app),
         )
         app.state.sdk_client_handle = handle
     return handle
@@ -6889,6 +6942,46 @@ def _memory_mode_state(app: FastAPI) -> MemoryModeState:
         explicitly_configured=store.memory_mode_explicitly_configured(),
         forced_by_env=graph_store_enabled(),
         graph_build=app.state.evolve_state_store.graph_build(),
+        graph_store=_graph_store_status(app),
+    )
+
+
+def _graph_store_status(app: FastAPI) -> GraphStoreStatus:
+    guard = cast(GraphOpenGuard | None, getattr(app.state, "graph_open_guard", None))
+    if guard is None:
+        return GraphStoreStatus()
+    backfill = getattr(app.state, "memory_graph_backfill", None)
+    running: bool | None = bool(backfill is not None and backfill.running) or (
+        app.state.evolve_state_store.graph_build().state == "running"
+    )
+    if getattr(app.state, "recovery", None) not in {"done", "failed"}:
+        # The rebuild is started by post-ready recovery; until that has run,
+        # "not running" does not mean "finished".
+        running = None
+    return guard.status(rebuild_running=running)
+
+
+async def _open_graph_store_at_startup(app: FastAPI) -> GraphOpenOutcome:
+    """Run the guarded first open of the live ultra graph; see `graph_open_guard`."""
+    guard = cast(GraphOpenGuard, app.state.graph_open_guard)
+    if (
+        app.state.memory_authority is not MemoryAuthority.SDK
+        or _memory_mode(app) != "ultra"
+        # A Neo4j/Memgraph server is no file a child could open and
+        # quarantine; the SDK client reports its own connection.
+        or _storage_settings(app).graph.provider != "kuzu"
+    ):
+        guard.mark_not_used()
+        return "skipped"
+    live = app.state.embedding_spaces.live()
+    graph_path = live_graph_path(
+        cast(Settings, app.state.settings).data_dir,
+        live.graph_dir if live is not None else None,
+    )
+    switch = getattr(app.state, "embedding_switch", None)
+    switch_in_progress = bool(switch is not None and switch.jobs.open_job() is not None)
+    return await asyncio.to_thread(
+        guard.open_at_startup, graph_path, switch_in_progress=switch_in_progress
     )
 
 
@@ -6912,7 +7005,7 @@ def _memory_mode_plan(app: FastAPI, target: MemoryMode) -> MemoryModePlan:
     if (
         effective_target != current
         and effective_target == "ultra"
-        and importlib.util.find_spec("kuzu") is None
+        and not driver_available(_storage_settings(app).graph.provider)
     ):
         blockers.append("graph_store_unavailable")
 
@@ -7009,14 +7102,15 @@ def _memory_features_state(
         parameters.append(
             MemoryParameterState(
                 name=parameter.name,
-                value=float(effective[parameter.name]),
-                configured=cast(float | None, configured.get(parameter.name)),
-                default=float(defaults[parameter.name]),
-                minimum=parameter.minimum,
-                maximum=parameter.maximum,
+                value=parameter_value(parameter.name, effective[parameter.name]),
+                configured=configured.get(parameter.name),
+                default=parameter_value(parameter.name, defaults[parameter.name]),
+                minimum=parameter_value(parameter.name, parameter.minimum),
+                maximum=parameter_value(parameter.name, parameter.maximum),
                 active=reason is None,
                 reason=reason,
                 requires_feature=parameter.requires_feature,
+                requires_mode=parameter.requires_mode,
                 sdk_field=parameter.sdk_field,
                 env=parameter.env,
                 description=parameter.description,
@@ -7048,12 +7142,77 @@ def _pipeline_status(app: FastAPI) -> PipelineStatus | None:
         evolve=overview,
         last_evolve_at=max(finished, default=None),
         graph_build=state.graph_build,
+        graph_store=state.graph_store,
         features=cast(
             dict[MemorySettingName, SettingValue],
             non_default_features(_memory_features(app), sdk_feature_defaults()),
         ),
         **_ui_language_state(app).model_dump(exclude={"languages"}),
+        storage_backends=_storage_summary(app),
     )
+
+
+def _storage_summary(app: FastAPI) -> StorageBackendsSummary | None:
+    store = getattr(app.state, "storage_backends", None)
+    health = getattr(app.state, "storage_backend_health", None)
+    if store is None or health is None:
+        return None
+    return storage_summary(store.settings(), health.snapshot())
+
+
+def _storage_settings(app: FastAPI) -> StorageBackends:
+    """The configured pair; Kuzu + Chroma for a Core without the setting wired."""
+    store = getattr(app.state, "storage_backends", None)
+    return store.settings() if store is not None else StorageBackends()
+
+
+def _storage_resolved(app: FastAPI) -> ResolvedStorage | None:
+    """The pair every SDK client is built with, secrets included (cached).
+
+    None for Kuzu + Chroma, without reading the secret store. A keychain that
+    cannot be read fails the client construction, never falls back to Kuzu
+    + Chroma: that would write this home's memories into the wrong store.
+    """
+    store = cast(StorageBackendStore | None, getattr(app.state, "storage_backends", None))
+    if store is None:
+        return None
+    try:
+        return store.resolved()
+    except SecretStoreUnavailableError:
+        raise HySdkRuntimeError("secure_storage_unavailable") from None
+
+
+def _storage_change_blocker(app: FastAPI) -> str | None:
+    """Why the storage backends cannot change right now, as a mode change asks."""
+    if not _embedding_writes_open(app):
+        return "embedding_maintenance_in_progress"
+    if _evolve_service(app).running() or app.state.memory_graph_backfill.running:
+        return "memory_lifecycle_busy"
+    return None
+
+
+async def _after_storage_change(
+    app: FastAPI, previous: StorageBackends, current: StorageBackends
+) -> None:
+    """A backend changed: rebuild every SDK client on the new stores.
+
+    A write in flight finishes on the store it started on; the next job and
+    the next read open the new one (handles are keyed by the storage). No
+    memory is copied: an ultra home whose graph moved rebuilds the graph on
+    the new server from the memories it can read (`MemoryGraphBackfill`), the
+    same derived rebuild a quarantined Kuzu graph gets.
+    """
+    from one_memory.hy_graph_admin import forget_graph_widths
+
+    await app.state.sdk_write_coordinator.retire_stale_handles()
+    handle = getattr(app.state, "sdk_client_handle", None)
+    if handle is not None:
+        await handle.close_idle()
+    forget_graph_widths()
+    graph_moved = (previous.graph != current.graph) and _memory_mode(app) == "ultra"
+    if graph_moved and not app.state.memory_graph_backfill.running:
+        users = await asyncio.to_thread(_known_user_ids, app)
+        app.state.memory_graph_backfill.start(users)
 
 
 def _read_handle(app: FastAPI) -> ActiveProfileReadHandle:
@@ -7375,12 +7534,91 @@ def _embedding_switch(app: FastAPI) -> EmbeddingSwitchService:
     return cast(EmbeddingSwitchService, app.state.embedding_switch)
 
 
+def _backup_hooks(app: FastAPI, *, manage_runtime: bool) -> BackupHooks:
+    """What a backup and a restore need from this Core (`backup_routes`)."""
+    settings = cast(Settings, app.state.settings)
+
+    def set_pause(paused: bool) -> None:
+        app.state.backup_pause = paused
+
+    async def read_client() -> Any:
+        return await _sdk_client_handle(app).client()
+
+    def switch_writes_open() -> bool:
+        switch = getattr(app.state, "embedding_switch", None)
+        return switch is None or switch.writes_open()
+
+    async def count_layers_after_restore(users: list[str]) -> dict[str, dict[str, int]] | None:
+        """The restored layer counts, through a client built from the restored database."""
+        from one_memory.memory_backup import count_layers
+
+        app.state.embedding_spaces.invalidate()
+        handle = ActiveProfileReadHandle(
+            profiles=_model_profile_store(app),
+            secrets=_secret_store(app),
+            data_dir=settings.data_dir,
+            memory_mode=lambda: "pro",
+            spaces=app.state.embedding_spaces,
+            storage=lambda: _storage_resolved(app),
+        )
+        try:
+            client = await handle.client()
+            return await asyncio.to_thread(count_layers, client, users)
+        except Exception as error:  # noqa: BLE001 - reported as an unverified count
+            logger.warning(
+                "backup_restore_layer_count_unavailable error_type=%s", type(error).__name__
+            )
+            return None
+        finally:
+            await handle.close()
+
+    def schedule_graph_rebuild(users: tuple[str, ...], clear_first: bool) -> None:
+        """Rebuild the graph from the restored memories after the next start."""
+        app.state.evolve_state_store.set_graph_build(
+            GraphBuildState(
+                state="running",
+                started_at=datetime.now(UTC),
+                users={user_id: GraphBuildUser() for user_id in users},
+                clear_first=clear_first,
+            )
+        )
+
+    def after_restore() -> None:
+        app.state.embedding_spaces.invalidate()
+        forget = getattr(_read_handle(app), "health", None)
+        if forget is not None:
+            forget.forget()
+
+    return BackupHooks(
+        data_dir=settings.data_dir,
+        manage_runtime=manage_runtime,
+        storage=lambda: _storage_settings(app),
+        known_users=lambda: _known_user_ids(app),
+        read_client=read_client,
+        memory_mode=lambda: _memory_mode(app),
+        live_space=lambda: app.state.embedding_spaces.live(),
+        spaces=lambda: app.state.embedding_spaces.list_spaces(),
+        switch_writes_open=switch_writes_open,
+        lifecycle_lock=app.state.memory_mode_lock,
+        set_pause=set_pause,
+        drained=getattr(app.state, "sdk_writes_drained", None),
+        quiesce=getattr(app.state, "quiesce_sdk_clients", None),
+        count_layers_after_restore=count_layers_after_restore,
+        schedule_graph_rebuild=schedule_graph_rebuild,
+        after_restore=after_restore,
+        runtime_build=__version__,
+    )
+
+
 def _embedding_writes_open(app: FastAPI) -> bool:
     """False while an embedding switch or merge runs, or the startup scan has not decided.
 
     Intake is not affected: conversations keep being queued, and sediment
     into the live space once the gate opens again.
     """
+    if getattr(app.state, "backup_pause", False):
+        # A backup is copying the SDK stores (`_backup_write_pause`).
+        return False
     switch = getattr(app.state, "embedding_switch", None)
     return switch is None or switch.writes_open()
 
@@ -7397,6 +7635,8 @@ def _embedding_switch_summary(app: FastAPI) -> dict[str, object] | None:
 
 def _refuse_write_during_embedding_switch(app: FastAPI) -> None:
     """Direct edits and deletes wait for the switch: 409, never a write into the old space."""
+    if getattr(app.state, "backup_pause", False):
+        raise HTTPException(status_code=409, detail="backup_in_progress")
     if not _embedding_writes_open(app):
         raise HTTPException(status_code=409, detail="embedding_switch_in_progress")
 

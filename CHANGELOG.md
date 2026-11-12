@@ -4,6 +4,157 @@ Hy Memory and MemHub are versioned and released independently.
 
 ## Unreleased
 
+- MemHub: backups now include the memories. A backup (`memhub backup create`,
+  `POST /api/v1/backup`) used to hold only MemHub's management database; the
+  memories and raw turns in the SDK stores under `hy-memory/` were never in
+  it, so a restore could not bring them back. A backup is now a directory
+  `backups/<name>.memhub-backup/` (owner-only) with a manifest (schema 2),
+  the management database and every SDK file of the home: Chroma with the
+  live embedding space and any space kept for retention, the Kuzu graphs and
+  the SDK's SQLite caches; on a Qdrant server also a JSONL export of every
+  memory through the SDK (every layer and status, raw turns included; no
+  vectors, which hy-memory 2.0.15 does not return). SDK writes are paused with
+  the embedding switch's gate, every SDK client is closed (Kuzu checkpoints)
+  and the stores are held offline while files are copied (SQLite through its
+  backup API); writes resume on every path. The pause is reported
+  (`pause_ms`; about 1.3 s for 1,000 memories). The manifest records the
+  backend, the embedding space, the SDK version, the users and the counts per
+  user and layer, per vector collection and per graph layer. `memhub backup
+  create` shows the size first (`GET /api/v1/backup/estimate`) and writes
+  with `--yes`. A restore verifies every file, stages the data, swaps it in
+  under a journal, runs the registry, space-scan and graph-probe checks (a
+  corrupt graph is quarantined and rebuilt), counts again through the SDK and
+  rolls back on any mismatch (`backup_restore_counts_mismatch`); the previous
+  data is kept in `backups/pre-restore-*.memhub-previous/`. A killed restore
+  is rolled back by the next start. Old backups (one `.sqlite3` file) restore
+  as before and say they hold no memories. Restores across backends are
+  refused (`backup_restore_backend_mismatch`), and restoring memories onto
+  Qdrant is refused (`backup_restore_remote_sdk_unsupported`) until MemHub
+  pins an SDK that can write a memory back with its id and vector. The evolve
+  schedule no longer holds a read client for good, which kept a backup (and an
+  ultra embedding switch's graph re-embed) from closing every client. Contract:
+  `memhub/docs/contracts/backup-v2.md`.
+- Hy Memory: `HyMemoryClient.export_user_memories()` /
+  `import_user_memories()` (and their `async_` forms) export one user's
+  vector-store memories with their ids and vectors, and write them back into
+  an empty store as they were: every layer including `L1_RAW`, every status,
+  the evolution pointers and the times. A node without its vector is
+  re-embedded with the current embedding service; a width that does not match
+  the store, a node of another user or a non-empty target is refused, and a
+  failed write is rolled back. The graph is not touched (rebuild it with
+  `build_memory_graph()`). This is what a backup needs to restore memories
+  onto another store, a Qdrant server included; `clone_user()` only copies
+  within one store under new ids, and `add_extracted()` re-reconciles. No
+  version change.
+- MemHub: the graph and vector stores can be chosen from the CLI and the API.
+  The default stays the embedded Kuzu + Chroma pair. `memhub settings backends
+  show|set|test|reset` (and `GET/PUT/DELETE /api/v1/settings/storage-backends`,
+  `POST .../test`) select a Neo4j or Memgraph server for the ultra graph and a
+  Qdrant server for vectors. The setting is persisted in `config.json`
+  (`storage_backends`); the graph password and the Qdrant API key go to the
+  secret store. Core connects to the chosen servers before it saves anything,
+  then rebuilds the SDK clients the way a mode change does. Before, MemHub
+  hard-coded `kuzu` and `chroma`, so `MEMORY_GRAPH_PROVIDER=neo4j` or
+  `MEMORY_VECTOR_STORE=qdrant` still logged `provider=kuzu` / `provider=chroma`;
+  those SDK variables still have no effect (the setting is the only source).
+  Qdrant collections carry a per-home prefix so homes sharing a server stay
+  apart; a Neo4j/Memgraph database that already holds a graph must be adopted
+  explicitly. Switching moves no memory: what the old store holds stays there,
+  untouched, and switching back shows it again. FAISS and Qdrant's embedded
+  mode are refused (`storage_backend_faiss_unsupported`,
+  `storage_backend_vector_host_required`): they are not safe with the several
+  SDK clients MemHub runs on one home. On a custom backend, the embedding
+  switch is refused on Qdrant, and in ultra on Neo4j/Memgraph
+  (`embedding_switch_backend_unsupported`, until the SDK can re-embed them).
+  The Kuzu open probe, the graph-width tools, the startup stray-space scan and
+  every upgrade migration are skipped, and none of them touch the old Kuzu or
+  Chroma files. Backup, restore, search, recall, delete, evolve and the
+  memory map work on every backend. `memhub status` and `memory-processing`
+  show the active backends and whether they answer. The App shows them
+  read-only ("存储后端：Neo4j + Qdrant（通过 CLI 配置）") in every language and
+  offers no control. The frozen Core now ships the `neo4j` and
+  `qdrant-client` drivers (+6 MB on macOS arm64, after no longer shipping the
+  SDK's unused `.py` copies). A managed restore now also accepts a backup taken
+  after the SDK cutover; it used to refuse any backup without the legacy
+  `evidence` table. Contract: `memhub/docs/contracts/storage-backends-v1.md`.
+- The CLI keeps the refusal Core names in a 5xx body instead of dropping
+  it. `memhub models configure` on a machine without a key store answered
+  `http_503_result_unknown` while Core had sent `{"detail":"secure_storage_unavailable"}`
+  -- an instruction, not a status: the machine has no key store, and the fix
+  is to give it one. The four mutation verbs in `core-operations.ts` and
+  `submitMemoryWrite` in `core-client.ts` now carry that code
+  (`secure_storage_unavailable_result_unknown`). `state` stays `unknown`,
+  because a 5xx may have committed part of the request. The body value is held
+  to the shape every Core refusal code has -- lowercase words joined by
+  underscores -- so a bind address such as `127.0.0.1:8765` can never be
+  promoted to a code, which the looser 4xx matcher would have allowed.
+- MemHub: a knowledge graph that freezes or kills the process opening it is
+  quarantined and rebuilt instead of restarting Core forever. In ultra, Kuzu's
+  open of a corrupt graph file held the GIL, grew RSS to 5–13 GB and the OS
+  killed Core after 26–33 s; the Runtime relaunched it into the same file in an
+  endless `restart_scheduled → spawn_started → ready` loop. Before Core reports
+  ready, the live graph is now opened once by a short-lived child process,
+  bounded by a wall clock (60 s plus 0.5 s per MB, at most 120 s;
+  `ONE_MEMORY_GRAPH_PROBE_TIMEOUT_S`) and an RSS cap polled from Core (2 GB;
+  `ONE_MEMORY_GRAPH_PROBE_MAX_RSS_MB`). A probe that is killed, crashes or
+  exits non-zero renames the graph and its sidecars to
+  `graph.quarantined-<UTC>` on the first failure (never deleted, the two newest
+  kept), records `graph_store.quarantined`, starts Core without it and runs the
+  normal per-user graph rebuild. `graph-open-in-progress.json` still
+  quarantines after two starts in which Core itself died mid-probe. The
+  graph-width check reads through the same child and is primed by the probe,
+  so Core no longer opens its own `kuzu.Database` (with Kuzu's default buffer
+  pool) beside the SDK's. An embedding switch's staging graph is never
+  touched, and quarantine waits while a switch is open. `memory-processing`,
+  `settings/memory-mode` and `memhub status` report `pipeline.graph_store`
+  (`opening` / `ready` / `rebuilding_after_quarantine`, the quarantine count
+  and reason), and the App shows "知识图谱文件损坏，已自动重建" in all 11
+  languages. The Runtime supervisor waits for the declared startup phase
+  (now at most 3 minutes) instead of killing Core at the readiness budget,
+  respawns a Core that died inside it (bounded), restarts a Core that is alive
+  but has not answered for 90 s after ready (twice the longest loop stall seen
+  in the field), and only forgives a crash streak once Core stayed up 2
+  minutes, so the relaunch delay grows and the circuit opens instead of a
+  relaunch every ~20 s.
+- MemHub: `agent_max_tokens` (512–32000) is now a persistent memory-features
+  setting (`memhub settings features set agent_max_tokens=6000 --yes` /
+  `reset agent_max_tokens`), applied to the SDK's `MemoryConfig` when clients
+  are built, so evolve and System 2 output from local models is no longer cut
+  off at 2000 tokens without a `launchctl setenv` that is lost on reboot. An
+  existing `MEMORY_AGENT_MAX_TOKENS` still sets the default while it is unset.
+- MemHub pins `hy-memory==2.0.15`. In ultra, the read client and the write
+  coordinator's client in one Core now share one `kuzu.Database` on the live
+  graph instead of each opening their own, whose checkpoints overwrote each
+  other and lost graph writes; that graph is opened with a 512 MB buffer pool
+  and at most 4 Kuzu threads (`MEMORY_GRAPH_BUFFER_POOL_MB`,
+  `MEMORY_GRAPH_MAX_THREADS`). The startup graph-open probe now opens the
+  graph with the same bounds.
+- Memory Strength idle decay now also applies when a memory's timestamp is
+  timezone-aware, an ISO string with an offset, or an epoch integer (the shape
+  `bump_access` writes back). `compute_strength` could raise `TypeError` on
+  those and fell back to `idle_days = 0`; both sides are now converted to epoch
+  seconds before subtracting. Unreadable timestamps still fall back to
+  `idle_days = 0` and are logged at debug.
+- Hermes and OpenCode history imports now produce memories. Neither adapter
+  ended a file with a `ScanCursorTouch`, and that event is the only thing that
+  turns staged records into a write job: `finalize_sdk_file` is reached from
+  the runner's cursor-touch branch alone, while `flush_idle_assemblies` covers
+  `priority='live'` and history is staged as `normal`. A history import of
+  either source therefore reported `completed` with a non-zero `stored` count
+  and left every record in `state='assembling'`, so the library stayed empty.
+  Both adapters now emit the touch after a file is read to its end, matching
+  `sources/common.py`; a read that stopped early or failed emits none, so a
+  partial scan never claims to have reached the end.
+- `memory-processing` reports stranded writes on the SDK data plane instead of
+  a constant zero. `active_depths()` returns the same number twice there — both
+  are the count of `running` rows — so the legacy `running - in_flight_count`
+  difference was always zero, and the panel called a stalled queue healthy
+  however many workers had died. The field exists for exactly that case (#231),
+  and had been constant since #145 moved memory authority to the SDK. The new
+  `stranded_depths()` counts the rows whose lease is missing or lapsed, from
+  the same read as `running`. The web client also treated only `undefined` as
+  "not reported"; JSON carries an unknown value as `null`, which read as a
+  healthy zero and suppressed the "status unverified" line.
 - MemHub host capture hooks no longer write the database. `one-memory
   capture <host>` used to open the main SQLite file from its own short-lived
   process on every hook, re-create the retired `evidence` / FTS tables on an
@@ -24,6 +175,27 @@ Hy Memory and MemHub are versioned and released independently.
   Qwen Work, while live sync is on) is now left to the file path; only a
   source without file polling is staged from its hook. Tables an older hook
   re-created on an SDK home are dropped by the existing startup cleanup.
+
+## Hy Memory 2.0.15 — 2026-11-10
+
+- The Kuzu graph store bounds its memory, shares one database per
+  file, and keeps its setup off the event loop. Every `kuzu.Database` the SDK
+  opens (the graph store and the re-embed copies) now gets an explicit buffer
+  pool, 512 MB by default (`GraphStoreConfig.buffer_pool_mb` /
+  `MEMORY_GRAPH_BUFFER_POOL_MB`; 0 keeps Kuzu's default of about 80% of RAM),
+  and at most 4 query threads (`max_threads` / `MEMORY_GRAPH_MAX_THREADS`).
+  Graph stores in one process that point at the same file now share a single
+  `kuzu.Database`, each with its own connection. Before, every client opened
+  its own, and Kuzu's file lock does not stop a second open from the same
+  process: the two databases overwrote each other's checkpoints, losing
+  writes, and could corrupt the primary-key index. A file corrupted this way
+  can make the next open allocate gigabytes. `close()` and
+  `build_memory_graph` now run `CHECKPOINT`, so no WAL is left for the next
+  open to replay. The schema check and DDL run in the same worker thread as
+  the open instead of on the loop thread. One limit remains: kuzu 0.11 holds
+  the GIL for the whole `kuzu.Database()` call and has no option to release
+  it, so an open that stalls inside Kuzu still stalls every thread in the
+  process.
 
 ## Hy Memory 2.0.14 — 2026-11-04
 
@@ -105,7 +277,7 @@ Hy Memory and MemHub are versioned and released independently.
 
 ## MemHub 1.0.6 — 2026-11-04
 
-Build 45, on `hy-memory==2.0.14`. Linux x64/arm64 Runtime and macOS arm64
+Build 46, on `hy-memory==2.0.15`. Linux x64/arm64 Runtime and macOS arm64
 App and Runtime.
 
 - MemHub App now exposes the complete memory-mode lifecycle. New installs
@@ -115,7 +287,7 @@ App and Runtime.
   schedule and manual evolve. The memory page shows original conversations in
   lite and advanced memories in pro/ultra. Existing installs remain pro unless
   the user changes them, and embedding maintenance blocks mode/evolve changes.
-- MemHub pins `hy-memory==2.0.14`. Lite search is plain RAG over raw: the
+- MemHub pins `hy-memory==2.0.15`. Lite search is plain RAG over raw: the
   App's lite search, CLI context search, `/api/v1/recall` and the Host Bridge
   (`MemHub_recall`, context search) return every vector hit above the floor,
   ranked by score, over active and shadow raws, so history pro already

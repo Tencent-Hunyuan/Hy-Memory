@@ -4,6 +4,7 @@ import type {
   MemoryModePlan,
   MemoryModeState,
   MemoryPipelineMode,
+  StorageBackendsSummary,
 } from "@one-memory/contracts";
 import { legacyMemoryModePlan } from "@one-memory/operations";
 import { useCallback, useEffect, useId, useRef, useState } from "react";
@@ -34,6 +35,7 @@ import { OptionMenu } from "./OptionMenu";
 import { useOnboardingTranslation } from "./onboarding-language";
 import { R6Button } from "./R6Controls";
 import { R6StateRecovery } from "./R6StateRecovery";
+import { StorageBackendsNote } from "./StorageBackendsNote";
 import { UltraEvolveScheduleFields } from "./UltraEvolveScheduleFields";
 
 export function MemoryModeSettings({
@@ -62,6 +64,8 @@ export function MemoryModeSettings({
   const [pendingPlan, setPendingPlan] = useState<MemoryModePlan | null>(null);
   const [busy, setBusy] = useState(false);
   const [maintenance, setMaintenance] = useState(false);
+  const [storageBackends, setStorageBackends] =
+    useState<StorageBackendsSummary | null>(null);
   const [error, setError] = useState("");
   const [readFailed, setReadFailed] = useState(false);
   const [scheduleReadFailed, setScheduleReadFailed] = useState(false);
@@ -124,20 +128,30 @@ export function MemoryModeSettings({
     } else {
       setScheduleReadFailed(true);
     }
-    if (processingResult.status === "fulfilled")
+    if (processingResult.status === "fulfilled") {
       setMaintenance(Boolean(processingResult.value.embedding_switch));
+      setStorageBackends(
+        processingResult.value.pipeline?.storage_backends ?? null,
+      );
+    }
   }, [onModeChange]);
 
   useEffect(() => {
     void refresh();
   }, [refresh]);
 
+  // A graph that kept taking Core down while opening was renamed aside and
+  // is being rebuilt from the memories (Core `graph_open_guard`).
+  const graphRebuilding =
+    state?.graph_store?.state === "rebuilding_after_quarantine";
+
   useEffect(() => {
-    const running = maintenance || state?.graph_build.state === "running";
+    const running =
+      maintenance || state?.graph_build.state === "running" || graphRebuilding;
     if (!running) return;
     const timer = window.setInterval(() => void refresh(), 1500);
     return () => window.clearInterval(timer);
-  }, [maintenance, refresh, state?.graph_build.state]);
+  }, [maintenance, refresh, state?.graph_build.state, graphRebuilding]);
 
   const lifecycleBusy =
     maintenance ||
@@ -294,6 +308,12 @@ export function MemoryModeSettings({
         {maintenance ? (
           <p className="r6-settings-note" role="status">
             {text("正在检查或切换向量模型，完成前不能切换模式或手动整合。")}
+          </p>
+        ) : null}
+        <StorageBackendsNote backends={storageBackends} />
+        {graphRebuilding ? (
+          <p className="r6-settings-note" role="status">
+            {text("mode.graphStore.quarantined")}
           </p>
         ) : null}
         {state?.graph_build.state === "running" ? (

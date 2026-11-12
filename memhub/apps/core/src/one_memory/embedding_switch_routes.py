@@ -24,6 +24,7 @@ from one_memory.embedding_switch import (
     EmbeddingSwitchPlan,
     EmbeddingSwitchService,
 )
+from one_memory.storage_backends import SCAN_SKIPPED
 
 #: HTTP status per refusal code; anything not listed is a 409.
 _STATUS = {
@@ -73,7 +74,11 @@ def embedding_switch_router(dependencies: Sequence[Depends]) -> APIRouter:
         spaces = await asyncio.to_thread(service.spaces.list_spaces)
         live = next((space for space in spaces if space.state == "live"), None)
         scanned: list[dict[str, object]] | None = None
-        scan_error = service.backend.unavailable_reason()
+        # On another vector store (`storage_backends`) the Chroma files hold
+        # the store that was left: they are not this home's spaces any more.
+        scan_error = (
+            None if service.chroma_is_live() else SCAN_SKIPPED
+        ) or service.backend.unavailable_reason()
         if scan_error is None:
             try:
                 found = await service.backend.scan()

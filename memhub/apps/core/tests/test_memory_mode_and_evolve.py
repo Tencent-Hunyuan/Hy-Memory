@@ -988,7 +988,7 @@ def test_mode_plan_reports_all_blockers_without_planned_effects(tmp_path, monkey
         hold = asyncio.Event()
         task = asyncio.create_task(hold.wait())
         app.state.memory_graph_backfill._task = task
-        monkeypatch.setattr("one_memory.api.importlib.util.find_spec", lambda _name: None)
+        monkeypatch.setattr("one_memory.api.driver_available", lambda _provider: False)
         try:
             plan = (
                 await client.post(

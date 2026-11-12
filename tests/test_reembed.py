@@ -227,11 +227,23 @@ class TestVectorSpaceNames:
         with pytest.raises(ValueError):
             space_identity("", 512)
 
-    def test_non_chroma_provider_is_not_supported(self):
+    def test_an_unsupported_provider_is_refused(self):
         cfg = MemoryConfig()
-        cfg.vector_store.provider = "qdrant"
+        cfg.vector_store.provider = "faiss"
         with pytest.raises(NotImplementedError):
             vector_space_names(cfg)
+
+    def test_a_qdrant_space_adds_its_tag_index_and_clause_collections(self):
+        cfg = MemoryConfig()
+        cfg.vector_store.provider = "qdrant"
+        cfg.vector_store.collection_name = "mh1_memhub_abc"
+        cfg.vector_store.embedding_dims = 512
+        names = vector_space_names(cfg)
+        chroma = dict(names)
+        assert chroma.pop("tag_index") == "mh1_memhub_abc_512_tag_index"
+        assert chroma.pop("retrieval_clauses") == "mh1_memhub_abc_512__retrieval_clauses"
+        cfg.vector_store.provider = "chroma"
+        assert chroma == vector_space_names(cfg)
 
 
 class TestReembedText:
