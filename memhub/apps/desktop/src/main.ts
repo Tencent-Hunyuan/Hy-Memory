@@ -615,6 +615,22 @@ async function initialize(isQuitting: () => boolean): Promise<void> {
           stable?.syncHookAssetsDirectory ??
           path.join(hostBridgeDir, "sync-hook"),
       });
+      // A grants file that failed validation no longer refuses startup
+      // (#387): the store is quarantined and hosts are denied, so the one
+      // place this becomes visible is this event.
+      const quarantineReason = localPermissions.hostGrantStore.quarantined;
+      if (quarantineReason !== undefined) {
+        await hostDiagnostics.log({
+          level: "error",
+          component: "host-bridge",
+          event: "host.grant_store_quarantined",
+          outcome: "refused",
+          details: {
+            reason: quarantineReason,
+            effect: "all host requests denied",
+          },
+        });
+      }
       hostPermissions = localPermissions;
     }
   } catch {
