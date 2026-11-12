@@ -68,6 +68,7 @@ async def stores(request, tmp_path):
     settings = {
         "provider": "chroma", "collection_name": "content_" + uuid4().hex,
         "persist_directory": str(tmp_path / "chroma"), "embedding_dims": 4,
+        "host": None, "port": None,  # Override remote settings inherited from the environment.
     }
     if request.param == "http":
         settings.update(host="127.0.0.1", port=request.getfixturevalue("chroma_server"))
@@ -91,6 +92,38 @@ async def stores(request, tmp_path):
 
 def forbid_embedding(*_args, **_kwargs):
     raise AssertionError("payload updates must not generate an embedding")
+
+
+@pytest.fixture
+def remote_vector_environment(monkeypatch, tmp_path):
+    """Reject HTTP clients while recording real local client construction."""
+    import chromadb
+
+    monkeypatch.setenv("MEMORY_VECTOR_HOST", "configured-remote.invalid")
+    monkeypatch.setenv("MEMORY_VECTOR_PORT", "18000")
+    original_persistent_client = chromadb.PersistentClient
+    paths = []
+
+    def persistent_client(*, path):
+        assert path == str(tmp_path / "chroma")
+        paths.append(path)
+        return original_persistent_client(path=path)
+
+    def forbid_http_client(*_args, **_kwargs):
+        raise AssertionError("local tests must not connect to a configured remote server")
+
+    monkeypatch.setattr(chromadb, "PersistentClient", persistent_client)
+    monkeypatch.setattr(chromadb, "HttpClient", forbid_http_client)
+    return paths
+
+
+@pytest.mark.parametrize("stores", ["local"], indirect=True)
+async def test_local_stores_ignore_remote_environment(remote_vector_environment, stores, tmp_path):
+    assert remote_vector_environment == [str(tmp_path / "chroma")] * 2
+    for store in stores:
+        assert store.config.vector_store.host is None
+        assert store.config.vector_store.port is None
+        assert (await store.get_by_id("node")).embedding == OLD_VECTOR
 
 
 async def test_content_only_preserves_vector_and_updates_document(stores, monkeypatch):
