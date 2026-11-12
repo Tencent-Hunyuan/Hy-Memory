@@ -2061,8 +2061,9 @@ class HyMemoryClient:
 
         Returns:
             {"success": True, "memory_id": "...", "request_id": "...", "elapsed_ms": ...}
-            生产力条目额外带 "kind" / "variant"。ID 同时命中多个 namespace 时抛
-            AmbiguousMemoryIdError。
+            生产力条目额外带 "kind" / "variant"。图正文同步失败时附加
+            "graph_sync_failed": True，向量库更新仍成功。ID 同时命中多个
+            namespace 时抛 AmbiguousMemoryIdError。
         """
         return self._loop_thread.run(self.async_update(
             memory_id, content, kind=kind, variant=variant, task=task,
@@ -4946,7 +4947,8 @@ class HyMemoryClient:
 
         Returns:
             {"success", "memory_id", "request_id", "elapsed_ms"}；生产力条目额外带
-            "kind" / "variant"。不存在时 success=False + error_message。
+            "kind" / "variant"。图正文同步失败时附加 "graph_sync_failed": True。
+            不存在时 success=False + error_message。
         """
         self._validate_memory_namespace(kind, variant)
         if task is not None and kind in ("chat", "fact"):
@@ -5051,7 +5053,7 @@ class HyMemoryClient:
     async def _update_chat(self, memory_id: str, content: str) -> Dict[str, Any]:
         """chat 记忆的更新（原 async_update 逻辑）。
 
-        流程: get_by_id → 404 校验 → embed → 更新节点字段 → upsert → 记录历史
+        更新向量库，并同步已有图节点的正文。图同步失败不回滚向量库。
         """
         request_id = str(uuid.uuid4())
         set_request_id(request_id)
@@ -5083,6 +5085,7 @@ class HyMemoryClient:
         node.gmt_modified = datetime.now()
 
         await self._vector_store.upsert(node)
+        graph_synced = await self._sync_chat_graph_content(memory_id)
         try:
             from .pipelines._retrieval.retrieval_clauses import (
                 sync_retrieval_clause_index,
@@ -5121,12 +5124,41 @@ class HyMemoryClient:
             except Exception as e:
                 logger.warning(f"[update] history record failed: {e}")
 
-        return {
+        result = {
             "success": True,
             "memory_id": memory_id,
             "request_id": request_id,
             "elapsed_ms": round((time.perf_counter() - t0) * 1000, 2),
         }
+        if not graph_synced:
+            result["graph_sync_failed"] = True
+        return result
+
+    async def _sync_chat_graph_content(self, memory_id: str) -> bool:
+        graph_store = getattr(self, "_graph_store", None)
+        graph_config = getattr(self._config, "graph_store", None)
+        if graph_store is None or not getattr(graph_config, "memory_graph_write", True):
+            return True
+
+        from .core.workload import graph_slot
+
+        provider = getattr(graph_config, "provider", "")
+        provider = str(getattr(provider, "value", provider) or "").lower()
+        try:
+            async with graph_slot(kuzu=provider == "kuzu"):
+                # A concurrent edit may have committed while this one waited.
+                latest = await self._vector_store.get_by_id(memory_id)
+                if latest is None:
+                    return True
+                # Update in place. Upserting could recreate an absent graph node.
+                if await graph_store.update_node(memory_id, {"content": latest.content}):
+                    return True
+            logger.warning("[update] graph content sync failed: memory_id=%s", memory_id)
+        except Exception as exc:
+            logger.warning(
+                "[update] graph content sync failed: memory_id=%s: %s", memory_id, exc,
+            )
+        return False
 
     def _backend_identity(self) -> Dict[str, str]:
         """解析当前 VDB 后端身份：provider / db_name / collection_name。

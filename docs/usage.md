@@ -356,6 +356,10 @@ exported = client.export_user_memories("user_001")
 restored = other_client.import_user_memories("user_001", exported["nodes"])
 ```
 
+启用图写入时，`update()` 和 `async_update()` 会在返回前同步已有 chat 图节点的正文。
+这项编辑保留节点的标签和已有关系边，不创建新的图节点。图写入失败时，返回的
+`success` 仍表示向量库已保存，并附加 `graph_sync_failed: true` 表明图可能仍是旧内容。
+
 对应异步方法为 `async_get()`、`async_update()`、`async_delete()`、
 `async_delete_all()`、`async_list_memories()`、`async_clone_user()`、
 `async_export_user_memories()`、`async_import_user_memories()`。
