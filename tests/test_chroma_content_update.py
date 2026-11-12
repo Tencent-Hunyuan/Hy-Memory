@@ -63,7 +63,7 @@ def chroma_server(tmp_path_factory):
                 process.wait(timeout=10)
 
 
-@pytest.fixture(params=["local", "http"])
+@pytest.fixture(params=["local", pytest.param("http", marks=pytest.mark.integration)])
 async def stores(request, tmp_path):
     settings = {
         "provider": "chroma", "collection_name": "content_" + uuid4().hex,

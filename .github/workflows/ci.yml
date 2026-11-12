@@ -53,6 +53,8 @@ jobs:
           python-version: "3.12"
           enable-cache: true
       - run: uv sync --extra dev --extra faiss --extra qdrant --extra postgres
+      - name: Test Chroma content updates with an isolated HTTP server
+        run: uv run pytest tests/test_chroma_content_update.py -q -o log_cli=false -m "integration or not integration"
       - run: uv run pytest tests/ -q -o log_cli=false
 
   memhub:
