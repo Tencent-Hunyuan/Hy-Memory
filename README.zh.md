@@ -253,6 +253,8 @@ Coding 与 Working **复用同一套双层 pipeline 和数据 schema**，区别�
 
 ### 文档
 
+- [Qdrant 原生召回](docs/native_retrieval.md) — 仅 Server 的正文/标签 BM25 与混合召回、显式准备及验收
+
 - [使用指南](docs/usage.md) — 完整配置参考、API 详情、部署模式
 - [环境变量参考](docs/env_reference.md) — 配置说明与默认值
 - [Search 与 Reader 指南](docs/hy_memory_search_skill.md) — Reader 选择、Schema 配额、Rerank 与返回通道

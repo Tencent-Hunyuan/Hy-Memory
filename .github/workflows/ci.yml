@@ -29,6 +29,10 @@ jobs:
   sdk:
     runs-on: ubuntu-24.04
     services:
+      qdrant:
+        image: qdrant/qdrant:v1.20.0
+        ports:
+          - 16333:6333
       postgres:
         image: postgres:17
         env:
@@ -43,6 +47,7 @@ jobs:
           --health-timeout 5s
           --health-retries 10
     env:
+      HY_MEMORY_TEST_QDRANT_URL: http://127.0.0.1:16333
       HY_MEMORY_TEST_POSTGRES_DSN: postgresql://hy_memory:hy_memory_test@localhost:5432/hy_memory_test
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
@@ -52,7 +57,14 @@ jobs:
         with:
           python-version: "3.12"
           enable-cache: true
-      - run: uv sync --extra dev --extra faiss --extra qdrant --extra postgres
+      - run: uv sync --locked --extra dev --extra qdrant-native
+      - name: Verify native install without FastEmbed
+        run: uv run --no-sync python -c "import importlib.util; assert importlib.util.find_spec('fastembed') is None"
+      - name: Native contracts
+        run: uv run --no-sync pytest tests/native_retrieval -o addopts= -m "not integration" -q -o log_cli=false
+      - name: Native Qdrant Server integration
+        run: uv run --no-sync pytest tests/native_retrieval -o addopts= -m integration -q -o log_cli=false
+      - run: uv sync --locked --extra dev --extra faiss --extra qdrant --extra postgres
       - name: Test Chroma content updates with an isolated HTTP server
         run: uv run pytest tests/test_chroma_content_update.py -q -o log_cli=false -m "integration or not integration"
       - run: uv run pytest tests/ -q -o log_cli=false

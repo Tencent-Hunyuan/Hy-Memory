@@ -462,6 +462,11 @@ class ReadRequest:
     # 版本特有参数 (V2: token_budget, use_llm_understanding 等)
     extra: Dict[str, Any] = field(default_factory=dict)
 
+    # Append native options to preserve the public positional argument order.
+    raw_query: Optional[str] = None
+    native_mode: str = "hybrid"
+    native_threshold: Any = None
+
     def __post_init__(self) -> None:
         from ..utils.source_filter import normalize_source_filters
         self.include_sources, self.exclude_sources = normalize_source_filters(
