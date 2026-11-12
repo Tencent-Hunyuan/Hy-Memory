@@ -1,8 +1,10 @@
 import { randomUUID } from "node:crypto";
+import { once } from "node:events";
 import {
   appendFileSync,
   chmodSync,
   constants,
+  createWriteStream,
   lstatSync,
   mkdirSync,
   renameSync,
@@ -12,6 +14,7 @@ import {
 import {
   appendFile,
   chmod,
+  type FileHandle,
   link,
   lstat,
   mkdir,
@@ -25,7 +28,7 @@ import {
 } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { strToU8, zipSync } from "fflate";
+import { strToU8, Zip, ZipPassThrough, zipSync } from "fflate";
 
 export const DIAGNOSTIC_SCHEMA_VERSION = 1 as const;
 export const DIAGNOSTIC_MAX_FILE_BYTES = 4 * 1024 * 1024;
@@ -627,6 +630,7 @@ export async function exportDiagnosticZip(options: {
   now?: Date;
   markers?: DiagnosticMarker[];
   summary?: Record<string, unknown>;
+  includeRawLogs?: boolean;
 }): Promise<{ filename: string; file_count: number }> {
   const now = options.now ?? new Date();
   const home = options.home ?? os.homedir();
@@ -672,7 +676,14 @@ export async function exportDiagnosticZip(options: {
         "MemHub diagnostics",
         "",
         "包含：最近 7 天通过安全白名单重新投影的诊断事件，以及不含正文的状态摘要。",
-        "不包含：原始日志、崩溃报告、对话原文、记忆内容、API Key、token 或宿主凭证。",
+        ...(options.includeRawLogs
+          ? [
+              "同时包含：One Memory Home 的 logs/ 目录中全部普通日志文件及轮转文件。",
+              "注意：原始日志可能包含会话正文、本机路径或其他私人信息，只应发送给可信的开发人员。",
+            ]
+          : [
+              "不包含：原始日志、崩溃报告、对话原文、记忆内容、API Key、token 或宿主凭证。",
+            ]),
         ...(markers.length
           ? [
               "",
@@ -689,20 +700,30 @@ export async function exportDiagnosticZip(options: {
   const directory = path.dirname(options.target);
   await mkdir(directory, { recursive: true });
   const temporary = path.join(directory, `.memhub-logs-${randomUUID()}.tmp`);
+  const rawLogs = options.includeRawLogs
+    ? await openRawLogSnapshots(options.dataDir)
+    : [];
   try {
-    await writeFile(temporary, zipSync(archive, { level: 6 }), {
-      mode: 0o600,
-      flag: "wx",
-    });
+    if (options.includeRawLogs)
+      await writeStreamingDiagnosticZip(temporary, archive, rawLogs);
+    else
+      await writeFile(temporary, zipSync(archive, { level: 6 }), {
+        mode: 0o600,
+        flag: "wx",
+      });
     await chmod(temporary, 0o600);
     await publishTemporaryFile(temporary, options.target);
   } catch (error) {
     await rm(temporary, { force: true }).catch(() => undefined);
     throw error;
+  } finally {
+    await Promise.all(
+      rawLogs.map((file) => file.handle.close().catch(() => undefined)),
+    );
   }
   return {
     filename: path.basename(options.target),
-    file_count: Object.keys(archive).length,
+    file_count: Object.keys(archive).length + rawLogs.length,
   };
 }
 
@@ -899,6 +920,151 @@ async function readRegularFileNoFollow(
     return await handle.readFile("utf8");
   } finally {
     await handle.close();
+  }
+}
+
+interface RawLogSnapshot {
+  name: string;
+  handle: FileHandle;
+  size: number;
+}
+
+async function openRawLogSnapshots(dataDir: string): Promise<RawLogSnapshot[]> {
+  const directory = diagnosticDirectory(dataDir);
+  let directoryInfo: Awaited<ReturnType<typeof lstat>>;
+  try {
+    directoryInfo = await lstat(directory);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return [];
+    throw error;
+  }
+  if (!directoryInfo.isDirectory() || directoryInfo.isSymbolicLink())
+    fail("diagnostic_directory_unsafe");
+  const entries = await readdir(directory, { withFileTypes: true });
+  const snapshots: RawLogSnapshot[] = [];
+  try {
+    for (const entry of entries) {
+      if (entry.isSymbolicLink()) continue;
+      if (
+        entry.name === "." ||
+        entry.name === ".." ||
+        [...entry.name].some((character) => {
+          const code = character.charCodeAt(0);
+          return (
+            character === "/" || character === "\\" || code < 32 || code === 127
+          );
+        })
+      )
+        fail("diagnostic_log_name_unsafe");
+      const target = path.join(directory, entry.name);
+      const before = await lstat(target).catch(() => null);
+      if (!before?.isFile() || before.isSymbolicLink()) continue;
+      const handle = await open(
+        target,
+        constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0),
+      );
+      let retained = false;
+      try {
+        const opened = await handle.stat();
+        if (
+          !opened.isFile() ||
+          opened.dev !== before.dev ||
+          opened.ino !== before.ino
+        )
+          fail("diagnostic_file_unsafe");
+        snapshots.push({ name: entry.name, handle, size: opened.size });
+        retained = true;
+      } finally {
+        if (!retained) await handle.close().catch(() => undefined);
+      }
+    }
+    const after = await lstat(directory);
+    if (
+      !after.isDirectory() ||
+      after.isSymbolicLink() ||
+      after.dev !== directoryInfo.dev ||
+      after.ino !== directoryInfo.ino
+    )
+      fail("diagnostic_directory_unsafe");
+    return snapshots.sort((left, right) => left.name.localeCompare(right.name));
+  } catch (error) {
+    await Promise.all(
+      snapshots.map((file) => file.handle.close().catch(() => undefined)),
+    );
+    throw error;
+  }
+}
+
+async function writeStreamingDiagnosticZip(
+  target: string,
+  archive: Record<string, Uint8Array>,
+  rawLogs: RawLogSnapshot[],
+): Promise<void> {
+  const output = createWriteStream(target, { flags: "wx", mode: 0o600 });
+  let outputError: Error | null = null;
+  let backpressure = Promise.resolve();
+  const finished = new Promise<void>((resolve, reject) => {
+    output.once("finish", resolve);
+    output.once("error", (error) => {
+      outputError = error;
+      reject(error);
+    });
+  });
+  // The producer may still be reading a source file when the output stream
+  // fails. Attach a rejection handler immediately; the awaited promise below
+  // still carries the same error into the export's fail-closed cleanup.
+  void finished.catch(() => undefined);
+  const zip = new Zip((error, chunk, final) => {
+    if (error) {
+      outputError = error;
+      output.destroy(error);
+      return;
+    }
+    if (chunk.length > 0 && !output.write(chunk))
+      backpressure = once(output, "drain").then(() => undefined);
+    if (final) output.end();
+  });
+  const ensureWritable = async () => {
+    await backpressure;
+    if (outputError) throw outputError;
+  };
+  try {
+    for (const [name, content] of Object.entries(archive)) {
+      await ensureWritable();
+      const input = new ZipPassThrough(name);
+      zip.add(input);
+      input.push(content, true);
+    }
+    for (const file of rawLogs) {
+      await ensureWritable();
+      const input = new ZipPassThrough(`logs/${file.name}`);
+      zip.add(input);
+      let position = 0;
+      while (position < file.size) {
+        await ensureWritable();
+        const buffer = Buffer.allocUnsafe(
+          Math.min(64 * 1024, file.size - position),
+        );
+        const { bytesRead } = await file.handle.read(
+          buffer,
+          0,
+          buffer.length,
+          position,
+        );
+        if (bytesRead < 1) fail("diagnostic_file_changed");
+        position += bytesRead;
+        input.push(buffer.subarray(0, bytesRead), position === file.size);
+      }
+      if (file.size === 0) input.push(new Uint8Array(), true);
+    }
+    await ensureWritable();
+    zip.end();
+    await finished;
+  } catch (error) {
+    zip.terminate();
+    output.destroy(error instanceof Error ? error : undefined);
+    await finished.catch(() => undefined);
+    throw error;
   }
 }
 

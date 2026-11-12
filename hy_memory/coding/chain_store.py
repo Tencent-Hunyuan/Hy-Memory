@@ -56,10 +56,11 @@ import os
 import re
 import json
 import time
-import sqlite3
 import subprocess
 import collections
 import difflib
+
+from .chain_repository import ChainRepository, create_chain_repository
 
 # 注入块的首行标记 —— 宿主靠它认出"这是个多行结构块, 别塞进 `- {r}` 的 bullet 位"
 BLOCK_MARK = "【工作上下文】"
@@ -144,29 +145,6 @@ _SHELL = [
     re.compile(r'^\s*(?:user|human)\s*:\s*', re.I),
 ]
 
-_SCHEMA = """
-CREATE TABLE IF NOT EXISTS thread(
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  owner TEXT NOT NULL DEFAULT '',
-  branch TEXT NOT NULL, file TEXT NOT NULL, symbol TEXT NOT NULL DEFAULT '',
-  pkey TEXT NOT NULL DEFAULT '',
-  lo INTEGER NOT NULL DEFAULT 0, hi INTEGER NOT NULL DEFAULT 0,
-  n_rounds INTEGER NOT NULL DEFAULT 0, updated_at REAL NOT NULL DEFAULT 0,
-  body TEXT NOT NULL DEFAULT '');
-CREATE INDEX IF NOT EXISTS ix_thread_bf ON thread(owner, branch, file, pkey);
-CREATE TABLE IF NOT EXISTS round(
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  thread_id INTEGER NOT NULL, seq INTEGER NOT NULL,
-  said TEXT NOT NULL DEFAULT '', patch TEXT NOT NULL DEFAULT '',
-  adds TEXT NOT NULL DEFAULT '', created_at REAL NOT NULL DEFAULT 0);
-CREATE INDEX IF NOT EXISTS ix_round_t ON round(thread_id, seq);
-CREATE TABLE IF NOT EXISTS repo_symbol(
-  name TEXT NOT NULL, path TEXT NOT NULL, line INTEGER NOT NULL DEFAULT 0,
-  kind TEXT NOT NULL DEFAULT '');
-CREATE INDEX IF NOT EXISTS ix_sym_name ON repo_symbol(name);
-"""
-
-
 def _clean(s):
     return " ".join((s or "").split())
 
@@ -182,45 +160,20 @@ def _strip_shell(s):
 class HyCodeMem:
     """一个 workspace(通常 = 一个仓)一个实例。observe() 写, recall() 读。"""
 
-    def __init__(self, store_dir, repo_root=None, owner=""):
-        os.makedirs(store_dir, exist_ok=True)
+    def __init__(self, store_dir, repo_root=None, owner="", *, config=None,
+                 repository: ChainRepository = None):
         self.dir = store_dir
         self.repo = repo_root
-        # owner = 隔离键。thread 的业务键本身没有用户维度，不加 owner 会让不同
-        # 用户/工作区的同名 branch/file/pkey 串成同一条 thread，造成数据泄漏。
-        # 空串是"未指定"而不是"公共池": 空 owner 只匹配空 owner(见 _own 的 WHERE),
-        # 因此旧的空 owner 数据不会被有 owner 的新写入污染。
         self.owner = str(owner or "")
-        self.db = sqlite3.connect(os.path.join(store_dir, "hy_code.db"),
-                                  timeout=30, check_same_thread=False)
-        self.db.executescript(_SCHEMA)
-        # ── 老库迁移: 补 thread.pkey ────────────────────────────────────────────
-        # CREATE TABLE IF NOT EXISTS 对**已存在**的表一个字都不改, 所以较早版本
-        # 灌的库(键 = branch,file,symbol)打开后表里没有 pkey 列, 而 _upsert_thread 的
-        # SELECT 带了 `AND pkey=?` → `OperationalError: no such column: pkey`。
-        # ⚠️ 这个崩溃**只在真 diff 上出现**: 假 diff 被 _get_patch 挡掉就直接 return 0,
-        # 压根走不到那条 SELECT。
-        # 迁移后老库里的行 pkey='' , 于是它们仍归并成一条链(与灌它们时的行为一致);
-        # 要拿到拆分后的链必须重新导入；迁移只保证旧库可读。
-        _cols = {r[1] for r in self.db.execute("PRAGMA table_info(thread)")}
-        if "pkey" not in _cols:
-            self.db.execute("ALTER TABLE thread ADD COLUMN pkey TEXT NOT NULL DEFAULT ''")
-        # body: 该链最后一版的完整代码上下文。老库里为空 —— 块里就退回
-        # "只有 diff"的老行为, 不崩; 要拿到 body 必须重灌。
-        if "body" not in _cols:
-            self.db.execute("ALTER TABLE thread ADD COLUMN body TEXT NOT NULL DEFAULT ''")
-        # owner: 通用隔离键。旧库里为 ''，与不传 owner 的调用方匹配。
-        # 同上, 不重灌拿不到隔离; 迁移只保证老库能打开、且不会被别人的数据串进来。
-        if "owner" not in _cols:
-            self.db.execute("ALTER TABLE thread ADD COLUMN owner TEXT NOT NULL DEFAULT ''")
-        # 索引重建放在所有 ALTER 之后 —— 它引用 owner/pkey 两列, 列还没加上时会报
-        # `no such column`。老库上这个 CREATE INDEX 是幂等的(IF NOT EXISTS), 但旧名
-        # 的索引可能只覆盖 (branch,file,pkey), 所以先 DROP 掉同名的再建。
-        self.db.execute("DROP INDEX IF EXISTS ix_thread_bf")
-        self.db.execute("CREATE INDEX IF NOT EXISTS ix_thread_bf "
-                        "ON thread(owner, branch, file, pkey)")
-        self.db.commit()
+        self._repository = repository if repository is not None else create_chain_repository(
+            config, store_dir, self.owner, LINE_MERGE
+        )
         self._commit_cache = None
+
+    @property
+    def db(self):
+        """Legacy SQLite diagnostics; business operations use the repository."""
+        return self._repository._conn
 
     # ────────────────────────────── 写入 ──────────────────────────────
 
@@ -243,31 +196,35 @@ class HyCodeMem:
             return 0
         said = self._get_said(text)
 
-        n = 0
-        for file, symbol, lo, hi, hunk in self._split_hunks(patch):
-            if meta.get("file") and file != meta["file"] and not meta.get("_multi"):
-                pass  # meta.file 只是提示, 不做过滤 —— 一轮可能真的改了多个文件
-            # 合成 diff(_patch_from_edits)的行号是假的(真实行号无从得知, 一律写 1)。
-            # 直接交给 _upsert_thread 会因"区间不重叠"给同一个符号另起一条链 ——
-            # 合成 diff 的行号不可信，因此按 symbol 归并。pkey 还必须进入 thread 键，
-            # 否则同一文件/符号上的多个独立决策点会串成一条链，版本序数失去语义。
-            tid = self._upsert_thread(branch, file, symbol, lo, hi,
-                                      by_symbol=_SYNTH_MARK in hunk,
-                                      pkey=meta.get("pkey") or "")
-            self._add_round(tid, said, hunk, at=self._round_time(meta))
-            # body: 这一轮改完后那段代码的完整样子(含未被改动的行)。每轮覆写 →
-            # 灌完留下的是**最后一版**的全文, 正是 _body_at 需要的那一版。
-            # 取不到就不动(老 body 保留 / 一直为空), 绝不因为它失败而丢掉这一轮。
-            if self.BODY_CTX > 0 and _SYNTH_MARK not in hunk:
-                # 合成 diff 的行号是假的(一律写 1), 拿它取上下文会取到文件头 —— 跳过。
-                _c = meta.get("commit") or self._commit_for(
-                    str(meta.get("key") or meta.get("pkey") or ""), meta.get("seg"))
-                _b = self._body_at(_c, file, lo, hi)
-                if _b:
-                    self.db.execute("UPDATE thread SET body=? WHERE id=?", (_b, tid))
-            n += 1
-        if n:
-            self.db.commit()
+        with self._repository.transaction():
+            n = 0
+            # 同一轮的所有 hunk 共用一个时间, 且只有它们之间才允许合并成一版:
+            # 跨轮但用户原话相同(said 相等)是两次独立的修改, 必须各记一版。
+            round_at = self._round_time(meta)
+            seen = set()
+            for file, symbol, lo, hi, hunk in self._split_hunks(patch):
+                if meta.get("file") and file != meta["file"] and not meta.get("_multi"):
+                    pass  # meta.file 只是提示, 不做过滤 —— 一轮可能真的改了多个文件
+                # 合成 diff(_patch_from_edits)的行号是假的(真实行号无从得知, 一律写 1)。
+                # 直接交给 _upsert_thread 会因"区间不重叠"给同一个符号另起一条链 ——
+                # 合成 diff 的行号不可信，因此按 symbol 归并。pkey 还必须进入 thread 键，
+                # 否则同一文件/符号上的多个独立决策点会串成一条链，版本序数失去语义。
+                tid = self._upsert_thread(branch, file, symbol, lo, hi,
+                                          by_symbol=_SYNTH_MARK in hunk,
+                                          pkey=meta.get("pkey") or "")
+                self._add_round(tid, said, hunk, at=round_at, same_round=tid in seen)
+                seen.add(tid)
+                # body: 这一轮改完后那段代码的完整样子(含未被改动的行)。每轮覆写 →
+                # 灌完留下的是**最后一版**的全文, 正是 _body_at 需要的那一版。
+                # 取不到就不动(老 body 保留 / 一直为空), 绝不因为它失败而丢掉这一轮。
+                if self.BODY_CTX > 0 and _SYNTH_MARK not in hunk:
+                    # 合成 diff 的行号是假的(一律写 1), 拿它取上下文会取到文件头 —— 跳过。
+                    _c = meta.get("commit") or self._commit_for(
+                        str(meta.get("key") or meta.get("pkey") or ""), meta.get("seg"))
+                    _b = self._body_at(_c, file, lo, hi)
+                    if _b:
+                        self._repository.set_body(tid, _b)
+                n += 1
         return n
 
     def _pass_gate(self, text, meta):
@@ -462,59 +419,7 @@ class HyCodeMem:
         return out
 
     def _upsert_thread(self, branch, file, symbol, lo, hi, by_symbol=False, pkey=""):
-        """找到同一条 thread 就复用, 否则新建。
-
-        同 symbol 内按行区间分链: 区间重叠或相邻 ±LINE_MERGE 行算同一件事。
-        改函数签名(函数头)和改函数中段的解析逻辑, 是两件事, 不该混成一条链。
-
-        by_symbol=True: 行号不可信(来自 _patch_from_edits 的合成 diff)→ 只按 symbol 认,
-        直接并进该符号已有的链。宁可把"改签名"和"改中段"混成一条, 也不能让版本序号断成两截。
-
-        ⚠️ **symbol 变了但行区间重叠时也必须归并**。
-        只按 `symbol=?` 匹配时, symbol 不同就一定新建链 —— 而**新增一个函数**时
-        symbol 会在演进中途改变: 第 1 版新函数还不在 repo_symbol 索引里, _symbol_of
-        只能归到外层函数; 第 2 版起才归到自己。区间重叠却成了两条链, 而 _pick_versions
-        只在单条 thread 内选版本, agent 看到的链就缺了真正的第 1 版。
-        所以: 先按 symbol 精确找(优先, 保持原语义), 找不到再在**同 file 同 branch** 里
-        按行区间找, 命中就归并并把 symbol 收敛到更具体的那个(非空优先)。
-        """
-        # ★ pkey 必须进 WHERE。见 observe 里 pkey 那段注释: 不带它时一个文件上的 N 个点
-        # 会被串成一条链, 版本序号跨点连续 → 序数指代必错。
-        cur = self.db.execute(
-            "SELECT id, lo, hi FROM thread"
-            " WHERE owner=? AND branch=? AND file=? AND symbol=? AND pkey=?",
-            (self.owner, branch, file, symbol, pkey)).fetchall()
-        if by_symbol and cur:
-            tid, line_start, line_end = cur[0]
-            self.db.execute("UPDATE thread SET updated_at=? WHERE id=?", (time.time(), tid))
-            return tid
-        for tid, line_start, line_end in cur:
-            if lo <= line_end + LINE_MERGE and hi >= line_start - LINE_MERGE:
-                self.db.execute("UPDATE thread SET lo=?, hi=?, updated_at=? WHERE id=?",
-                                (min(line_start, lo), max(line_end, hi), time.time(), tid))
-                return tid
-        # 跨 symbol 的行区间归并(见上文注释)。只在**行号可信**时做:
-        # by_symbol=True 说明 diff 是合成的、行号是假的, 拿假行号去撞别的符号会乱并。
-        if not by_symbol:
-            for tid, line_start, line_end, sym2 in self.db.execute(
-                    "SELECT id, lo, hi, symbol FROM thread"
-                    " WHERE owner=? AND branch=? AND file=? AND symbol!=? AND pkey=?",
-                    (self.owner, branch, file, symbol, pkey)).fetchall():
-                if lo <= line_end + LINE_MERGE and hi >= line_start - LINE_MERGE:
-                    # symbol 收敛到**更具体**的那个, 判据是行区间更窄。
-                    # 新增函数时第 1 版的 diff 落在外层函数的区间里, 第 2 版起才归到自己。
-                    # 名字必须取窄的那个 —— 注入块的链标签 `└ <symbol>` 是 agent
-                    # 区分"这条历史属于哪个函数"的唯一线索, 取成外层函数就等于没标。
-                    keep = symbol if (hi - lo) < (line_end - line_start) else (sym2 or symbol)
-                    self.db.execute(
-                        "UPDATE thread SET lo=?, hi=?, symbol=?, updated_at=? WHERE id=?",
-                        (min(line_start, lo), max(line_end, hi), keep, time.time(), tid))
-                    return tid
-        cx = self.db.execute(
-            "INSERT INTO thread(owner,branch,file,symbol,pkey,lo,hi,n_rounds,updated_at)"
-            " VALUES(?,?,?,?,?,?,?,0,?)",
-            (self.owner, branch, file, symbol, pkey, lo, hi, time.time()))
-        return cx.lastrowid
+        return self._repository.upsert_thread(branch, file, symbol, lo, hi, by_symbol, pkey)
 
     # 该链最后一版的完整代码取多少行上下文。0 = 关掉这个特性(退回只给 diff)。
     # ⚠️ 按 **diff 的行号区间** 取, 不按符号名找函数边界 —— 后者覆盖不全
@@ -543,42 +448,8 @@ class HyCodeMem:
             return ""
         return "\n".join(lines[a:b])
 
-    def _add_round(self, tid, said, patch, at=None):
-        """seq = 该 thread 已有 round 数 + 1。纯计数, 不做任何 diff 比对。
-
-        at = 这一轮**真实发生**的时间(不是灌库时间)。事后灌库时 time.time() 全挤在几秒内,
-        注入块里就成了一排 "+0秒", 毫无信息量。
-
-        ⚠️ **同一轮的多个 hunk 必须合进同一版, 不能各记一版。**
-        一轮对话常同时改一个函数的多处(签名 + 中段 + 返回), _hunks 切出 N 个 hunk,
-        原来每个 hunk 走一次 _add_round → 同一句 said 被记成 N 版。
-        后果: "第N版"的语义被污染, 注入块里出现一排内容不同、说明词完全相同的版本,
-        既挤预算又让 agent 数不清"最开始那版"到底是哪版。
-        做法: 同 thread + 同 said 已存在时, 把新 hunk **追加进那一版的 patch**, 不新增 seq。
-        """
-        row = self.db.execute(
-            "SELECT id, seq, patch, adds FROM round WHERE thread_id=? AND said=? ORDER BY seq DESC LIMIT 1",
-            (tid, said)).fetchone()
-        new_adds = [ln[1:] for ln in patch.split("\n")
-                    if ln.startswith("+") and not ln.startswith("+++") and ln[1:].strip()]
-        if row:
-            rid, seq, old_patch, old_adds_j = row
-            merged_patch = (old_patch or "") + ("\n" if old_patch else "") + patch
-            old_adds = json.loads(old_adds_j or "[]")
-            adds = list(dict.fromkeys([a.strip() for a in old_adds]
-                                      + [a.strip() for a in new_adds]))
-            self.db.execute("UPDATE round SET patch=?, adds=? WHERE id=?",
-                            (merged_patch, json.dumps(adds, ensure_ascii=False), rid))
-            return
-        seq = self.db.execute("SELECT COUNT(*) FROM round WHERE thread_id=?",
-                              (tid,)).fetchone()[0] + 1
-        # 去重但保序 —— 同一轮里重复的 return/赋值行白占预算
-        adds = list(dict.fromkeys(a.strip() for a in new_adds))
-        self.db.execute(
-            "INSERT INTO round(thread_id,seq,said,patch,adds,created_at) VALUES(?,?,?,?,?,?)",
-            (tid, seq, said, patch, json.dumps(adds, ensure_ascii=False), at or time.time()))
-        self.db.execute("UPDATE thread SET n_rounds=?, updated_at=? WHERE id=?",
-                        (seq, time.time(), tid))
+    def _add_round(self, tid, said, patch, at=None, same_round=False):
+        self._repository.add_round(tid, said, patch, at, same_round)
 
     def _round_time(self, meta):
         """这一轮真实发生的时间。优先从那一轮的 git commit 取 author date;
@@ -625,9 +496,7 @@ class HyCodeMem:
                     rows.append((m.group(1), rel, src.count("\n", 0, m.start()) + 1, ""))
                     n += 1
         if rows:
-            self.db.execute("DELETE FROM repo_symbol")
-            self.db.executemany("INSERT INTO repo_symbol VALUES(?,?,?,?)", rows)
-            self.db.commit()
+            self._repository.replace_symbols(rows)
         return n
 
     # ────────────────────────────── 读取 ──────────────────────────────
@@ -690,8 +559,7 @@ class HyCodeMem:
         for t in th:
             body = " ".join(
                 f"{sd} {' '.join(json.loads(aj or '[]'))}"
-                for sd, aj in self.db.execute(
-                    "SELECT said,adds FROM round WHERE thread_id=?", (t[0],)))
+                for sd, aj in self._repository.round_texts(t[0]))
             # 打分只看重叠个数; 平手时保持原顺序(updated_at) —— 稳定排序
             scored.append((len(want & self._tokens(body)), t))
         scored.sort(key=lambda x: -x[0])
@@ -729,27 +597,15 @@ class HyCodeMem:
         base = {os.path.basename(f) for f in files if f}
         rows = []
         if br:
-            rows = self.db.execute(
-                "SELECT id,file,symbol,lo,hi,n_rounds FROM thread"
-                " WHERE owner=? AND branch=? ORDER BY updated_at",
-                (self.owner, br)).fetchall()
+            rows = self._repository.threads_by_branch(br)
         if not rows and base:
             # 没有 branch 或 branch 查空时按 files 退回。branch 与 files 不能做成互斥
             # 分支，因为事实层和链层可能存在部分数据缺失。
-            _q = ",".join("?" * len(base))
-            rows = self.db.execute(
-                f"SELECT id,file,symbol,lo,hi,n_rounds FROM thread"
-                f" WHERE owner=? AND (file IN ({_q}) OR "
-                + " OR ".join(["file LIKE ?"] * len(base)) +
-                ") ORDER BY updated_at",
-                (self.owner,) + tuple(base) + tuple(f"%/{b}" for b in base)).fetchall()
+            rows = self._repository.threads_by_files(sorted(base))
         if not rows and scope and os.environ.get("HCM_SCOPE_FALLBACK") == "1":
             # 最后兜底：按 scope 取本仓全部链。默认关闭，因为它扩大候选范围；启用前
             # 必须确认数据源不会包含当前任务的答案或其他自链接泄漏。
-            rows = [r for r in self.db.execute(
-                        "SELECT id,file,symbol,lo,hi,n_rounds FROM thread"
-                        " WHERE owner=? ORDER BY updated_at", (self.owner,))
-                    if self._in_scope(r, scope)]
+            rows = [r for r in self._repository.all_threads() if self._in_scope(r, scope)]
         if not rows:
             return []
         # file: fact 的 files 命中(全路径或 basename); fact 没给 files 就不按文件筛
@@ -793,9 +649,7 @@ class HyCodeMem:
             for tid, file, symbol, lo, hi, n in th:
                 where = symbol if symbol else f"{os.path.basename(file)}:L{lo}-{hi}"
                 seg.append(f"    └ {where}  (这条分支上改过 {n} 次)")
-                rs = self.db.execute(
-                    "SELECT seq,said,patch,created_at,adds FROM round WHERE thread_id=? ORDER BY seq",
-                    (tid,)).fetchall()
+                rs = self._repository.rounds_for_thread(tid)
                 t0 = rs[0][3] if rs else 0
                 full = self._pick_versions([(r[0], r[1], r[2]) for r in rs], want)
                 # 替换对 + 撤销关系, 一次算完整条链(见 _rev_lines)
@@ -841,7 +695,7 @@ class HyCodeMem:
                 # ── 链末尾: 最后一版的完整代码 ────────────────────────────────
                 # 各版只给 diff, 而 diff 里没有"从未被改动过的行"(见 _body_at)。给最后一版
                 # 的全文, 模型就能自己 全文 − 各版diff = 任意一版。
-                _bd = self.db.execute("SELECT body FROM thread WHERE id=?", (tid,)).fetchone()
+                _bd = self._repository.body_for_thread(tid)
                 _bd = (_bd[0] if _bd else "") or ""
                 if _bd:
                     if len(_bd) > BODY_MAX_CHARS:
@@ -910,11 +764,9 @@ class HyCodeMem:
         """
         if not th:
             return ""
-        ids = [str(t[0]) for t in th]
-        q = ",".join("?" * len(ids))
+        ids = [t[0] for t in th]
         cnt = collections.Counter()
-        for (b,) in self.db.execute(
-                f"SELECT branch FROM thread WHERE id IN ({q})", tuple(ids)):
+        for (b,) in self._repository.branches_for_threads(ids):
             if b and _BR.search(b):
                 cnt[b] += 1
         if not cnt:
@@ -923,7 +775,7 @@ class HyCodeMem:
         top = cnt.most_common()
         if len(top) > 1 and top[0][1] == top[1][1]:
             for t in th:
-                row = self.db.execute("SELECT branch FROM thread WHERE id=?", (t[0],)).fetchone()
+                row = self._repository.branch_for_thread(t[0])
                 if row and row[0] in cnt:
                     return row[0]
         return top[0][0]
@@ -1066,34 +918,7 @@ class HyCodeMem:
                              instruction)[0]
 
     def stats(self, all_owners=False):
-        """库规模。默认只统计**本 owner** 的，与 decorate 看到的范围一致。
-
-        all_owners=True 统计全库 —— 运维/排查用。日常报数默认只看当前 owner，
-        避免把其他隔离域的数据计入当前导入规模。
-        """
-        def q(sql, params=()):
-            return self.db.execute(sql, params).fetchone()[0]
-
-        if all_owners:
-            return dict(threads=q("SELECT COUNT(*) FROM thread"),
-                        rounds=q("SELECT COUNT(*) FROM round"),
-                        symbols=q("SELECT COUNT(*) FROM repo_symbol"),
-                        branches=q("SELECT COUNT(DISTINCT branch) FROM thread"),
-                        multi=q("SELECT COUNT(*) FROM thread WHERE n_rounds>1"))
-        o = (self.owner,)
-        return dict(
-            threads=q("SELECT COUNT(*) FROM thread WHERE owner=?", o),
-            # round 表没有 owner 列（它挂在 thread 上），走 JOIN
-            rounds=q("SELECT COUNT(*) FROM round r JOIN thread t ON r.thread_id=t.id"
-                     " WHERE t.owner=?", o),
-            symbols=q("SELECT COUNT(*) FROM repo_symbol"),
-            branches=q("SELECT COUNT(DISTINCT branch) FROM thread WHERE owner=?", o),
-            multi=q("SELECT COUNT(*) FROM thread WHERE owner=? AND n_rounds>1", o),
-        )
+        return self._repository.stats(all_owners)
 
     def close(self):
-        try:
-            self.db.commit()
-            self.db.close()
-        except Exception:
-            pass
+        self._repository.close()

@@ -3,14 +3,19 @@
 The App owns the choice (its language selector) and tells Core whenever it
 changes, so Core can build every SDK client with it. It is one global value in
 `config.json` (`ui_language`), beside `memory_mode` and `memory_features`;
-absent (never chosen, or "follow the system") means no explicit choice.
+absent means no language was set (a CLI/API-only install, or
+`settings language system`). An App that follows the system sends the
+language it resolved and shows, not null.
 
 The owner's rule for the SDK:
 
-- zh-Hans, or no explicit choice: pass no language. The SDK keeps detecting
-  Chinese or English from the text, exactly as before this setting existed.
-- Any other code, including en: pass it as `MemoryConfig.language`, so
-  extraction and the other prompts use that language.
+- Any supported code, zh-Hans and en included: pass it as
+  `MemoryConfig.language`, so extraction and the other prompts use that
+  language. Every display language is passed explicitly (#243).
+- No language at all (never set, as on a CLI/API-only install): pass no
+  language. The SDK keeps detecting Chinese or English from the text, exactly
+  as before this setting existed. The App does not leave it unset: it sends
+  the language it shows, including when it follows the system.
 
 The language never names a collection; a change rebuilds the SDK handles the
 way a mode or feature change does (#218 use count).
@@ -51,8 +56,6 @@ UI_LANGUAGES: tuple[UiLanguage, ...] = (
 )
 #: Codes earlier App builds stored, and the code each one is now.
 LEGACY_UI_LANGUAGES: dict[str, UiLanguage] = {"zh-CN": "zh-Hans"}
-#: Display languages that leave the SDK's own zh/en detection in charge.
-AUTO_DETECTED: frozenset[str] = frozenset({"zh-Hans"})
 #: What status shows when no language is passed to the SDK.
 SDK_LANGUAGE_AUTO = "auto"
 
@@ -66,8 +69,9 @@ def normalize_ui_language(value: object) -> UiLanguage | None:
 
 
 def sdk_language(ui_language: str | None) -> str | None:
-    """The `MemoryConfig.language` for a display language; None = SDK auto-detect."""
-    language = normalize_ui_language(ui_language)
-    if language is None or language in AUTO_DETECTED:
-        return None
-    return language
+    """The `MemoryConfig.language` for a display language; None = SDK auto-detect.
+
+    Every supported code is passed as is; only an unset (or unknown) value
+    leaves the SDK to detect zh/en.
+    """
+    return normalize_ui_language(ui_language)

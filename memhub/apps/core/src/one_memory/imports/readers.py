@@ -144,7 +144,18 @@ def read_zstd_jsonl(
             if not line.endswith(b"\n"):
                 if len(line) <= max_record_bytes:
                     if immutable and index > completed_records:
-                        yield _decode_json_record(line, next_checkpoint)
+                        decoded = _decode_json_record(line, next_checkpoint)
+                        # A frozen append-only zstd file can end inside a frame:
+                        # the tail is bytes of a record that is still being
+                        # written, not a malformed record. Report EOF instead of
+                        # invalid JSON, so a snapshot taken mid-append does not
+                        # add a corruption issue for data that is merely early.
+                        # A tail inside complete frames was really written that
+                        # way, so it still reports its failure.
+                        if not isinstance(decoded, RawReadFailure) or not (
+                            _zstd_ends_inside_frame(compressed)
+                        ):
+                            yield decoded
                     return
                 terminated = _discard_until_newline(
                     decompressed,
@@ -293,3 +304,27 @@ def _discard_until_newline(
         if chunk.endswith(b"\n"):
             return True
     return False
+
+
+def _zstd_ends_inside_frame(compressed: BinaryIO, *, chunk_bytes: int = 1024 * 1024) -> bool:
+    """Whether the frozen compressed bytes stop before their last frame ends.
+
+    The stream reader returns a truncated frame's bytes without an error, so it
+    cannot tell an append caught mid-frame from a record that was written
+    invalid. Walk the frames again on the same handle: only a frame that never
+    reached its end means the tail is early data. Corrupt input is not early.
+    """
+    compressed.seek(0)
+    frame = None
+    pending = b""
+    try:
+        while block := pending or compressed.read(chunk_bytes):
+            pending = b""
+            if frame is None or frame.eof:
+                frame = zstandard.ZstdDecompressor().decompressobj()
+            frame.decompress(block)
+            if frame.eof:
+                pending = frame.unused_data
+    except zstandard.ZstdError:
+        return False
+    return frame is not None and not frame.eof

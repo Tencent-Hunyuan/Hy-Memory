@@ -21,6 +21,13 @@ exercises (query rewrite needs `queries=[...]`, session narratives need
 cross-encoder download, access write-back); and everything MemHub already
 controls elsewhere (pipeline log, trace, memory operations, telemetry, mode).
 
+Beside the on/off features there are numeric parameters (`PARAMETERS`):
+`intention_dedup_threshold`, the cosine similarity at which the read-time
+intention dedup treats two intentions as copies, and `agent_max_tokens`, the
+output budget of the SDK's agent calls (evolve, System 2), which some local
+models need raised. They are set, stored, reset and keyed exactly like a
+feature.
+
 No SDK import here: only `hy_sdk_runtime` and `hy_sdk_migration` import it.
 `config_state` imports this module, so it imports nothing from there.
 """
@@ -31,7 +38,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, StrictBool
+from pydantic import BaseModel, ConfigDict, Field, StrictBool
 
 MemoryFeatureName = Literal[
     "graph_rerank",
@@ -40,8 +47,13 @@ MemoryFeatureName = Literal[
     "session_episodes",
     "episode_summary",
     "intention",
+    "intention_dedup",
     "few_shot",
 ]
+#: Numeric settings beside the on/off features.
+MemoryParameterName = Literal["intention_dedup_threshold", "agent_max_tokens"]
+#: Every key of the setting: a feature or a parameter.
+MemorySettingName = MemoryFeatureName | MemoryParameterName
 #: Read features change search; write features change what extraction stores.
 FeatureSide = Literal["read", "write"]
 #: none: no extra call. extra_query: one more store query per search.
@@ -49,9 +61,30 @@ FeatureSide = Literal["read", "write"]
 #: a longer extraction prompt.
 FeatureCost = Literal["none", "extra_query", "llm_call", "prompt_tokens"]
 #: Why an enabled feature does nothing right now (`active: false`).
-FeatureReason = Literal["disabled", "requires_pro", "requires_ultra", "requires_graph_rerank"]
+FeatureReason = Literal[
+    "disabled",
+    "requires_pro",
+    "requires_ultra",
+    "requires_graph_rerank",
+    "requires_intention_dedup",
+]
+#: A feature is on or off; a parameter is a number (an int for an integer one).
+type SettingValue = bool | int | float
 #: A client's features as a hashable key: sorted (name, value) pairs, set ones only.
-type FeatureOverrides = tuple[tuple[str, bool], ...]
+type FeatureOverrides = tuple[tuple[str, SettingValue], ...]
+
+#: The range a person may set `intention_dedup_threshold` to. With dedup on,
+#: the SDK deletes every intention at or above it from the store at read time,
+#: which cannot be undone; below 0.8 the embedding models MemHub uses score
+#: different plans on one topic as that close, so a lower value would delete
+#: intentions that are not copies. 1.0 keeps only exact copies' dedup.
+INTENTION_DEDUP_THRESHOLD_MIN = 0.8
+INTENTION_DEDUP_THRESHOLD_MAX = 1.0
+#: The range a person may set `agent_max_tokens` to. Below 512 an evolve or
+#: System 2 answer cannot hold its operation list; above 32000 no model MemHub
+#: supports returns that much in one answer.
+AGENT_MAX_TOKENS_MIN = 512
+AGENT_MAX_TOKENS_MAX = 32000
 
 _MODE_RANK: dict[str, int] = {"lite": 0, "pro": 1, "ultra": 2}
 
@@ -170,6 +203,23 @@ FEATURES: tuple[FeatureSpec, ...] = (
         ),
     ),
     FeatureSpec(
+        name="intention_dedup",
+        section="recall",
+        field="intention_dedup_enabled",
+        env="MEMORY_INTENTION_DEDUP_ENABLED",
+        side="read",
+        requires_mode="pro",
+        requires_feature=None,
+        cost="none",
+        description=(
+            "Treat same-day intentions (L7) with the same expiry and a cosine "
+            "similarity at or above intention_dedup_threshold as copies: a "
+            "search returns the earliest and deletes the others from the store. "
+            "On by default; off hides, drops and deletes no intention, at read "
+            "time or in a write batch. No extra call."
+        ),
+    ),
+    FeatureSpec(
         name="few_shot",
         section="llm",
         field="few_shot_enabled",
@@ -189,12 +239,79 @@ FEATURE_NAMES: tuple[MemoryFeatureName, ...] = tuple(spec.name for spec in FEATU
 FEATURES_BY_NAME: dict[str, FeatureSpec] = {spec.name: spec for spec in FEATURES}
 
 
+@dataclass(frozen=True)
+class ParameterSpec:
+    """A numeric setting; it acts only while `requires_feature` acts."""
+
+    name: MemoryParameterName
+    section: Literal["recall", "llm"]
+    field: str
+    env: str
+    minimum: float
+    maximum: float
+    #: The feature it tunes; None = it acts whenever its mode does.
+    requires_feature: MemoryFeatureName | None
+    description: str
+    #: Lowest mode it acts in (only used without `requires_feature`).
+    requires_mode: Literal["pro", "ultra"] = "pro"
+    #: A whole number: stored, keyed and written to the SDK as an int.
+    integer: bool = False
+
+    @property
+    def sdk_field(self) -> str:
+        return f"{self.section}.{self.field}"
+
+
+PARAMETERS: tuple[ParameterSpec, ...] = (
+    ParameterSpec(
+        name="intention_dedup_threshold",
+        section="recall",
+        field="intention_dedup_threshold",
+        env="MEMORY_INTENTION_DEDUP_THRESHOLD",
+        minimum=INTENTION_DEDUP_THRESHOLD_MIN,
+        maximum=INTENTION_DEDUP_THRESHOLD_MAX,
+        requires_feature="intention_dedup",
+        description=(
+            "Cosine similarity at or above which intention_dedup treats two "
+            "intentions as copies. Higher keeps more. The SDK default is 0.95 "
+            "(MEMORY_DEDUP_THRESHOLD also sets it when its own env var is unset)."
+        ),
+    ),
+    ParameterSpec(
+        name="agent_max_tokens",
+        section="llm",
+        field="agent_max_tokens",
+        env="MEMORY_AGENT_MAX_TOKENS",
+        minimum=AGENT_MAX_TOKENS_MIN,
+        maximum=AGENT_MAX_TOKENS_MAX,
+        requires_feature=None,
+        requires_mode="pro",
+        integer=True,
+        description=(
+            "Output token budget of the SDK's agent calls (evolve, System 2). "
+            "Raise it when a local model's answers are cut off "
+            "(invalid_operations_json, truncated). The SDK default is 2000, or "
+            "MEMORY_AGENT_MAX_TOKENS when that is set."
+        ),
+    ),
+)
+PARAMETER_NAMES: tuple[MemoryParameterName, ...] = tuple(spec.name for spec in PARAMETERS)
+PARAMETERS_BY_NAME: dict[str, ParameterSpec] = {spec.name: spec for spec in PARAMETERS}
+#: Every key of the setting, features first, each in its catalog order.
+SETTING_NAMES: tuple[MemorySettingName, ...] = (*FEATURE_NAMES, *PARAMETER_NAMES)
+SETTINGS_BY_NAME: dict[str, FeatureSpec | ParameterSpec] = {
+    **FEATURES_BY_NAME,
+    **PARAMETERS_BY_NAME,
+}
+
+
 class MemoryFeatures(BaseModel):
     """`config.json` `memory_features`, and the `PUT` body.
 
     Every key is optional; absent (or null) means the SDK default. In a `PUT`
-    an absent key is left as it is and null resets it. Unknown keys and
-    non-boolean values are refused (422).
+    an absent key is left as it is and null resets it. Unknown keys,
+    non-boolean feature values and a threshold that is not a number in its
+    range are refused (422).
     """
 
     model_config = ConfigDict(frozen=True, extra="forbid", strict=True)
@@ -205,7 +322,19 @@ class MemoryFeatures(BaseModel):
     session_episodes: StrictBool | None = None
     episode_summary: StrictBool | None = None
     intention: StrictBool | None = None
+    intention_dedup: StrictBool | None = None
     few_shot: StrictBool | None = None
+    intention_dedup_threshold: float | None = Field(
+        default=None,
+        ge=INTENTION_DEDUP_THRESHOLD_MIN,
+        le=INTENTION_DEDUP_THRESHOLD_MAX,
+        allow_inf_nan=False,
+    )
+    agent_max_tokens: int | None = Field(
+        default=None,
+        ge=AGENT_MAX_TOKENS_MIN,
+        le=AGENT_MAX_TOKENS_MAX,
+    )
 
     def overrides(self) -> FeatureOverrides:
         """The features a person set, as the client key."""
@@ -221,24 +350,62 @@ class MemoryFeatures(BaseModel):
         return MemoryFeatures(**{key: value for key, value in values.items() if value is not None})
 
 
-def feature_overrides(values: Mapping[str, bool]) -> FeatureOverrides:
-    unknown = set(values) - set(FEATURES_BY_NAME)
+def feature_overrides(values: Mapping[str, SettingValue]) -> FeatureOverrides:
+    unknown = set(values) - set(SETTINGS_BY_NAME)
     if unknown:
         raise ValueError("unknown_memory_feature")
-    return tuple(sorted((name, bool(value)) for name, value in values.items()))
+    return tuple(sorted((name, _setting_value(name, value)) for name, value in values.items()))
+
+
+def _setting_value(name: str, value: SettingValue) -> SettingValue:
+    parameter = PARAMETERS_BY_NAME.get(name)
+    if parameter is None:
+        return bool(value)
+    if isinstance(value, bool) or not parameter.minimum <= float(value) <= parameter.maximum:
+        raise ValueError("invalid_memory_feature_value")
+    if parameter.integer:
+        if float(value) != int(value):
+            raise ValueError("invalid_memory_feature_value")
+        return int(value)
+    return float(value)
+
+
+def parameter_value(name: str, value: SettingValue) -> int | float:
+    """A parameter's value in its own type: int for an integer parameter."""
+    parameter = PARAMETERS_BY_NAME[name]
+    return int(value) if parameter.integer else float(value)
 
 
 def effective_features(
-    overrides: FeatureOverrides, defaults: Mapping[str, bool]
-) -> dict[str, bool]:
-    """Every feature's value: what a person set, else the SDK default."""
-    values: dict[str, bool] = {spec.name: bool(defaults.get(spec.name, False)) for spec in FEATURES}
+    overrides: FeatureOverrides, defaults: Mapping[str, SettingValue]
+) -> dict[str, SettingValue]:
+    """Every setting's value: what a person set, else the SDK default."""
+    values: dict[str, SettingValue] = {
+        spec.name: bool(defaults.get(spec.name, False)) for spec in FEATURES
+    }
+    for parameter in PARAMETERS:
+        if parameter.name in defaults:
+            values[parameter.name] = parameter_value(parameter.name, defaults[parameter.name])
     values.update(dict(overrides))
     return values
 
 
-def feature_activity(name: str, effective: Mapping[str, bool], mode: str) -> FeatureReason | None:
-    """None when the feature acts in this mode; else why it does not."""
+def feature_activity(
+    name: str, effective: Mapping[str, SettingValue], mode: str
+) -> FeatureReason | None:
+    """None when the feature acts in this mode; else why it does not.
+
+    A parameter acts exactly when the feature it tunes acts; one that tunes
+    no feature acts whenever its mode does.
+    """
+    parameter = PARAMETERS_BY_NAME.get(name)
+    if parameter is not None and parameter.requires_feature is None:
+        if _MODE_RANK.get(mode, 0) < _MODE_RANK[parameter.requires_mode]:
+            return "requires_ultra" if parameter.requires_mode == "ultra" else "requires_pro"
+        return None
+    if parameter is not None and parameter.requires_feature is not None:
+        reason = feature_activity(parameter.requires_feature, effective, mode)
+        return "requires_intention_dedup" if reason == "disabled" else reason
     spec = FEATURES_BY_NAME[name]
     if not effective.get(name, False):
         return "disabled"
@@ -252,11 +419,12 @@ def feature_activity(name: str, effective: Mapping[str, bool], mode: str) -> Fea
 
 
 def non_default_features(
-    overrides: FeatureOverrides, defaults: Mapping[str, bool]
-) -> dict[str, bool]:
-    """The features whose value differs from the SDK default, for status."""
+    overrides: FeatureOverrides, defaults: Mapping[str, SettingValue]
+) -> dict[str, SettingValue]:
+    """The settings whose value differs from the SDK default, for status."""
+    baseline = effective_features((), defaults)
     return {
         name: value
         for name, value in effective_features(overrides, defaults).items()
-        if value != bool(defaults.get(name, False))
+        if value != baseline.get(name)
     }

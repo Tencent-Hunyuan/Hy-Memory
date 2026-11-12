@@ -159,39 +159,53 @@ export function useImportSources(_options: { automaticSync?: boolean } = {}) {
         });
       }
       submitted = true;
-      const result = await connectSourceSet([
-        [...ids],
-        true,
-        {
-          fullRescan: checked.onboarding,
-          onboarding: checked.onboarding,
-          enableSync: true,
-          requestId: id,
-          ...(traceId ? { traceId } : {}),
-          ...(checked.importUploadId === undefined
-            ? {}
-            : { importUploadId: checked.importUploadId }),
-          sourceRoots: Object.fromEntries(
-            checked.sources
-              .filter((source) => ids.includes(source.source_id))
-              .map((source) => [source.source_id, source.candidate_root_id]),
-          ),
-          ...(checked.sources.some(
-            (source) => (source.candidate_revision ?? 0) > 0,
-          )
-            ? {
-                sourceCandidateRevisions: Object.fromEntries(
-                  checked.sources
-                    .filter((source) => ids.includes(source.source_id))
-                    .map((source) => [
-                      source.source_id,
-                      source.candidate_revision ?? 0,
-                    ]),
-                ),
-              }
-            : {}),
-        },
-      ]);
+      let result: ConnectSourcesResponse;
+      try {
+        result = await connectSourceSet([
+          [...ids],
+          true,
+          {
+            fullRescan: checked.onboarding,
+            onboarding: checked.onboarding,
+            enableSync: true,
+            requestId: id,
+            ...(traceId ? { traceId } : {}),
+            ...(checked.importUploadId === undefined
+              ? {}
+              : { importUploadId: checked.importUploadId }),
+            sourceRoots: Object.fromEntries(
+              checked.sources
+                .filter((source) => ids.includes(source.source_id))
+                .map((source) => [source.source_id, source.candidate_root_id]),
+            ),
+            ...(checked.sources.some(
+              (source) => (source.candidate_revision ?? 0) > 0,
+            )
+              ? {
+                  sourceCandidateRevisions: Object.fromEntries(
+                    checked.sources
+                      .filter((source) => ids.includes(source.source_id))
+                      .map((source) => [
+                        source.source_id,
+                        source.candidate_revision ?? 0,
+                      ]),
+                  ),
+                }
+              : {}),
+          },
+        ]);
+      } catch (reason) {
+        // Core persists the idempotent receipt before it finishes activating
+        // every source lane. A large cold start can therefore commit and keep
+        // working after the POST's 30s transport deadline. Read the receipt
+        // before surfacing an unknown result; never replay the write here.
+        if (isDefiniteAccessRefusal(reason)) throw reason;
+        try {
+          result = await getSourceConnection(id);
+        } catch {
+          throw reason;
+        }
+      }
       assertConnectionReceipt(result, id, ids);
       liveRequests.current.set(id, {
         instanceId: fresh.instance_id,

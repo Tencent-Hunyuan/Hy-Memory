@@ -46,6 +46,7 @@ export function defaultHostSourceIds(
 export type ImportConnectionDraft = {
   hostSourceIds: readonly string[];
 };
+export type ImportSubmissionState = "confirmed" | "checking" | "refused";
 export interface FirstImportReviewProps {
   sourceIds: readonly string[];
   sources: SourceResponse[];
@@ -54,6 +55,7 @@ export interface FirstImportReviewProps {
   acceptedJobIds?: readonly string[];
   failedSources?: Record<string, string>;
   sourceSnapshot?: { confirmedAt: string | null; stale: boolean };
+  importSubmissionState?: ImportSubmissionState;
   busy?: boolean;
   error?: string | null;
   connectionNote?: string;
@@ -78,6 +80,7 @@ export function FirstImportReview({
   acceptedJobIds,
   failedSources = {},
   sourceSnapshot,
+  importSubmissionState = "confirmed",
   busy = false,
   error,
   connectionNote,
@@ -153,26 +156,6 @@ export function FirstImportReview({
     ids.every((id) => batch.some((job) => job.source_id === id)) &&
     batch.every((job) => job.status === "completed") &&
     !Object.keys(failedSources).length;
-  const allPaused =
-    batch.length > 0 && batch.every((job) => job.status === "paused");
-  const importing =
-    !stale &&
-    batch.some(
-      (job) =>
-        ["pending", "running"].includes(job.status) &&
-        sources.some(
-          (source) => source.source_id === job.source_id && source.authorized,
-        ),
-    );
-  const displayImporting =
-    importing ||
-    (!stale &&
-      !allCompleted &&
-      !allPaused &&
-      batch.length === 0 &&
-      ids.some((id) =>
-        sources.some((source) => source.source_id === id && source.authorized),
-      ));
   const title = "对话正在汇入，记忆从这里开始";
   const hostEligible = importHostEligible(sources, ids);
   const draftReady = !!connectionDraft && !!onConnectionDraftChange;
@@ -282,23 +265,9 @@ export function FirstImportReview({
     <R6ColdStartFrame
       step={2}
       title={text(title)}
-      eyebrow={text("导入进行中 · 顺手连接应用")}
       footer={
         <>
           <div className="first-import-r6-footer-note">
-            <p>
-              {text(
-                allCompleted
-                  ? "对话已保存，记忆尚待生成。"
-                  : displayImporting
-                    ? "导入在后台继续，无需等待。"
-                    : stale
-                      ? "正在重新核对来源；已保存数量仍按任务回执显示。"
-                      : allPaused
-                        ? "本次历史导入已暂停，已保存的对话还在。"
-                        : "导入等待处理，已保存的对话还在。",
-              )}
-            </p>
             {(error || actionMessage) && (
               <p
                 role={
@@ -373,7 +342,7 @@ export function FirstImportReview({
                 disabled={busy}
                 onClick={() => leave("settings")}
               >
-                {text("配置模型，沉淀记忆")}
+                {text("选择记忆模式")}
               </R6Button>
             )}
           </div>
@@ -386,11 +355,13 @@ export function FirstImportReview({
           aria-label={text("导入与原文")}
         >
           <p className="first-import-r6-intro">
-            {text(
-              allCompleted
-                ? "本次导入已结束。已保存的对话无需重复导入。"
-                : "对话先保存在本机。你可以同时设置后续连接。",
-            )}
+            {importSubmissionState === "checking"
+              ? t("onboardingImportChecking")
+              : text(
+                  allCompleted
+                    ? "本次导入已结束。已保存的对话无需重复导入。"
+                    : "对话先保存在本机。你可以同时设置后续连接。",
+                )}
           </p>
           <p className="first-import-r6-subintro">
             {text(
@@ -483,13 +454,11 @@ export function FirstImportReview({
               {text(connectionNote)}
             </p>
           )}
-          <p className="first-import-r6-options-note">
-            {text(
-              draftReady
-                ? "点击底部按钮后，后台分别接入各应用；某个应用失败不影响其他应用。"
-                : "暂时无法连接应用，当前不会安装连接。",
-            )}
-          </p>
+          {!draftReady && (
+            <p className="first-import-r6-options-note">
+              {text("暂时无法连接应用，当前不会安装连接。")}
+            </p>
+          )}
         </aside>
       </div>
     </R6ColdStartFrame>

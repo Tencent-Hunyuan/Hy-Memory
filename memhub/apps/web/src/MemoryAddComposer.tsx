@@ -103,12 +103,14 @@ export function MemoryAddComposer({
   onConfigureModel,
   onPendingChange,
   suspended = false,
+  rawOnly = false,
 }: {
   onSaved(): void;
   onOpenMemory(id: string): void;
   onConfigureModel(): void;
   onPendingChange?(addition: PendingMemoryAdd | null): void;
   suspended?: boolean;
+  rawOnly?: boolean;
 }) {
   const { text: copy } = useMemoryLanguage();
   const [open, setOpen] = useState(false);
@@ -128,6 +130,7 @@ export function MemoryAddComposer({
   const additionsRequest = useRef(0);
   const intent = useRef<{ text: string; requestId: string } | null>(null);
   const completed = useRef(new Set<string>());
+  const watched = useRef(new Set<string>());
   const lastSaved = useRef<string | null>(null);
   const onSavedRef = useRef(onSaved);
   onSavedRef.current = onSaved;
@@ -156,34 +159,72 @@ export function MemoryAddComposer({
   }, []);
 
   const refreshAdditions = useCallback(
-    async (failure: string, notifyResults = false) => {
+    async (
+      failure: string,
+      notifyResults = false,
+      allowWhileClosed = false,
+    ) => {
       const request = ++additionsRequest.current;
       try {
         const value = await loadRecentAdditions();
-        if (!isOpen.current || request !== additionsRequest.current) return;
+        if (
+          (!allowWhileClosed && !isOpen.current) ||
+          request !== additionsRequest.current
+        )
+          return;
         setAdditions(value);
         reportPending(value);
-        if (!notifyResults) return;
+        if (!notifyResults) {
+          for (const { receipt } of value) {
+            if (
+              receipt.state === "ready" ||
+              (rawOnly && receipt.state === "no_memories")
+            )
+              completed.current.add(receipt.evidence_id);
+            else if (receipt.state === "pending" || receipt.state === "running")
+              watched.current.add(receipt.evidence_id);
+          }
+          return;
+        }
         const latest = value.find(
           (item) => item.receipt.evidence_id === lastSaved.current,
         );
-        if (latest) setNotice(states[latest.receipt.state]);
+        if (latest) {
+          setNotice(
+            rawOnly && latest.receipt.state === "no_memories"
+              ? "已保存原文"
+              : states[latest.receipt.state],
+          );
+          if (rawOnly && latest.receipt.state === "failed")
+            setSavedToast(states.failed);
+        }
         const newResults = value.filter(
           ({ receipt }) =>
-            receipt.state === "ready" &&
+            (receipt.state === "ready" ||
+              (rawOnly && receipt.state === "no_memories")) &&
+            watched.current.has(receipt.evidence_id) &&
             !completed.current.has(receipt.evidence_id),
         );
         if (newResults.length) {
-          for (const { receipt } of newResults)
+          for (const { receipt } of newResults) {
             completed.current.add(receipt.evidence_id);
+            watched.current.delete(receipt.evidence_id);
+          }
+          if (rawOnly) setSavedToast("已保存原文");
           onSavedRef.current();
         }
+        for (const { receipt } of value)
+          if (receipt.state === "failed")
+            watched.current.delete(receipt.evidence_id);
       } catch {
-        if (isOpen.current && request === additionsRequest.current)
+        if (
+          (isOpen.current || allowWhileClosed) &&
+          request === additionsRequest.current
+        )
           setError(failure);
       }
     },
-    [reportPending],
+    [rawOnly, reportPending],
   );
 
   useEffect(() => {
@@ -193,6 +234,15 @@ export function MemoryAddComposer({
     const before = document.activeElement;
     panel.current?.querySelector("textarea")?.focus();
     void refreshAdditions("最近添加的内容读取失败。");
+    if (rawOnly) {
+      setModel(null);
+      setModelRead(true);
+      return () => {
+        isOpen.current = false;
+        additionsRequest.current += 1;
+        if (before instanceof HTMLElement && before.isConnected) before.focus();
+      };
+    }
     setModelRead(false);
     getModelProfiles()
       .then((value) => {
@@ -211,32 +261,38 @@ export function MemoryAddComposer({
       additionsRequest.current += 1;
       if (before instanceof HTMLElement && before.isConnected) before.focus();
     };
-  }, [open, refreshAdditions, suspended]);
+  }, [open, rawOnly, refreshAdditions, suspended]);
 
   useEffect(() => {
     if (open || suspended || !onPendingChange) return;
-    void loadRecentAdditions()
-      .then((value) => reportPending(value))
-      .catch(() => {
-        // The page already keeps the last known state when a background read
-        // fails; do not turn an unknown pending count into zero here.
-      });
-  }, [open, onPendingChange, reportPending, suspended]);
+    void refreshAdditions(
+      "最近添加的内容读取失败。",
+      lastSaved.current !== null,
+      true,
+    );
+  }, [open, onPendingChange, refreshAdditions, suspended]);
 
   const working = additions.some(
     ({ receipt }) => receipt.state === "pending" || receipt.state === "running",
   );
   useEffect(() => {
-    if (!open || suspended || !working) return;
+    if (suspended || !working) return;
     const stop = subscribePoll({
       // A key of its own: sharing one with another surface would make one
       // tick read the wrong endpoint for the other caller.
       key: "memory-add-processing",
       intervalMs: 1_500,
-      run: () => refreshAdditions("整理状态暂时不可用，原话已保存。", true),
+      run: () =>
+        refreshAdditions(
+          rawOnly
+            ? "保存状态暂时不可用，原文已保存。"
+            : "整理状态暂时不可用，原话已保存。",
+          true,
+          !open,
+        ),
     });
     return stop;
-  }, [open, working, refreshAdditions, suspended]);
+  }, [open, rawOnly, working, refreshAdditions, suspended]);
 
   useEffect(() => {
     if (!savedToast) return;
@@ -273,12 +329,27 @@ export function MemoryAddComposer({
     setNotice("");
     const trace = traceUiAction("memory", "submit");
     const completeSave = (receipt: MemoryAddReceipt) => {
+      if (
+        receipt.state === "ready" ||
+        (rawOnly && receipt.state === "no_memories")
+      )
+        completed.current.add(receipt.evidence_id);
+      else if (receipt.state === "pending" || receipt.state === "running")
+        watched.current.add(receipt.evidence_id);
       remember({ requestId, receipt });
       lastSaved.current = receipt.evidence_id;
       setText("");
       intent.current = null;
       setNotice("");
-      setSavedToast("已保存，正在后台沉淀记忆");
+      setSavedToast(
+        rawOnly
+          ? receipt.state === "ready" || receipt.state === "no_memories"
+            ? "已保存原文"
+            : receipt.state === "failed"
+              ? states.failed
+              : "正在保存…"
+          : "已保存，正在后台沉淀记忆",
+      );
       isOpen.current = false;
       additionsRequest.current += 1;
       setOpen(false);
@@ -321,7 +392,8 @@ export function MemoryAddComposer({
         data-tour-id="memory-add-trigger"
         onClick={() => setOpen(true)}
       >
-        <FilePlus2 size={16} aria-hidden="true" /> {copy("添加记忆")}
+        <FilePlus2 size={16} aria-hidden="true" />{" "}
+        {copy(rawOnly ? "手动添加" : "添加记忆")}
       </button>
       {savedToast && (
         <p className="memory-add-toast" role="status">
@@ -360,11 +432,13 @@ export function MemoryAddComposer({
             }}
           >
             <header className="memory-add-heading">
-              <h2 id="memory-add-title">{copy("添加记忆")}</h2>
+              <h2 id="memory-add-title">
+                {copy(rawOnly ? "手动添加" : "添加记忆")}
+              </h2>
               <button
                 className="quiet"
                 type="button"
-                aria-label={copy("关闭新增记忆")}
+                aria-label={copy(rawOnly ? "关闭" : "关闭新增记忆")}
                 title={copy("关闭")}
                 disabled={busy}
                 onClick={close}
@@ -390,11 +464,13 @@ export function MemoryAddComposer({
                 placeholder={copy("例如：项目周会不排在周五。")}
                 onChange={(event) => setText(event.target.value)}
               />
-              <p className="memory-add-model">
-                {copy("整理模型：")}
-                {model?.name ??
-                  copy(modelRead ? "尚未配置，原话仍可保存" : "正在读取")}
-              </p>
+              {!rawOnly && (
+                <p className="memory-add-model">
+                  {copy("整理模型：")}
+                  {model?.name ??
+                    copy(modelRead ? "尚未配置，原话仍可保存" : "正在读取")}
+                </p>
+              )}
               {error && (
                 <p className="error-banner" role="alert">
                   {copy(error)}
@@ -402,7 +478,7 @@ export function MemoryAddComposer({
               )}
               {notice && <p role="status">{copy(notice)}</p>}
               <div className="consent-actions">
-                {modelRead && !model && (
+                {!rawOnly && modelRead && !model && (
                   <button
                     type="button"
                     className="secondary"
@@ -430,7 +506,19 @@ export function MemoryAddComposer({
                   {additions.map(({ requestId, receipt }) => (
                     <li key={requestId}>
                       <p>{receipt.text}</p>
-                      <small>{copy(states[receipt.state])}</small>
+                      <small>
+                        {copy(
+                          rawOnly &&
+                            (receipt.state === "pending" ||
+                              receipt.state === "running")
+                            ? "正在保存…"
+                            : rawOnly &&
+                                (receipt.state === "ready" ||
+                                  receipt.state === "no_memories")
+                              ? "已保存原文"
+                              : states[receipt.state],
+                        )}
+                      </small>
                       {memoryWriteErrorText(receipt.error) && (
                         <p className="error-banner">
                           {copy(memoryWriteErrorText(receipt.error) ?? "")}

@@ -149,6 +149,102 @@ it("OBS-22: the graph inspector has no editing entry and never says changes cann
   expect(screen.queryByText(/暂不能保存更改/)).toBeNull();
 });
 
+it("keeps topic annotations out of the inspector and opens detail-bearing graph nodes", async () => {
+  const onOpen = vi.fn();
+  const topicGraph = {
+    total_memories: 2,
+    projected_memories: 2,
+    hy_graph_available: true,
+    nodes: [
+      {
+        node_id: "memory:m0",
+        node_type: "memory",
+        memory_id: "m0",
+        label: "第一条",
+      },
+      {
+        node_id: "memory:outside",
+        node_type: "memory",
+        memory_id: "outside",
+        label: "图中但不在当前页的记忆",
+      },
+      {
+        node_id: "topic:git",
+        node_type: "topic",
+        memory_id: null,
+        label: "git",
+      },
+      {
+        node_id: "schema:workflow",
+        node_type: "schema",
+        memory_id: null,
+        label: "先验证，再推送",
+      },
+    ],
+    edges: [
+      {
+        edge_id: "topic-m0",
+        source_node_id: "topic:git",
+        target_node_id: "memory:m0",
+        relation: "tagged_with",
+        origin: "shared_tag",
+      },
+      {
+        edge_id: "topic-outside",
+        source_node_id: "topic:git",
+        target_node_id: "memory:outside",
+        relation: "tagged_with",
+        origin: "shared_tag",
+      },
+      {
+        edge_id: "schema-m0",
+        source_node_id: "schema:workflow",
+        target_node_id: "memory:m0",
+        relation: "derived_from",
+        origin: "hy_relation",
+      },
+    ],
+  } as MemoryGraphResponse;
+  render(
+    <Host
+      simplified
+      items={[memories[0]]}
+      graphValue={topicGraph}
+      onOpenSpy={onOpen}
+      libraryView={pagedView({
+        items: [memories[0]],
+        total: 2,
+        offset: 0,
+        limit: 1,
+        source_ids_by_memory: { m0: ["codex"] },
+      })}
+    />,
+  );
+
+  await act(async () => {});
+  onOpen.mockClear();
+  await userEvent.click(screen.getByRole("button", { name: "图中选择 git" }));
+  expect(onOpen).not.toHaveBeenCalled();
+  expect(screen.queryByRole("heading", { name: "git" })).toBeNull();
+  expect(screen.getByRole("heading", { name: "第一条" })).toBeTruthy();
+  expect(screen.getByTestId("canvas").dataset.selected).toBe("memory:m0");
+  await userEvent.click(
+    screen.getByRole("button", { name: "图中选择 先验证，再推送" }),
+  );
+  expect(screen.getByRole("heading", { name: "先验证，再推送" })).toBeTruthy();
+  expect(screen.queryByText("关系归纳")).toBeNull();
+  expect(screen.queryByText("归纳自")).toBeNull();
+  await userEvent.click(
+    screen.getByRole("button", {
+      name: "图中选择 图中但不在当前页的记忆",
+    }),
+  );
+
+  expect(onOpen).toHaveBeenLastCalledWith("outside");
+  expect(screen.getByTestId("canvas").dataset.selected).toBe("memory:outside");
+  expect(screen.queryByText("所选记忆不在当前筛选内，已取消选择。")).toBeNull();
+});
+
 it("OBS-19: Enter in the memory filter submits it; submitting it again re-reads", async () => {
   const onRetry = vi.fn();
   const onQuery = vi.fn();
@@ -391,9 +487,11 @@ function Host({
   deferMemoryId,
   failMemoryId,
   graphValue = graph,
+  onOpenSpy,
   onViewHistory,
   onConfigureModel = () => {},
   libraryView,
+  raw = false,
 }: {
   simplified?: boolean;
   date?: string | null;
@@ -408,9 +506,11 @@ function Host({
   deferMemoryId?: string;
   failMemoryId?: string;
   graphValue?: MemoryGraphResponse;
+  onOpenSpy?(memoryId: string): void;
   onViewHistory?(): void;
   onConfigureModel?(): void;
   libraryView?: Parameters<typeof MemoryMap>[0]["libraryView"];
+  raw?: boolean;
 } = {}) {
   const [detail, setDetail] = useState<MemoryDetail | null>(null);
   const [detailLoad, setDetailLoad] = useState<{
@@ -420,6 +520,7 @@ function Host({
   return (
     <MemoryMap
       simplified={simplified}
+      contentKind={raw ? "raw" : "memory"}
       libraryView={libraryView}
       hidden={hidden}
       overlayBlocked={overlayBlocked}
@@ -445,6 +546,7 @@ function Host({
       streaming={null}
       requestIds={{ current: new Map() }}
       onOpenMemory={(id) => {
+        onOpenSpy?.(id);
         if (failMemoryId && id === failMemoryId) {
           setDetail(null);
           setDetailLoad({ memoryId: id, status: "failed" });
@@ -488,6 +590,61 @@ function Host({
     />
   );
 }
+
+it("windows raw rows and automatically continues near the bottom", () => {
+  const items = Array.from({ length: 150 }, (_, index) => ({
+    ...memories[0],
+    memory_id: `raw-${index}`,
+    content: `原始会话 ${index}`,
+  }));
+  const onMore = vi.fn();
+  const sourceIds = Object.fromEntries(
+    items.map((item) => [item.memory_id, ["cursor"]]),
+  );
+  render(
+    <Host
+      simplified
+      raw
+      items={items}
+      libraryView={{
+        query: "",
+        source: "",
+        page: {
+          items,
+          total: 1_600,
+          offset: 0,
+          limit: 50,
+          source_ids_by_memory: sourceIds,
+        },
+        loading: false,
+        failed: false,
+        stale: false,
+        cursorPaging: true,
+        hasMore: true,
+        onQuery: vi.fn(),
+        onSource: vi.fn(),
+        resetPage: vi.fn(),
+        onPage: vi.fn(),
+        onMore,
+        onRetry: vi.fn(),
+      }}
+    />,
+  );
+  const list = screen.getByRole("list", { name: "原始对话" });
+  Object.defineProperties(list, {
+    clientHeight: { configurable: true, value: 500 },
+    scrollHeight: { configurable: true, value: 17_400 },
+    scrollTop: { configurable: true, writable: true, value: 16_500 },
+  });
+  fireEvent.scroll(list);
+
+  expect(onMore).toHaveBeenCalledTimes(1);
+  expect(document.querySelectorAll("[data-memory-id]").length).toBeLessThan(30);
+  expect(screen.getByRole("button", { name: "加载更多" }).classList).toContain(
+    "map-load-more",
+  );
+});
+
 it("does not present an unverified empty page as zero memories", () => {
   const page = {
     items: [],

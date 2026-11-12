@@ -150,7 +150,18 @@ def test_lifespan_content_backfill_failure_is_visible(tmp_path, monkeypatch) -> 
 
     async def scenario() -> None:
         async with app.router.lifespan_context(app):
-            health = await _get_json(app, "/api/v1/health")
+            # The rebuild is released when post-ready recovery finishes, and
+            # recovery now resumes imports off the loop, so it can still be
+            # running at the first request.
+            for _ in range(500):
+                if app.state.recovery in {"done", "failed"}:
+                    break
+                await asyncio.sleep(0.01)
+            for _ in range(500):
+                health = await _get_json(app, "/api/v1/health")
+                if health["content_candidate_backfill"] != "running":
+                    break
+                await asyncio.sleep(0.01)
             assert health["content_candidate_backfill"] == "failed"
             assert health["content_candidate_backfill_failure"] == "database_locked"
 

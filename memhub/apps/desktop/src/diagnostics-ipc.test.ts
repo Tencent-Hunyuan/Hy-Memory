@@ -366,7 +366,7 @@ it("refuses a ui trace from an untrusted window", async () => {
   ).rejects.toThrow(/untrusted_window/);
 });
 
-it("marks a problem and exports a redacted local bundle", async () => {
+it("marks a problem and exports the complete local log bundle", async () => {
   const value = await fixture();
   const mark = await value.handlers.get(
     "one-memory:mark-diagnostic-incident",
@@ -375,6 +375,14 @@ it("marks a problem and exports a redacted local bundle", async () => {
     incident_id: expect.any(String),
     session_id: expect.any(String),
   });
+  await writeFile(
+    path.join(value.dataDir, "logs", "core.log"),
+    "2026-10-14 10:31:00 WARNING database wait\n",
+  );
+  await writeFile(
+    path.join(value.dataDir, "logs", "service-error.log"),
+    "worker failed\n",
+  );
   const exported = await value.handlers.get("one-memory:export-diagnostics")?.(
     {},
   );
@@ -398,6 +406,16 @@ it("marks a problem and exports a redacted local bundle", async () => {
     ),
   );
   expect(summary).toMatchObject({ build: "3800" });
+  const entries = execFileSync(
+    "/usr/bin/unzip",
+    ["-Z1", path.join(value.dataDir, zip)],
+    { encoding: "utf8" },
+  )
+    .trim()
+    .split("\n");
+  expect(entries).toContain("logs/core.log");
+  expect(entries).toContain("logs/service-error.log");
+  expect(entries).toContain("logs/diagnostic-desktop.jsonl");
   value.dispose();
 });
 

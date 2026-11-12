@@ -436,6 +436,11 @@ def root_identity_matches(root: Path, expected: str) -> bool:
     return _root_identity_matches_details(resolved, details, expected)
 
 
+def resolved_source_root(root: Path) -> Path:
+    """The real directory a root names (symlinks followed), as a grant records it."""
+    return _root_details(root)[0]
+
+
 def _check_root_identity(root: Path, expected: str | None) -> None:
     if expected is not None and not root_identity_matches(root, expected):
         raise SourceAccessError(SourceAccessErrorCode.SOURCE_IDENTITY_CHANGED)

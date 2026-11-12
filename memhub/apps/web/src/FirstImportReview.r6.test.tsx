@@ -239,7 +239,7 @@ it("emits controlled connection drafts only and passes continuation without comp
     screen.getByRole<HTMLInputElement>("checkbox", { name: "一键接入应用" })
       .checked,
   ).toBe(false);
-  fireEvent.click(screen.getByRole("button", { name: "配置模型，沉淀记忆" }));
+  fireEvent.click(screen.getByRole("button", { name: "选择记忆模式" }));
   expect(next).toHaveBeenCalledWith("settings");
 });
 
@@ -371,16 +371,14 @@ it("uses user-facing connection confirmation copy without implementation narrati
     />,
   );
   expect(screen.getByRole("complementary", { name: "连接应用" })).toBeTruthy();
+  expect(screen.getByRole("checkbox", { name: "一键接入应用" })).toBeTruthy();
   expect(
-    screen.getByText(
-      "点击底部按钮后，后台分别接入各应用；某个应用失败不影响其他应用。",
+    screen.queryByText(
+      /点击底部按钮后|选择草稿|按各应用回执|本页任务控制尚未接通/,
     ),
-  ).toBeTruthy();
-  expect(
-    screen.queryByText(/选择草稿|按各应用回执|本页任务控制尚未接通/),
   ).toBeNull();
-  expect(screen.getByText(/不会自动开放应用读取权限/)).toBeTruthy();
-  expect(screen.getByText(/配置模型后，才会开始生成记忆/)).toBeTruthy();
+  expect(screen.queryByText(/下一步选择记忆模式/)).toBeNull();
+  expect(screen.queryByText(/之后仍可在设置中更改/)).toBeNull();
 });
 
 it.each(["paused", "failed", "cancelled", "interrupted"] as const)(
@@ -398,11 +396,7 @@ it.each(["paused", "failed", "cancelled", "interrupted"] as const)(
     expect(
       screen.getByRole("heading", { name: "对话正在汇入，记忆从这里开始" }),
     ).toBeTruthy();
-    expect(
-      screen.getByText(/已保存的对话还在/, {
-        selector: ".first-import-r6-footer-note p",
-      }),
-    ).toBeTruthy();
+    expect(screen.queryByText(/已保存的对话还在/)).toBeNull();
   },
 );
 
@@ -439,9 +433,7 @@ it.each(["stale", "revoked", "missing"])(
         onContinue={vi.fn()}
       />,
     );
-    if (kind === "missing")
-      expect(screen.getByText("导入在后台继续，无需等待。")).toBeTruthy();
-    else expect(screen.queryByText("导入在后台继续，无需等待。")).toBeNull();
+    expect(screen.queryByText("导入在后台继续，无需等待。")).toBeNull();
     expect(
       screen.getByRole("heading", { name: "对话正在汇入，记忆从这里开始" }),
     ).toBeTruthy();

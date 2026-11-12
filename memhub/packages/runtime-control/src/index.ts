@@ -71,6 +71,7 @@ export {
   type RuntimeAttachmentOptions,
   RuntimeDiscoveryError,
   type RuntimeIdentity,
+  type RuntimeReceiptBuild,
   readPublishedCorePort,
 } from "./discovery.js";
 export {
@@ -144,12 +145,17 @@ export {
   type RuntimeCliConfig,
   resolveRuntimeCliConfig,
   runRuntimeCli,
+  runtimeBuildIdentity,
 } from "./runtime-cli.js";
 export {
   type EnsureRuntimeOptions,
   ensureRuntimeProcess,
   type RuntimeLaunch,
+  readRuntimeLeaseOwnerPid,
+  type StopAllRuntimesOptions,
+  type StopAllRuntimesResult,
   type StopRuntimeOptions,
+  stopAllRuntimeProcesses,
   stopRuntimeProcess,
   type WaitForRuntimeOptions,
   waitForRuntimeProcess,
@@ -160,6 +166,7 @@ export {
 } from "./runtime-maintenance.js";
 export {
   type ManagedRuntime,
+  type RuntimeBuildIdentity,
   RuntimeService,
   type RuntimeServiceOptions,
 } from "./runtime-service.js";
@@ -235,6 +242,15 @@ export {
   runtimeInstallLayout,
   stableRuntimeInstallRoot,
 } from "./service-plan.js";
+export {
+  parseLaunchctlPid,
+  queryRuntimeServiceState,
+  type RuntimeServiceState,
+  type RuntimeServiceStateName,
+  type RuntimeServiceStateOptions,
+  type RuntimeServiceStateReason,
+  type ServiceStateProbe,
+} from "./service-state.js";
 export { createSourceChangeHandler } from "./source-change-handler.js";
 export {
   type ApplySyncHookInput,

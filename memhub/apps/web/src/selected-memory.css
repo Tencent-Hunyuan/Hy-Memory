@@ -97,7 +97,6 @@
   border-color: transparent;
 }
 .selected-source-filter .om-option-menu-button::after {
-  top: 18px;
   right: 4px;
 }
 .selected-source-filter details {
@@ -236,6 +235,7 @@
   font-size: 18px;
   line-height: 31px;
   font-weight: 500;
+  overflow-wrap: anywhere;
 }
 .selected-memory-detail {
   display: flex;

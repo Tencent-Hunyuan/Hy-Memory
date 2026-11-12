@@ -132,12 +132,17 @@ button svg {
   content: "";
   position: absolute;
   right: 18px;
-  top: 22px;
+  top: 50%;
   width: 8px;
   height: 8px;
   border-right: 1.5px solid #4e6478;
   border-bottom: 1.5px solid #4e6478;
-  transform: rotate(45deg);
+  transform: translateY(-65%) rotate(45deg);
+  transform-origin: 50% 50%;
+  transition: transform 150ms ease-out;
+}
+.om-option-menu-button[aria-expanded="true"]::after {
+  transform: translateY(-35%) rotate(225deg);
 }
 .om-option-menu-button:disabled {
   color: #66727b;
@@ -786,6 +791,44 @@ button.rail-button.active::before {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+.map-pagination:has(.map-load-more) {
+  justify-content: center;
+  padding-top: 8px;
+  border-top: 0;
+}
+.map-load-more {
+  display: grid;
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  place-items: center;
+  border: 1px solid var(--bd);
+  border-radius: 50%;
+  color: var(--tx3);
+  background: var(--surface);
+  transition:
+    color var(--motion-fast) var(--motion-enter),
+    background-color var(--motion-fast) var(--motion-enter),
+    transform var(--motion-fast) var(--motion-enter);
+}
+.map-load-more:hover:not(:disabled) {
+  color: var(--ac-strong);
+  background: var(--ac-bg);
+  transform: translateY(1px);
+}
+.map-load-more:focus-visible {
+  outline: 2px solid var(--ac);
+  outline-offset: 2px;
+}
+.map-load-more svg.loading {
+  animation: map-load-more-pulse 800ms ease-in-out infinite alternate;
+}
+@keyframes map-load-more-pulse {
+  to {
+    transform: translateY(4px);
+    opacity: 0.45;
+  }
+}
 .map-list-status {
   flex: none;
   min-height: 28px;
@@ -823,6 +866,16 @@ button.rail-button.active::before {
 }
 .map-memory-list > li {
   margin-bottom: 4px;
+}
+.map-memory-list.raw > li:not(.map-memory-spacer) {
+  height: 112px;
+}
+.map-memory-list.raw .map-memory-item {
+  height: 112px;
+}
+.map-memory-list > .map-memory-spacer {
+  margin: 0;
+  pointer-events: none;
 }
 .map-memory-item {
   display: grid;
@@ -980,6 +1033,14 @@ button.map-tool {
   border: 1px solid var(--bd);
   background: #fff;
   box-shadow: var(--shadow-pop);
+}
+.memory-graph-fallback-topic {
+  display: block;
+  width: 100%;
+  margin-block: 6px;
+  padding: 8px 14px;
+  color: var(--tx2);
+  overflow-wrap: anywhere;
 }
 .graph-labels {
   position: absolute;

@@ -1,4 +1,5 @@
 import type {
+  HomeProjectionCapabilities,
   MemoryProcessingBlock,
   MemoryProcessingSummary,
   SourceResponse,
@@ -29,6 +30,8 @@ export interface MemoryArrival {
   backlogPending?: number;
   /** Confirmed memory count, never inferred from completed processing tasks. */
   memoryCount?: number;
+  /** Confirmed mode semantics for this snapshot. */
+  capabilities?: HomeProjectionCapabilities | null;
 }
 
 export function resolveMemoryArrival({
@@ -36,11 +39,13 @@ export function resolveMemoryArrival({
   processing,
   sources,
   loaded,
+  capabilities,
 }: {
   arrival?: MemoryArrival;
   processing: MemoryProcessingSummary | null;
   sources: readonly SourceResponse[];
   loaded: boolean;
+  capabilities?: HomeProjectionCapabilities | null;
 }): MemoryArrival {
   const authorized = sources.filter((source) => source.authorized);
   const importedMessages =
@@ -57,7 +62,25 @@ export function resolveMemoryArrival({
     arrival?.blockedStages ??
     []
   ).filter((block) => block.count > 0);
+  const effectiveCapabilities = capabilities ?? arrival?.capabilities;
   let phase: MemoryArrivalPhase = arrival?.phase ?? "idle";
+  if (effectiveCapabilities?.generation_required === false) {
+    const preserved =
+      arrival?.phase === "checking" || arrival?.phase === "unavailable"
+        ? arrival.phase
+        : arrival?.importing
+          ? "importing"
+          : "idle";
+    return {
+      ...arrival,
+      importing: arrival?.importing ?? false,
+      importedMessages,
+      importedConversations,
+      capabilities: effectiveCapabilities,
+      phase: preserved,
+      ...(blocks.length ? { blockedStages: blocks } : {}),
+    };
+  }
   if (
     arrival &&
     ["checking", "unavailable", "stopped", "model-required"].includes(
@@ -94,6 +117,7 @@ export function resolveMemoryArrival({
     importedMessages,
     importedConversations,
     phase,
+    ...(effectiveCapabilities ? { capabilities: effectiveCapabilities } : {}),
     ...(blocks.length ? { blockedStages: blocks } : {}),
     ...((processing?.backlog_pending ?? 0) > 0
       ? { backlogPending: processing?.backlog_pending }

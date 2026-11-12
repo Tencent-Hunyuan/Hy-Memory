@@ -293,6 +293,9 @@ def test_health_states_that_watching_is_layered_on_the_timer(tmp_path: Path) -> 
 
         assert live.health(PI_DESCRIPTOR.source_id).mode == "watch_and_polling"
         assert live.health("unknown-source").mode == "watch_and_polling"
+        live.set_watched_sources((PI_DESCRIPTOR.source_id,))
+        assert live._poll_interval(PI_DESCRIPTOR.source_id) == max(live.interval_seconds, 15 * 60)
+        assert live._poll_interval("unknown-source") == live.interval_seconds
         await imports.shutdown()
 
     asyncio.run(scenario())
@@ -641,3 +644,32 @@ def _job(*, created_at: datetime) -> ImportJob:
         created_at=created_at,
         updated_at=datetime.now(UTC),
     )
+
+
+def test_attributing_changed_paths_happens_off_the_event_loop(tmp_path: Path, monkeypatch) -> None:
+    """Resolving a host's batch of changed paths blocked the loop for seconds."""
+    import threading
+
+    async def scenario() -> None:
+        root, (_evidence, live, imports) = _source(tmp_path)
+        watch = FileWatchLiveSync(
+            roots={PI_DESCRIPTOR.source_id: root},
+            supervisor=live,
+            debounce_seconds=0.1,
+            min_interval_seconds=0.1,
+        )
+        loop_thread = threading.current_thread()
+        resolved_on: list[threading.Thread] = []
+        original = watch.source_for
+
+        def recorded(path: Path) -> str | None:
+            resolved_on.append(threading.current_thread())
+            return original(path)
+
+        monkeypatch.setattr(watch, "source_for", recorded)
+
+        assert await watch.handle_changes({tmp_path / "elsewhere/session.jsonl"}) == ()
+        assert resolved_on and loop_thread not in resolved_on
+        await imports.shutdown()
+
+    asyncio.run(scenario())

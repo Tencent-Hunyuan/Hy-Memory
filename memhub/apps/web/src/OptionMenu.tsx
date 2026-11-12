@@ -13,6 +13,8 @@ import { useGuiLanguage } from "./gui-language";
 export interface OptionMenuItem {
   value: string;
   label: string;
+  suffix?: string;
+  description?: string;
   disabled?: boolean;
   lang?: string;
 }
@@ -20,6 +22,17 @@ export interface OptionMenuItem {
 const VIEWPORT_MARGIN = 12;
 const PANEL_GAP = 4;
 const MAX_PANEL_HEIGHT = 280;
+
+function optionLabel(label: string, suffix?: string) {
+  return suffix ? (
+    <>
+      {label}
+      <span className="om-option-menu-suffix"> · {suffix}</span>
+    </>
+  ) : (
+    label
+  );
+}
 
 export function optionMenuPosition(
   anchor: Pick<DOMRect, "top" | "right" | "bottom" | "left" | "width">,
@@ -110,7 +123,7 @@ export function OptionMenu(props: {
   function choose(index: number) {
     const item = props.options[index];
     if (!item || item.disabled) return;
-    props.onChange(item.value);
+    if (item.value !== props.value) props.onChange(item.value);
     setOpen(false);
     button.current?.focus();
   }
@@ -265,7 +278,14 @@ export function OptionMenu(props: {
           }
         }}
       >
-        {visibleLabel}
+        {selected?.description ? (
+          <span className="om-option-menu-copy">
+            <span>{optionLabel(visibleLabel, selected.suffix)}</span>
+            <small>{selected.description}</small>
+          </span>
+        ) : (
+          optionLabel(visibleLabel, selected?.suffix)
+        )}
       </button>
       {open &&
         createPortal(
@@ -291,6 +311,14 @@ export function OptionMenu(props: {
                 lang={item.lang}
                 data-active={activeIndex === index || undefined}
                 aria-selected={item.value === props.value}
+                aria-label={
+                  item.suffix ? `${item.label} · ${item.suffix}` : undefined
+                }
+                aria-describedby={
+                  item.description && item.suffix
+                    ? `${panelId}-option-${index}-description`
+                    : undefined
+                }
                 disabled={item.disabled}
                 tabIndex={-1}
                 onMouseEnter={() => {
@@ -298,7 +326,16 @@ export function OptionMenu(props: {
                 }}
                 onClick={() => choose(index)}
               >
-                {item.label}
+                {item.description ? (
+                  <span className="om-option-menu-copy">
+                    <span>{optionLabel(item.label, item.suffix)}</span>
+                    <small id={`${panelId}-option-${index}-description`}>
+                      {item.description}
+                    </small>
+                  </span>
+                ) : (
+                  optionLabel(item.label, item.suffix)
+                )}
               </button>
             ))}
           </div>,

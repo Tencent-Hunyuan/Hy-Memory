@@ -24,7 +24,35 @@ import type { ImportSourcesController } from "./use-import-sources";
 
 vi.mock("./api", () => ({
   completeOnboarding: vi.fn(),
+  getEvolveSchedule: vi.fn().mockResolvedValue({
+    enabled: true,
+    time: "03:00",
+  }),
+  setEvolveSchedule: vi.fn(),
+  memoryModePlanUnsupported: vi.fn(() => false),
   getModelProfiles: vi.fn(),
+  getMemoryMode: vi.fn().mockResolvedValue({
+    mode: "pro",
+    configured_mode: "pro",
+    explicitly_configured: false,
+  }),
+  setMemoryMode: vi.fn().mockResolvedValue({ mode: "pro" }),
+  planMemoryMode: vi.fn().mockResolvedValue({
+    current: "pro",
+    target: "lite",
+    effective_target: "lite",
+    capabilities: {
+      content_plane: "raw",
+      generation_required: false,
+      graph_enabled: false,
+      evolve_available: false,
+    },
+    effects: [],
+    warnings: [],
+    blockers: [],
+  }),
+  putOnboardingProgress: vi.fn().mockResolvedValue({ model_profile_id: null }),
+  patchOnboardingProgress: vi.fn().mockResolvedValue({}),
 }));
 const models = {
   pendingProbe: false,
@@ -38,6 +66,22 @@ const models = {
   activate: vi.fn(),
 };
 vi.mock("./use-model-profiles", () => ({ useModelProfiles: () => models }));
+vi.mock("./use-embedding-switch", () => ({
+  useEmbeddingSwitch: () => ({
+    current: null,
+    plan: null,
+    busy: null,
+    errorCode: null,
+    refreshFailed: false,
+    supported: false,
+    planActivation: vi.fn(),
+    startPlannedSwitch: vi.fn(),
+    cancelCurrentSwitch: vi.fn(),
+    shouldUseLegacyActivation: () => true,
+    clearPlan: vi.fn(),
+    clearError: vi.fn(),
+  }),
+}));
 const source: SourceResponse = {
   source_id: "cursor",
   display_name: "Cursor",
@@ -87,6 +131,9 @@ const state = {
   selected_source_ids: [],
   started_at: null,
   completed_at: null,
+  mode_intent: null,
+  setup_step: null,
+  model_profile_id: null,
 };
 beforeEach(() => {
   delete window.oneMemory;
@@ -164,10 +211,10 @@ it("translates discovery, progress and privacy without importing or authorizing 
     }),
   ).toBeTruthy();
   expect(
-    screen.getByText(
+    screen.queryByText(
       "Antes de confirmar, solo se comprueba la información de las aplicaciones. No se leen conversaciones ni se instalan conexiones.",
     ),
-  ).toBeTruthy();
+  ).toBeNull();
   expect(
     screen.getByText("/fixture/cursor · Ubicación predeterminada"),
   ).toBeTruthy();
@@ -242,10 +289,10 @@ it("translates import review and preserves independent permission disclosure", a
     }),
   ).toBeTruthy();
   expect(
-    screen.getByText(
-      "Importar no concede automáticamente acceso de lectura a las aplicaciones. Las memorias comenzarán a generarse cuando configures un modelo.",
+    screen.queryByText(
+      "A continuación, elige un modo de memoria. Podrás cambiarlo más adelante en Configuración.",
     ),
-  ).toBeTruthy();
+  ).toBeNull();
   expect(
     screen.getByRole("region", {
       name: "Progreso de importación de las aplicaciones",
@@ -273,20 +320,19 @@ it("uses compact Spanish actions and preserves Chinese copy and permissions", as
   expect(navigation.textContent).toContain("Conectar apps");
   expect(
     screen.getByRole("button", {
-      name: "Configurar un modelo para crear memorias",
+      name: "Elegir el modo de memoria",
     }),
   ).toBeTruthy();
-  expect(screen.getByText(/Importar no concede automáticamente/)).toBeTruthy();
+  expect(
+    screen.queryByText(/A continuación, elige un modo de memoria/),
+  ).toBeNull();
   expect(
     screen.getByText(/Solo para las apps seleccionadas y compatibles/),
   ).toBeTruthy();
-  expect(screen.getByText(/Si una falla, las demás siguen/)).toBeTruthy();
   fireEvent.click(screen.getByText("中文"));
-  expect(
-    screen.getByRole("button", { name: "配置模型，沉淀记忆" }),
-  ).toBeTruthy();
+  expect(screen.getByRole("button", { name: "选择记忆模式" })).toBeTruthy();
   expect(navigation.textContent).toContain("连接应用");
-  expect(screen.getByText(/不会自动开放应用读取权限/)).toBeTruthy();
+  expect(screen.queryByText(/下一步选择记忆模式/)).toBeNull();
   expect(next).not.toHaveBeenCalled();
   expect(draft).not.toHaveBeenCalled();
 });
@@ -378,6 +424,12 @@ it("translates completion recovery live without repeating completion writes", as
     new Error("fixture-offline"),
   );
   const imports = controller();
+  imports.sources = [];
+  vi.mocked(imports.refresh).mockResolvedValue({
+    sources: [],
+    jobs: [],
+    health: null as never,
+  });
   const finish = vi.fn();
   render(
     <LanguageProvider>
@@ -387,12 +439,14 @@ it("translates completion recovery live without repeating completion writes", as
   );
   await waitFor(() =>
     expect(
-      screen.getByRole("button", { name: "Entrar y añadir más tarde" }),
+      screen.getByRole("button", { name: "Elegir el modo de memoria" }),
     ).toHaveProperty("disabled", false),
   );
   fireEvent.click(
-    screen.getByRole("button", { name: "Entrar y añadir más tarde" }),
+    screen.getByRole("button", { name: "Elegir el modo de memoria" }),
   );
+  fireEvent.click(screen.getByRole("radio", { name: /lite/i }));
+  fireEvent.click(screen.getByRole("button", { name: "Entrar con Lite" }));
   expect(
     await screen.findByRole("button", { name: "Reintentar guardar y entrar" }),
   ).toBeTruthy();
@@ -415,9 +469,14 @@ it("translates model configuration, validation and advanced fields without activ
   );
   expect(
     await screen.findByRole("heading", {
-      name: "Elige un modelo para crear memorias",
+      name: "Configurar el modelo de organización de recuerdos",
     }),
   ).toBeTruthy();
+  fireEvent.click(
+    screen.getByRole("button", {
+      name: "Detalles y configuración avanzada",
+    }),
+  );
   fireEvent.click(screen.getByRole("button", { name: "Probar conexión" }));
   expect(await screen.findByText("Introduce una API Key.")).toBeTruthy();
   expect(screen.getByLabelText("Tiempo de espera (segundos)")).toBeTruthy();
@@ -426,6 +485,42 @@ it("translates model configuration, validation and advanced fields without activ
   await act(async () => fireEvent.click(screen.getByText("中文")));
   expect(screen.getByText("请填写 API Key。")).toBeTruthy();
   expect(screen.getByLabelText("超时（秒）")).toBeTruthy();
+});
+
+it.each([
+  [
+    "索引更新没有完成，仍在使用原来的搜索模型。请检查连接后重试。",
+    "No se completó la actualización del índice. Se sigue usando el modelo de búsqueda anterior. Comprueba la conexión y vuelve a intentarlo.",
+  ],
+  [
+    "上次模型测试结果仍待核对，请稍后重试。",
+    "El resultado de la última prueba del modelo aún debe comprobarse. Vuelve a intentarlo más tarde.",
+  ],
+  [
+    "模型写入暂时关闭。请等待索引维护完成后重试。",
+    "La escritura del modelo está temporalmente pausada. Espera a que termine el mantenimiento del índice y vuelve a intentarlo.",
+  ],
+  [
+    "模型未能确认启用，请在设置中核对。",
+    "No se pudo confirmar que el modelo esté habilitado. Compruébalo en Configuración.",
+  ],
+  [
+    "已保存的模型配置暂时无法读取，不会重复创建。请重试刷新。",
+    "La configuración guardada del modelo no se puede leer temporalmente. No se creará un duplicado. Vuelve a actualizar.",
+  ],
+])("recognizes controller message key %s", async (key, translated) => {
+  render(
+    <LanguageProvider>
+      <OnboardingModelController
+        sourceNames={[]}
+        flowError={key}
+        onBack={vi.fn()}
+      />
+    </LanguageProvider>,
+  );
+
+  expect(await screen.findByText(translated)).toBeTruthy();
+  expect(screen.queryByText(key)).toBeNull();
 });
 
 it.each([

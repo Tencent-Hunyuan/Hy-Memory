@@ -25,7 +25,7 @@ from one_memory.hy_runtime_config import HY_MEMORY_READER
 from one_memory.hy_sdk_runtime import SdkClientHandle, sdk_relevance_floor
 from one_memory.hy_sdk_types import HySdkError, parse_sdk_search
 from one_memory.memory_queue import ExtractionWindowPreset, QueueDepths
-from one_memory.memory_server.durable_queue import COMPLETED, DurableWriteQueue
+from one_memory.memory_server.durable_queue import WAITING_FOR_MODEL, DurableWriteQueue
 from one_memory.sdk_write_processor import SdkWriteCoordinator
 from one_memory.semantic_deadline import SemanticMemoryHit
 
@@ -33,6 +33,10 @@ from one_memory.semantic_deadline import SemanticMemoryHit
 _STABLE_CODE = re.compile(r"[a-z][a-z0-9_]{0,95}")
 
 logger = logging.getLogger(__name__)
+
+#: Jobs not yet run that a suspended source holds back.
+_WAITING_STATES = frozenset({"pending", "waiting_for_model", "waiting_for_permission"})
+_WAITING_SQL = ",".join(f"'{state}'" for state in sorted(_WAITING_STATES))
 
 
 class SdkMemoryRuntime:
@@ -48,12 +52,19 @@ class SdkMemoryRuntime:
         data_dir: Path,
         memory_mode: Callable[[], str] = lambda: "pro",
         writes_open: Callable[[], bool] = lambda: True,
+        source_active: Callable[[str], bool] = lambda _source_key: True,
     ) -> None:
         self.coordinator = coordinator
         #: The SDK mode, for the graph store's path (`hy_graph_admin`).
         self.memory_mode = memory_mode
         #: False while an embedding switch pauses model writes.
         self.writes_open = writes_open
+        #: Whether a queue lane's source may still become memories: the same
+        #: question the drain's claim asks of it. A lane that is off (the
+        #: user turned the source off, or its grant was revoked) has its
+        #: waiting jobs suspended: kept, never claimed, and not counted as
+        #: pending until the source is on again.
+        self.source_active = source_active
         self.read_handle = read_handle
         self.write_queue = write_queue
         self.extraction_settings = extraction_settings
@@ -241,22 +252,11 @@ class SdkMemoryRuntime:
         now = datetime.now(UTC)
         fresh_since = (now - timedelta(days=7)).isoformat()
         with main_database(self.write_queue.database_path).read() as database:
-            fresh = int(
-                database.execute(
-                    "SELECT COUNT(*) FROM memory_write_jobs "
-                    "WHERE state IN ('pending','waiting_for_model','waiting_for_permission') "
-                    "AND event_at>=?",
-                    (fresh_since,),
-                ).fetchone()[0]
-            )
-            backlog = int(
-                database.execute(
-                    "SELECT COUNT(*) FROM memory_write_jobs "
-                    "WHERE state IN ('pending','waiting_for_model','waiting_for_permission') "
-                    "AND event_at<?",
-                    (fresh_since,),
-                ).fetchone()[0]
-            )
+            rows = database.execute(
+                "SELECT source_key,event_at>=? AS fresh,COUNT(*) FROM memory_write_jobs "
+                f"WHERE state IN ({_WAITING_SQL}) GROUP BY source_key,fresh",
+                (fresh_since,),
+            ).fetchall()
             recent = tuple(
                 datetime.fromisoformat(str(row[0]))
                 for row in database.execute(
@@ -264,6 +264,9 @@ class SdkMemoryRuntime:
                     "ORDER BY updated_at DESC LIMIT 8"
                 )
             )
+        active = self._active_lanes({str(row[0]) for row in rows})
+        fresh = sum(int(row[2]) for row in rows if str(row[0]) in active and row[1])
+        backlog = sum(int(row[2]) for row in rows if str(row[0]) in active and not row[1])
         return QueueDepths(fresh=fresh, backlog=backlog, recent_completions=recent)
 
     def active_depths(self) -> tuple[int, int]:
@@ -275,14 +278,49 @@ class SdkMemoryRuntime:
             )
         return running, running
 
-    def status_counts(self) -> dict[str, int]:
+    def stranded_depths(self, *, now: datetime | None = None) -> tuple[int, int]:
+        """`(running, stranded)` on the SDK data plane.
+
+        A row is stranded when it is `running` with no live lease: its worker
+        is gone and nothing will finish it. `reclaim_expired` recovers it on
+        the next drain tick, so this is the number that says the queue is
+        stuck *right now* rather than merely busy.
+
+        The two counts come from one read so they describe the same instant.
+        """
+        current = (now or datetime.now(UTC)).isoformat()
         with main_database(self.write_queue.database_path).read() as database:
-            return {
-                str(row[0]): int(row[1])
-                for row in database.execute(
-                    "SELECT state,COUNT(*) FROM memory_write_jobs GROUP BY state"
-                )
-            }
+            running, stranded = database.execute(
+                "SELECT COUNT(*), COALESCE(SUM(CASE WHEN lease_owner IS NULL"
+                " OR lease_expires_at IS NULL OR lease_expires_at < ?"
+                " THEN 1 ELSE 0 END), 0)"
+                " FROM memory_write_jobs WHERE state='running'",
+                (current,),
+            ).fetchone()
+        return int(running), int(stranded)
+
+    def status_counts(self) -> dict[str, int]:
+        """Jobs per state, with a suspended source's waiting jobs as `suspended`.
+
+        Those jobs keep their state in the table: suspension is the source's
+        switch, not the row's, so turning the source back on is all it takes
+        for the drain to claim them again, and nothing is moved or deleted.
+        """
+        with main_database(self.write_queue.database_path).read() as database:
+            rows = database.execute(
+                "SELECT source_key,state,COUNT(*) FROM memory_write_jobs GROUP BY source_key,state"
+            ).fetchall()
+        active = self._active_lanes({str(row[0]) for row in rows if str(row[1]) in _WAITING_STATES})
+        counts: dict[str, int] = {}
+        for source_key, state, count in rows:
+            name = str(state)
+            if name in _WAITING_STATES and str(source_key) not in active:
+                name = "suspended"
+            counts[name] = counts.get(name, 0) + int(count)
+        return counts
+
+    def _active_lanes(self, lanes: set[str]) -> set[str]:
+        return {lane for lane in lanes if self.source_active(lane)}
 
     def manual_batch_progress(self) -> tuple[int, int]:
         return 0, 0
@@ -291,33 +329,11 @@ class SdkMemoryRuntime:
         del task_ids
         return []
 
-    async def reconcile_unknown_outputs(
-        self,
-        *,
-        limit: int = 128,
-        exclude_error_codes: tuple[str, ...] = (),
-    ) -> int:
-        reconciled = 0
-        for job in await asyncio.to_thread(
-            self.write_queue.unknown_jobs,
-            limit=limit,
-            exclude_error_codes=exclude_error_codes,
-        ):
-            receipt = await self.coordinator.inquire_write_outcome(job.request_id)
-            if receipt is None:
-                continue
-            await asyncio.to_thread(
-                self.write_queue.settle,
-                job.job_id,
-                state=COMPLETED,
-                sdk_raw_ids=receipt.raw_ids,
-                sdk_memory_ids=receipt.memory_ids,
-            )
-            reconciled += 1
-        return reconciled
-
     async def resume_allowed(self) -> None:
-        await asyncio.to_thread(self.write_queue.readmit_parked)
+        await asyncio.to_thread(
+            self.write_queue.readmit_parked,
+            states=(WAITING_FOR_MODEL,),
+        )
 
     def accepted_backfill_status(self) -> None:
         return None

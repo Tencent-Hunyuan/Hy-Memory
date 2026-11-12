@@ -72,6 +72,9 @@ export const currentChineseMessages = {
   "sdk.raw.loadFailed": "原始对话暂时无法读取。",
   "sdk.raw.searchFailed": "原始对话搜索失败，请重试。",
   "sdk.raw.recent": "最近原始对话",
+  "sdk.raw.empty": "还没有原始对话。连接来源后，对话会显示在这里。",
+  "sdk.raw.total": "{count} 条原始对话",
+  "sdk.raw.total.one": "{count} 条原始对话",
   "sdk.raw.found": "找到 {count} 条",
   "sdk.raw.found.one": "找到 {count} 条",
 
@@ -133,6 +136,7 @@ export const currentChineseMessages = {
   "selectedMemory.save": "保存修改",
   "selectedMemory.author.user": "你",
   "selectedMemory.author.agent": "助手",
+  "selectedMemory.author.tool": "工具",
   "selectedMemory.sourceUnavailable": "来源权限已变化或原文不可用。",
   "selectedMemory.related": "对应记忆",
   "selectedMemory.viewMemory": "查看记忆",
@@ -219,6 +223,10 @@ export const currentEnglishMessages: Record<
   "sdk.raw.searchFailed":
     "Could not search original conversations. Please retry.",
   "sdk.raw.recent": "Recent original conversations",
+  "sdk.raw.empty":
+    "No original conversations yet. Connect a source to see conversations here.",
+  "sdk.raw.total": "{count} original conversations",
+  "sdk.raw.total.one": "{count} original conversation",
   "sdk.raw.found": "{count} results",
   "sdk.raw.found.one": "{count} result",
 
@@ -286,6 +294,7 @@ export const currentEnglishMessages: Record<
   "selectedMemory.save": "Save changes",
   "selectedMemory.author.user": "You",
   "selectedMemory.author.agent": "Assistant",
+  "selectedMemory.author.tool": "Tool",
   "selectedMemory.sourceUnavailable":
     "Source permissions changed or the original text is unavailable.",
   "selectedMemory.related": "Related memory",
@@ -379,6 +388,10 @@ export const currentSpanishMessages: Record<
   "sdk.raw.searchFailed":
     "No se pudieron buscar las conversaciones originales. Reinténtalo.",
   "sdk.raw.recent": "Conversaciones originales recientes",
+  "sdk.raw.empty":
+    "Todavía no hay conversaciones originales. Conecta una fuente para verlas aquí.",
+  "sdk.raw.total": "{count} conversaciones originales",
+  "sdk.raw.total.one": "{count} conversación original",
   "sdk.raw.found": "{count} resultados",
   "sdk.raw.found.one": "{count} resultado",
 
@@ -447,6 +460,7 @@ export const currentSpanishMessages: Record<
   "selectedMemory.save": "Guardar cambios",
   "selectedMemory.author.user": "Tú",
   "selectedMemory.author.agent": "Asistente",
+  "selectedMemory.author.tool": "Herramienta",
   "selectedMemory.sourceUnavailable":
     "Los permisos del origen cambiaron o el texto no está disponible.",
   "selectedMemory.related": "Memoria correspondiente",

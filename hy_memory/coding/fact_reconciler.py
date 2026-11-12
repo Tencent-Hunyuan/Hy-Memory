@@ -18,6 +18,7 @@ import json
 import logging
 import os
 import uuid
+from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -34,6 +35,7 @@ from .types import (
 
 
     MAX_FACT_CHAIN_ENTRIES,
+    CodingWriteError,
     FactReconcileOp,
     WorkingFact,
     WorkingFactDraft,
@@ -259,6 +261,16 @@ def build_chain_summary_prompt(
     return with_output_language(prompt, code, explicit=explicit is not None), code
 
 
+@dataclass
+class FactReconcilePlan:
+    """plan() 的产物：覆盖判定已完成、尚未落库。apply() 才执行 store 操作。"""
+
+    drafts: List[WorkingFactDraft]
+    candidates: List[List[WorkingFact]] = field(default_factory=list)
+    supersedes: Dict[int, List[str]] = field(default_factory=dict)
+    context: Dict[str, Any] = field(default_factory=dict)
+
+
 # ================================================================
 # WorkingFactReconciler
 # ================================================================
@@ -327,15 +339,63 @@ class WorkingFactReconciler:
         language: Optional[str] = None,
     ) -> Tuple[List[WorkingFact], List[FactReconcileOp]]:
         """
-        执行 reconcile + 持久化。memory_at 是这段对话的时间，记到新事实上。
-        language 为显式 prompt 语言码（None → zh/en 自动检测），同时用于演变总结。
+        执行 reconcile + 持久化（plan() 后紧接 apply()）。memory_at 是这段对话的
+        时间，记到新事实上。language 为显式 prompt 语言码（None → zh/en 自动检测），
+        同时用于演变总结。
 
         Returns:
-            (真正落库的新事实, 执行过的 ops)。LLM 挂掉时退化为全 INSERT 不覆盖，
-            宁可多留一条过期事实，也不因为一次调用失败丢结论。
+            (真正落库的新事实, 执行过的 ops)。
+
+        Raises:
+            CodingWriteError(RECONCILE_FAILED)：覆盖判定的 LLM 失败 / 空回复 /
+                解析不出。此时既不插入新事实，也不覆盖任何旧事实。
         """
+        plan = await self.plan(
+            drafts,
+            user_id=user_id,
+            agent_id=agent_id,
+            session_id=session_id,
+            workspace_id=workspace_id,
+            branch=branch,
+            source=source,
+            memory_at=memory_at,
+            language=language,
+        )
+        return await self.apply(plan)
+
+    async def plan(
+        self,
+        drafts: List[WorkingFactDraft],
+        *,
+        user_id: str,
+        agent_id: str = "default_agent",
+        session_id: Optional[str] = None,
+        workspace_id: Optional[str] = None,
+        branch: Optional[str] = None,
+        source: str = "default",
+        memory_at: Optional[datetime] = None,
+        language: Optional[str] = None,
+    ) -> FactReconcilePlan:
+        """检索 candidates + 覆盖判定，不落库。
+
+        没有任何候选时不调 LLM（全部 INSERT 是确定的结论，不是兜底）。调了 LLM 时，
+        有效回复 = JSON 对象且 "ops" 是列表（空列表 = 都不覆盖、只插入）。LLM 调用
+        失败（LLM_UNAVAILABLE）、200 但 content 为空（EMPTY_RESPONSE）、回复不是
+        上述形状（JSON_PARSE_FAILED）时抛 CodingWriteError(RECONCILE_FAILED)。
+        此前 LLM 失败会退化为全 INSERT 不覆盖，留下本该被接续的旧事实。
+        """
+        context = dict(
+            user_id=user_id,
+            agent_id=agent_id,
+            session_id=session_id,
+            workspace_id=workspace_id,
+            branch=branch,
+            source=source,
+            memory_at=memory_at,
+            language=language,
+        )
         if not drafts:
-            return [], []
+            return FactReconcilePlan(drafts=[], context=context)
 
         candidates = await self._retrieve_candidates(
             drafts,
@@ -349,27 +409,37 @@ class WorkingFactReconciler:
 
         try:
             supersedes = await self._llm_decide(drafts, candidates, language=language)
+        except CodingWriteError:
+            raise
         except Exception as e:
-            logger.warning(
-                f"[fact-reconcile] LLM decide failed, insert without supersede: {e}"
-            )
-            supersedes = {}
+            logger.warning(f"[fact-reconcile] LLM decide failed: {e}")
+            raise CodingWriteError(
+                "RECONCILE_FAILED",
+                f"working fact reconcile LLM call failed: {type(e).__name__}: {e}",
+                cause="LLM_UNAVAILABLE",
+            ) from e
 
+        return FactReconcilePlan(
+            drafts=list(drafts),
+            candidates=candidates,
+            supersedes=supersedes,
+            context=context,
+        )
+
+    async def apply(
+        self, plan: FactReconcilePlan,
+    ) -> Tuple[List[WorkingFact], List[FactReconcileOp]]:
+        """执行 plan() 的决策（覆盖旧事实 + 插入新事实）。"""
+        if not plan.drafts:
+            return [], []
         facts, ops = await self._execute(
-            drafts,
-            candidates,
-            supersedes,
-            user_id=user_id,
-            agent_id=agent_id,
-            session_id=session_id,
-            workspace_id=workspace_id,
-            branch=branch,
-            source=source,
-            memory_at=memory_at,
-            language=language,
+            plan.drafts,
+            plan.candidates,
+            plan.supersedes,
+            **plan.context,
         )
         logger.info(
-            f"[fact-reconcile] drafts={len(drafts)} inserted={len(facts)} "
+            f"[fact-reconcile] drafts={len(plan.drafts)} inserted={len(facts)} "
             f"superseded={sum(1 for o in ops if o.action == 'SUPERSEDE')}"
         )
         return facts, ops
@@ -473,6 +543,11 @@ class WorkingFactReconciler:
             max_tokens=self.max_tokens,
             audit_stage="coding_fact_reconcile",
         )
+        failure = self._reply_failure(resp.content)
+        if failure is not None:
+            code, message = failure
+            logger.warning(f"[fact-reconcile] {code}: {message}")
+            raise CodingWriteError("RECONCILE_FAILED", message, cause=code)
         return self._parse_ops(resp.content)
 
     # ------------------------------------------------------------
@@ -599,11 +674,24 @@ class WorkingFactReconciler:
             rows.append(f"for draft[{i}]:\n" + "\n".join(cand_rows))
         return "\n\n".join(rows) if rows else "(none)"
 
+    @classmethod
+    def _reply_failure(cls, text: Optional[str]) -> Optional[Tuple[str, str]]:
+        """回复本身是失败时返回 (cause, message)；有效回复（含 {"ops": []}）返回 None。"""
+        if not (text or "").strip():
+            return "EMPTY_RESPONSE", "working fact reconcile LLM returned empty response"
+        obj = cls._load_object(text)
+        if not isinstance(obj, dict) or not isinstance(obj.get("ops"), list):
+            return (
+                "JSON_PARSE_FAILED",
+                f"working fact reconcile output has no ops list ({len(text)} chars)",
+            )
+        return None
+
     @staticmethod
-    def _parse_ops(text: str) -> Dict[int, List[str]]:
-        """宽松解析 ops，返回 {draft_idx: [fact_id...]}。"""
+    def _load_object(text: Optional[str]) -> Optional[Dict[str, Any]]:
+        """宽松解析出顶层 JSON 对象；解析不出返回 None。"""
         if not text:
-            return {}
+            return None
         s = text.strip()
         # 去 markdown fence
         if s.startswith("```"):
@@ -621,7 +709,14 @@ class WorkingFactReconciler:
                     obj = json.loads(s[start: end + 1])
                 except Exception:
                     obj = None
+        return obj if isinstance(obj, dict) else None
 
+    @classmethod
+    def _parse_ops(cls, text: str) -> Dict[int, List[str]]:
+        """宽松解析 ops，返回 {draft_idx: [fact_id...]}。"""
+        if not text:
+            return {}
+        obj = cls._load_object(text)
         if not isinstance(obj, dict):
             logger.warning(
                 f"[fact-reconcile] failed to parse ops output ({len(text or '')} chars)"
@@ -688,6 +783,11 @@ class WorkingFactReconciler:
                 status="active",
                 memory_at=memory_at,
             )
+
+            # 先确认新事实能向量化，再去覆盖旧事实：否则 embedding 挂掉时旧事实
+            # 已被软删、新事实又落不了库，这条结论就凭空没了。失败抛
+            # CodingWriteError(EMBEDDING_FAILED)，整次写入报失败。
+            new_embedding = await self.store.embed_fact(new_fact)
 
             allowed = {c.fact_id for c in (candidates[idx] if idx < len(candidates) else [])}
             targets = [
@@ -769,7 +869,9 @@ class WorkingFactReconciler:
                         )
 
             try:
-                await self.store.insert_fact(new_fact)
+                await self.store.insert_fact(new_fact, embedding=new_embedding)
+            except CodingWriteError:
+                raise
             except Exception as e:
                 logger.warning(f"[fact-reconcile] INSERT failed: {e}")
                 continue

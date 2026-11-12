@@ -5,6 +5,7 @@ import {
   claimRuntimeServiceForApp,
   claimRuntimeServiceForCli,
   enableRuntimeService,
+  type RuntimeServiceState,
   runtimeServiceEnableMarkerPath,
 } from "@one-memory/runtime-control";
 import { expect, it } from "vitest";
@@ -97,4 +98,26 @@ it("rejects unsupported and unconfirmed writes", async () => {
       false,
     ),
   ).rejects.toThrow("login_preference_unsupported");
+});
+
+it("reads a launchctl-disabled service as off and not switchable, asked fresh", async () => {
+  const dataDir = await appOwned();
+  let state: RuntimeServiceState = {
+    state: "disabled",
+    reason: "service-disabled-by-launchctl",
+    jobPid: null,
+  };
+  const serviceState = async () => state;
+
+  await expect(
+    readLoginPreference(dataDir, "darwin", true, serviceState),
+  ).resolves.toEqual({
+    supported: false,
+    enabled: false,
+    status: "disabled-by-system",
+  });
+  state = { state: "enabled", reason: "service-enabled", jobPid: 4321 };
+  await expect(
+    readLoginPreference(dataDir, "darwin", true, serviceState),
+  ).resolves.toEqual({ supported: true, enabled: true, status: "enabled" });
 });

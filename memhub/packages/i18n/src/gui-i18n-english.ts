@@ -1,4 +1,6 @@
 import { currentEnglishMessages } from "./gui-i18n-current.js";
+import { embeddingSwitchEnglishMessages } from "./gui-i18n-embedding-switch.js";
+import { modeEnglishMessages } from "./gui-i18n-mode.js";
 
 // English translations integrated from PR #114.
 const baseEnglishMessages = {
@@ -67,7 +69,6 @@ const baseEnglishMessages = {
   "memory:整理需要处理": "Processing needs attention",
   "memory:正在整理记忆": "Processing memories",
   "memory:整理状态": "Processing status",
-  "memory:重新整理": "Process again",
   "memory:自动提炼范围": "Automatic extraction window",
   "memory:手动提炼下一批": "Extract next batch manually",
   "memory:刷新核对": "Refresh and check",
@@ -93,10 +94,6 @@ const baseEnglishMessages = {
   "memory:处理（操作）": "process",
   "memory:{count} 条原话": "{count} original excerpts",
   "memory:{count} 条原话.one": "{count} original excerpts",
-  "memory:有 {count} 段对话的整理结果不确定":
-    "Processing results for {count} conversations are uncertain",
-  "memory:有 {count} 段对话的整理结果不确定.one":
-    "Processing results for {count} conversations are uncertain",
   "memory:{count} 次整理已完成": "{count} processing runs completed",
   "memory:{count} 次整理已完成.one": "{count} processing runs completed",
   "memory: · {count} 条在窗口外（原文可搜）":
@@ -230,7 +227,7 @@ const baseEnglishMessages = {
   "arrival.region": "Memory processing status",
   "arrival.importing": "Originals are still importing",
   "arrival.messages": "{count} messages saved",
-  "arrival.messages.one": "{count} messages saved",
+  "arrival.messages.one": "{count} message saved",
   "arrival.conversations": "{count} conversations",
   "arrival.conversations.one": "{count} conversation",
   "arrival.details": "View progress and details",
@@ -545,6 +542,7 @@ const baseEnglishMessages = {
   nativeDevelopmentUnavailable: " (unavailable in development)",
   nativeOpen: "Open {product}",
   nativeQuit: "Quit {product} (background service keeps running)",
+  nativeQuitStopsService: "Quit {product} (also stops the memory service)",
   nativeLoginError: "Could not change the login startup setting. Please retry.",
   nativeMoveTitle: "Move MemHub to Applications first",
   nativeMoveDetail:
@@ -803,6 +801,19 @@ const baseEnglishMessages = {
   设置分组: "Settings sections",
   记忆模型: "Memory model",
   当前模型: "Current model",
+  "分别管理记忆整理与搜索所使用的模型。":
+    "Manage the models used for memory processing and search separately.",
+  记忆整理: "Memory processing",
+  "把会话理解并整理成可长期使用的记忆。":
+    "Turn conversations into memories you can use over the long term.",
+  记忆搜索: "Memory search",
+  "在需要时找到与你的问题最相关的记忆。":
+    "Find the memories most relevant to your question when you need them.",
+  "本地内置（推荐）": "Built-in locally (recommended)",
+  "Embedding · 配置记忆整理后可自定义":
+    "Embedding · Customizable after memory processing is configured",
+  "Embedding · 本机处理，无需额外配置":
+    "Embedding · Processed locally, no extra setup required",
   "正在读取模型…": "Loading model…",
   模型状态暂不可读: "Model status is unavailable",
   尚未配置模型: "No model configured",
@@ -866,7 +877,7 @@ const baseEnglishMessages = {
     "Keep syncing, processing and providing memories without opening the app.",
   导出日志: "Export logs",
   "把本机运行日志打包成一个文件，发给开发排查。":
-    "Package local diagnostic logs into a file to share with support.",
+    "Package all local logs. They may contain conversation text or local paths; share only with trusted developers.",
   "确定退出 One Memory 界面吗？": "Quit the MemHub window?",
   "后台服务会继续同步、整理和提供记忆。":
     "The background service will continue syncing, processing and providing memories.",
@@ -926,6 +937,23 @@ const baseEnglishMessages = {
     "Memory access was revoked, so {name} can no longer look up memories. Full removal could not be confirmed; review these paths manually: {paths}.",
   appRemovalReview:
     "Full connection removal could not be confirmed. Review these paths manually: {paths}.",
+  appProfilesLabel: "{name} profiles",
+  appProfileOn: "{profile}: connected",
+  appProfileOff: "{profile}: not connected",
+  appProfilesHint:
+    "The switch installs the memory connection and grants access for every detected profile, and revokes them all when turned off. While it is on, new profiles are connected automatically.",
+  appProfilesNone:
+    "No {name} profile was detected. Create a profile, then come back to this page.",
+  appProfilesConnectFailed:
+    "These profiles could not be connected: {profiles}. The other profiles were kept. {reason}",
+  appProfilesDisconnectFailed:
+    "These profiles could not be disconnected and can still use memories: {profiles}. Please retry. {reason}",
+  appProfilesRevokedRetained:
+    "Memory access was revoked for these profiles, but not all of their connection files were removed; review them: {profiles}.",
+  appProfileNameUnsupported:
+    "profile names may only use lowercase letters, digits and hyphens, up to 32 characters",
+  "apps.autoHostProfilesFailed":
+    "{name} could not connect these profiles automatically ({profiles}){reason}.",
   "Cursor 的连接凭证已更新。请完全退出并重新打开 Cursor，再开始新对话。":
     "Cursor's connection credential changed. Fully quit and reopen Cursor before starting a new conversation.",
   连接其他工具: "Connect other tools",
@@ -1035,6 +1063,9 @@ const baseEnglishMessages = {
   "少一些重复交代，多一些理解。": "Less repetition. More understanding.",
   onboardingMoreApps: "Scroll for more · {count} apps remaining",
   "onboardingMoreApps.one": "Scroll for more · {count} app remaining",
+  onboardingMoreImportApps: "Scroll horizontally · {count} apps remaining",
+  onboardingImportChecking:
+    "Checking the import result; your selection is kept",
   onboardingAllApps: "All {count} apps shown",
   默认位置: "Default location",
   自定义位置: "Custom location",
@@ -1249,6 +1280,16 @@ const baseEnglishMessages = {
     "Connection failed. Check the model, key, and recipient.",
   "配置或测试结果暂未确认，请核对后重试。":
     "Could not confirm the configuration or test result. Check before retrying.",
+  "索引更新没有完成，仍在使用原来的搜索模型。请检查连接后重试。":
+    "The index update did not complete. The previous search model is still in use. Check the connection and try again.",
+  "上次模型测试结果仍待核对，请稍后重试。":
+    "The previous model test result still needs review. Try again later.",
+  "模型写入暂时关闭。请等待索引维护完成后重试。":
+    "Model writes are temporarily paused. Wait for index maintenance to finish, then try again.",
+  "模型未能确认启用，请在设置中核对。":
+    "Could not confirm that the model was enabled. Check it in Settings.",
+  "已保存的模型配置暂时无法读取，不会重复创建。请重试刷新。":
+    "The saved model configuration is temporarily unavailable. No duplicate will be created. Try refreshing again.",
   所选连接已启用: "Selected app connections are enabled",
   本次未选择应用连接: "No app connection selected this time",
   尚未填写接收方: "No recipient entered",
@@ -1305,10 +1346,33 @@ const baseEnglishMessages = {
   "apps.back": "Back to home",
   "apps.overview": "Memory overview",
   "apps.memories": "Saved memories",
+  "apps.rawConversations": "Original conversations",
+  "apps.rawSaving": "Saving",
+  "apps.rawSavingCompact": "Saving",
+  "apps.rawSavingStatus": "Saving status",
+  "apps.rawSavingDetail":
+    "Original conversations are saved without a generation model",
+  "apps.rawNoExcerpt": "This conversation has no displayable user excerpt",
+  "apps.rawConversation": "Original conversation",
+  "apps.rawSaved": "Original conversation saved",
+  "apps.rawEmpty": "No original conversations saved yet",
+  "apps.rawCheckedEmpty":
+    "Checked: no original-conversation updates to display",
+  "apps.memoryCheckedEmpty": "Checked: no memory updates to display",
+  "apps.recentEmptyCompact": "No updates",
+  "apps.rawWaiting": "Original conversations will appear here when saved",
+  "apps.checkedRecent": "Current content checked",
+  "apps.currentMode": "Current mode",
+  "apps.mode.lite": "Basic memory (lite)",
+  "apps.mode.pro": "Smart memory (pro)",
+  "apps.mode.ultra": "Deep memory (ultra)",
   "apps.readingCount": "Checking local memories…",
+  "apps.rawReadingCount": "Checking original conversations…",
   "apps.startingRetry":
     "The background service is starting; this will update automatically",
   "apps.countWillUpdate": "The memory count will update automatically",
+  "apps.rawCountWillUpdate":
+    "The original-conversation count will update automatically",
   "apps.showingPrevious":
     "Showing the previous data; this will update automatically",
   "apps.unreadable": "Unavailable",
@@ -1406,12 +1470,16 @@ const baseEnglishMessages = {
   "apps.revision": "Version {count}",
   "apps.conversationTime": "Conversation time",
   "apps.importTime": "Import time",
+  "apps.writeTime": "Write time",
+  "apps.updateTime": "Update time",
   "apps.incompleteCalls":
     " · Some calls were not recorded; the list may be incomplete",
   "apps.timeoutWarning":
     "{host} could not look up memories recently. The background service may be busy and should recover automatically.",
   "apps.autoHostFailed": "{name} could not connect automatically{reason}.",
   "apps.failureReason": ": {reason}",
+  "apps.desktopBridgeUnavailable":
+    "One-click connection needs the MemHub desktop app",
   "apps.autoSyncFailed":
     "Continuous sync could not be enabled automatically for {name}. {reason}",
   "apps.noAutoRetry": "It will not retry automatically.",
@@ -1488,8 +1556,6 @@ const baseEnglishMessages = {
     "Bulk action results are retained, but the list could not refresh. It will reload automatically later.",
   "memory:召回范围已保存，但列表刷新失败。请稍后重新打开记忆页。":
     "Recall scope saved, but the list could not refresh. Reopen Memories later.",
-  "memory:重新整理可能再次调用模型。只会重跑结果不确定的对话，是否继续？":
-    "Processing again may call the model. Only conversations with uncertain results will be retried. Continue?",
   "memory:原始对话暂时无法读取": "Could not load original conversations",
   "memory:没有匹配的原始对话": "No matching original conversations",
   "memory:还没有导入的原始对话": "No original conversations imported yet",
@@ -1595,6 +1661,12 @@ const baseEnglishMessages = {
   "memory:来源与主题": "Sources and topics",
   "memory:记忆或原始对话": "Memories or original conversations",
   "memory:原始对话": "Original conversations",
+  "memory:当前使用基础记忆。新对话会保存为原始记录，不会生成高级记忆；以前生成的高级记忆仍会保留，但当前不会显示或参与记忆召回。":
+    "Basic memory is active. New conversations are kept as original records and do not create advanced memories. Existing advanced memories stay saved, but are not shown or used for recall.",
+  "memory:当前使用智能记忆。新对话会由模型整理为高级记忆。":
+    "Smart memory is active. The model turns new conversations into advanced memories.",
+  "memory:当前使用深度记忆。新对话会生成高级记忆，并由知识图谱和 evolve 继续整合。":
+    "Deep memory is active. New conversations create advanced memories that the knowledge graph and evolve continue to consolidate.",
   "memory:地图组织方式": "Map grouping",
   "memory:筛选地图记忆": "Filter map memories",
   "memory:搜索原始对话": "Search original conversations",
@@ -1824,6 +1896,19 @@ const baseEnglishMessages = {
   "memory:还没有开始生成记忆：{reason}（{count} 条待处理）":
     "Memories are not being created: {reason} ({count} pending)",
   "memory:去配置生成模型": "Configure generation model",
+  "memory:模型暂停处理": "Model paused",
+  "memory:模型配置有问题（{reason}），记忆暂停处理，已有 {count} 条在排队":
+    "Model setup problem ({reason}). Memory processing is paused; {count} items are queued",
+  "memory:模型配置有问题（{reason}），记忆暂停处理，已有 {count} 条在排队.one":
+    "Model setup problem ({reason}). Memory processing is paused; {count} item is queued",
+  "memory:API Key 无效或没有权限": "API key is invalid or lacks permission",
+  "memory:找不到模型或地址": "model or URL not found",
+  "memory:请求过于频繁，被服务商限流":
+    "too many requests, rate-limited by the provider",
+  "memory:模型响应超时": "model response timed out",
+  "memory:模型服务出错": "model service error",
+  "memory:无法连接模型服务": "cannot reach the model service",
+  "memory:连接模型服务失败": "connection to the model service failed",
   "calls.directHost": "Direct call (diagnostic)",
   "calls.headline.timedOut": "{host} could not look up memories in time",
   "calls.headline.unavailable": "{host} could not look up memories right now",
@@ -1831,6 +1916,15 @@ const baseEnglishMessages = {
   "calls.headline.empty": "{host} found no matching memories",
   "calls.headline.found": "{host} found {count} related items",
   "calls.headline.found.one": "{host} found {count} related items",
+  "calls.headline.rawOnly": "{host} found {count} original conversations",
+  "calls.headline.rawOnly.one": "{host} found {count} original conversation",
+  "calls.headline.memoryOnly": "{host} found {count} memories",
+  "calls.headline.memoryOnly.one": "{host} found {count} memory",
+  "calls.headline.mixed":
+    "{host} found {memories} memories · {raw} original conversations",
+  "calls.headline.mixed.one":
+    "{host} found {memories} memory · {raw} original conversations",
+  "calls.headline.completed": "{host} call completed",
   "calls.detail.timedOut":
     "Memories are being processed. The lookup timed out, so this answer did not include memories.",
   "calls.detail.unavailable":
@@ -1976,4 +2070,6 @@ const baseEnglishMessages = {
 export const englishMessages = {
   ...baseEnglishMessages,
   ...currentEnglishMessages,
+  ...embeddingSwitchEnglishMessages,
+  ...modeEnglishMessages,
 } as const;

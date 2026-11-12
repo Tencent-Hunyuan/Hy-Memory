@@ -195,7 +195,7 @@ class ChromaVectorStore(VectorStoreBase):
             return False
 
     async def update_payload(self, node_id: str, updates: Dict[str, Any]) -> bool:
-        """更新 payload 字段；若 updates 含 'embedding'，同时更新向量与 documents。"""
+        """更新 payload；content 同步 documents，仅显式 embedding 才替换向量。"""
         if not updates:
             return True
         point_id = self._node_id_to_point_id(node_id)
@@ -224,6 +224,25 @@ class ChromaVectorStore(VectorStoreBase):
                     kwargs["embeddings"] = [new_embedding]
                 if "content" in updates:  # content 变更同步全文 documents
                     kwargs["documents"] = [updates["content"]]
+                    if new_embedding is None:
+                        if not isinstance(updates["content"], str):
+                            raise ValueError("Content must be a string")
+                        # Collection.update re-embeds documents without an explicit
+                        # vector. Chroma >=1.5.9's underlying local/HTTP update
+                        # accepts a partial update with embeddings omitted. Do not
+                        # read/restore a vector: another writer may have changed it.
+                        # Keep the collection's sparse-metadata preparation, but
+                        # deliberately skip its dense embedding function.
+                        kwargs["metadatas"] = self._collection._apply_sparse_embeddings_to_metadatas(
+                            kwargs.get("metadatas"), kwargs["documents"],
+                        )
+                        self._collection._client._update(
+                            collection_id=self._collection.id,
+                            tenant=self._collection.tenant,
+                            database=self._collection.database,
+                            **kwargs,
+                        )
+                        return
                 self._collection.update(**kwargs)
             await _run_in_vdb_pool(_update)
             logger.debug(
@@ -479,6 +498,18 @@ class ChromaVectorStore(VectorStoreBase):
             return []
         effective_aids = list(agent_ids) if agent_ids else ([agent_id] if agent_id else [])
 
+        # 提前判定「只点名 raw 且不允许 raw」：过滤后没有可命中的层，
+        # 直接返回空集，而不是交给 backend 用一个错误的「排除 raw」条件
+        # 去匹配所有非 raw 层（见 #189）。
+        if layers and not allow_raw_layer:
+            _lv = [l.value if hasattr(l, 'value') else str(l) for l in layers]
+            if all(v == MemoryLayer.L1_RAW.value for v in _lv):
+                logger.info(
+                    f"[vector-store] list_by_user: user_ids={effective_uids} "
+                    f"agent_ids={effective_aids} raw-only filter with raw disabled, returning empty"
+                )
+                return []
+
         def _list():
             if len(effective_uids) == 1:
                 where_conditions = [{"user_id": {"$eq": effective_uids[0]}}]
@@ -513,8 +544,9 @@ class ChromaVectorStore(VectorStoreBase):
                 elif layer_values:
                     where_conditions.append({"layer": {"$in": layer_values}})
                 else:
-                    # 只点名了 raw：补排除条件，结果必然为空集
-                    where_conditions.append({"layer": {"$ne": MemoryLayer.L1_RAW.value}})
+                    # 只点名了 raw：置为不可能命中的条件，结果必然为空集。
+                    # 外层已短路返回，这里作为防御兜底，避免误匹配非 raw 层。
+                    where_conditions.append({"layer": {"$eq": "__blocked__"}})
             elif not allow_raw_layer:
                 where_conditions.append({"layer": {"$ne": MemoryLayer.L1_RAW.value}})
 
@@ -895,7 +927,7 @@ class ChromaVectorStore(VectorStoreBase):
         payload = {}
         # 需要从 JSON string 还原为 list/dict 的字段
         json_fields = {
-            "meta_tags", "tags",
+            "meta_tags", "tags", "tag_ners",
             "supersedes", "superseded_by",
             "evidence_chain", "custom",
         }

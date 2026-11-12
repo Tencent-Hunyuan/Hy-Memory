@@ -44,6 +44,7 @@ from one_memory.memory_server.durable_queue import (
 )
 from one_memory.memory_server.registry import WriteRegistry, WriteState
 from one_memory.memory_server.submit import WriteConflictError
+from one_memory.model_backoff import next_retry_at
 from one_memory.user_scope import DEFAULT_USER_ID, USER_ID_PATTERN, UserId
 
 #: Durable keys of another user's writes start with this. A `local` request
@@ -72,6 +73,12 @@ class MemoryWriteReceipt(BaseModel):
     detail: str = ""
     raw_ids: tuple[str, ...] = ()
     memory_ids: tuple[str, ...] = ()
+    #: Why a job still being worked on last failed (`model_auth_failed`, ...),
+    #: or why a failed one failed. A provider failure keeps `state` queued.
+    error_code: str | None = None
+    #: When it is next tried: the job's own retry wait, or the model
+    #: provider's pause (`model_backoff`) while the provider is failing.
+    next_retry_at: str | None = None
 
 
 class OpenAIMessage(BaseModel):
@@ -235,6 +242,8 @@ def sdk_router(dependencies: list[Any] | None = None) -> APIRouter:
             detail=record.detail,
             raw_ids=record.raw_ids,
             memory_ids=record.memory_ids,
+            error_code=record.error_code,
+            next_retry_at=next_retry_at(request.app, record.state, record.next_retry_at),
         )
 
     return instance

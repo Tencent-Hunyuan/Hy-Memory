@@ -11,6 +11,8 @@ instead: plain retrieval over what was imported, the same lane
 from __future__ import annotations
 
 import asyncio
+import logging
+import re
 import time
 from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime
@@ -26,11 +28,70 @@ from one_memory.recall import (
     TruncationBudget,
 )
 
+logger = logging.getLogger(__name__)
+
 FallbackReason = Literal["model_unavailable", "no_memories"]
 
 #: Raw sources this caller may read, or None for every source (a trusted local
 #: caller). An empty set means the caller may read no raw conversation.
 RawSources = frozenset[str] | None
+
+#: What the whole recall request may take beyond the caller's own
+#: `timeout_ms`: the search keeps to that budget, but the checks around it
+#: (is a model configured, is the library empty, which raw sources) and the
+#: raw fallback need a little room of their own. Well under the broker's 15 s
+#: wait on Core, so a slow Core answers 504 before the broker gives up.
+RECALL_TOTAL_GRACE_SECONDS = 3.0
+RECALL_TOTAL_CEILING_SECONDS = 12.0
+
+
+def recall_total_timeout_seconds(timeout_ms: int) -> float:
+    """The most one recall request may take from start to answer."""
+    return min(timeout_ms / 1_000 + RECALL_TOTAL_GRACE_SECONDS, RECALL_TOTAL_CEILING_SECONDS)
+
+
+def _bounded_raw_excerpt(content: str, query: str, limit: int) -> str:
+    """Fit one raw hit without discarding the highest-ranked candidate.
+
+    Prefer the literal query, then its longest matching word. A semantic hit
+    with no lexical anchor keeps its beginning: that is also the part the
+    embedding service preserves when an input exceeds its own token limit.
+    """
+    if len(content) <= limit:
+        return content
+    if limit <= 2:
+        return content[:limit]
+
+    anchor = 0
+    needle = query.strip()
+    if needle:
+        exact = re.search(re.escape(needle), content, re.IGNORECASE)
+        if exact is not None:
+            anchor = exact.start()
+        else:
+            terms = sorted(re.findall(r"\w+", needle), key=len, reverse=True)
+            match = next(
+                (
+                    found
+                    for term in terms
+                    if (found := re.search(re.escape(term), content, re.IGNORECASE)) is not None
+                ),
+                None,
+            )
+            if match is not None:
+                anchor = match.start()
+
+    payload = limit
+    while True:
+        start = max(0, min(anchor - payload // 3, len(content) - payload))
+        end = min(len(content), start + payload)
+        adjusted = limit - int(start > 0) - int(end < len(content))
+        if adjusted == payload:
+            break
+        payload = adjusted
+    prefix = "…" if start > 0 else ""
+    suffix = "…" if end < len(content) else ""
+    return f"{prefix}{content[start:end]}{suffix}"
 
 
 async def recall_with_fallback(
@@ -41,6 +102,7 @@ async def recall_with_fallback(
     has_memories: Callable[[], Awaitable[bool]],
     raw_sources: Callable[[], Awaitable[RawSources]],
     search_raw: Callable[[str, int, RawSources], Awaitable[tuple[HySdkRawHit, ...]]],
+    bounded_sdk_primary: bool = False,
 ) -> RecallReceipt:
     """Memory recall when a model and memories exist, otherwise the raw layer.
 
@@ -52,8 +114,36 @@ async def recall_with_fallback(
         return await recall_memories(request)
     started = time.monotonic()
     if await model_ready():
-        receipt = await recall_memories(request)
-        if receipt.hits or await has_memories():
+        memory_request = request
+        if bounded_sdk_primary:
+            # SDK search is the primary source. Bound it below the HTTP
+            # ceiling, accounting for model readiness and reserving grace for
+            # response handling and any downstream work.
+            search_budget = min(
+                request.timeout_ms / 1_000,
+                RECALL_TOTAL_CEILING_SECONDS - RECALL_TOTAL_GRACE_SECONDS,
+            )
+            remaining = search_budget - (time.monotonic() - started)
+            if remaining <= 0:
+                return RecallReceipt(
+                    state=RecallState.EMPTY,
+                    query=request.query,
+                    scope=request.scope,
+                    hits=(),
+                    used_characters=0,
+                    truncated=True,
+                    truncated_by=TruncationBudget.TIMEOUT,
+                    user_id=request.user_id,
+                )
+            memory_request = request.model_copy(
+                update={"timeout_ms": max(1, int(remaining * 1_000))}
+            )
+        receipt = await recall_memories(memory_request)
+        if (
+            receipt.hits
+            or (bounded_sdk_primary and receipt.truncated_by == TruncationBudget.TIMEOUT)
+            or await has_memories()
+        ):
             return receipt
         reason: FallbackReason = "no_memories"
     else:
@@ -102,6 +192,14 @@ async def _raw_recall(
         # a wider grant than recall had.
         return receipt()
     if remaining_seconds <= 0:
+        # Silent before: the receipt said `truncated_by=timeout_budget` but the
+        # log said nothing, so "no hits" looked the same as "not finished".
+        logger.warning(
+            "recall_raw_budget_exhausted remaining_ms=%.0f timeout_ms=%d reason=%s",
+            remaining_seconds * 1_000,
+            request.timeout_ms,
+            reason,
+        )
         return receipt(truncated_by=TruncationBudget.TIMEOUT)
     try:
         found = await asyncio.wait_for(
@@ -109,7 +207,16 @@ async def _raw_recall(
             timeout=remaining_seconds,
         )
     except TimeoutError:
+        logger.warning(
+            "recall_raw_search_timeout remaining_ms=%.0f timeout_ms=%d query_len=%d",
+            remaining_seconds * 1_000,
+            request.timeout_ms,
+            len(request.query),
+        )
         return receipt(truncated_by=TruncationBudget.TIMEOUT)
+    current_sources = await raw_sources()
+    if sources is not None:
+        sources &= current_sources or frozenset()
     hits: list[RecallHit] = []
     used = 0
     truncated_by: TruncationBudget | None = None
@@ -124,13 +231,23 @@ async def _raw_recall(
                 truncated_by=truncated_by,
                 unexamined=len(found) - index,
             )
-        if used + len(hit.content) > request.character_budget:
+        remaining = request.character_budget - used
+        if remaining <= 0:
             truncated_by = TruncationBudget.CHARACTER
-            continue
+            return receipt(
+                tuple(hits),
+                used=used,
+                truncated_by=truncated_by,
+                unexamined=len(found) - index,
+            )
+        content = hit.content
+        if len(content) > remaining:
+            content = _bounded_raw_excerpt(content, request.query, remaining)
+            truncated_by = TruncationBudget.CHARACTER
         hits.append(
             RecallHit(
                 memory_id=hit.raw_id,
-                content=hit.content,
+                content=content,
                 kind="raw",
                 scopes=(),
                 evidence_ids=(),
@@ -145,5 +262,5 @@ async def _raw_recall(
                 session_id=hit.session_id,
             )
         )
-        used += len(hit.content)
+        used += len(content)
     return receipt(tuple(hits), used=used, truncated_by=truncated_by)

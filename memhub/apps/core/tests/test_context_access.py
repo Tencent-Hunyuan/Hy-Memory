@@ -16,6 +16,8 @@ def database(tmp_path):
     path = tmp_path / "context.sqlite3"
     with closing(sqlite3.connect(path)) as db, db:
         db.execute("CREATE TABLE source_grants(user_id TEXT, source_id TEXT, revoked_at TEXT)")
+        db.execute("INSERT INTO source_grants VALUES('local','cursor',NULL)")
+        db.execute("INSERT INTO source_grants VALUES('local','codex',NULL)")
         db.execute("INSERT INTO source_grants VALUES('local','revoked','2026-09-19')")
         db.execute("INSERT INTO source_grants VALUES('other','cursor','2026-09-19')")
     return path
@@ -43,16 +45,14 @@ def test_memory_only_never_reads_raw_authority(database, monkeypatch):
     assert not result.raw_allowed and result.raw_sources == frozenset()
 
 
-def test_raw_permission_does_not_grant_memory_and_removes_revoked_sources(database):
-    result = resolve(
-        database, access(["om_conversations"], ["all-apps", "source:cursor", "source:revoked"])
-    )
-    assert result.raw_allowed and result.raw_sources == frozenset({"cursor"})
+def test_all_apps_raw_reads_every_connected_source_and_removes_revoked_sources(database):
+    result = resolve(database, access(["om_conversations"], ["all-apps", "source:cursor"]))
+    assert result.raw_allowed and result.raw_sources == frozenset({"cursor", "codex"})
     assert not result.memory_allowed
 
 
-@pytest.mark.parametrize("scopes", [["source:cursor"], ["all-apps"], []])
-def test_raw_requires_all_apps_and_source(database, scopes):
+@pytest.mark.parametrize("scopes", [["source:cursor"], []])
+def test_raw_requires_all_apps(database, scopes):
     with pytest.raises(HTTPException) as error:
         resolve(database, access(["om_conversations"], scopes))
     assert error.value.status_code == 403
@@ -80,9 +80,7 @@ def test_explicit_raw_filter_must_be_currently_authorized(database, source):
     with pytest.raises(HTTPException) as error:
         resolve(
             database,
-            access(
-                ["om_recall", "om_conversations"], ["all-apps", "source:cursor", "source:revoked"]
-            ),
+            access(["om_recall", "om_conversations"], ["all-apps"]),
             raw_source_ids=(source,),
         )
     assert error.value.status_code == 403
@@ -104,10 +102,19 @@ def test_filters_do_not_change_memory_scope(database):
     assert result.raw_sources == frozenset({"cursor"})
 
 
-def test_implicit_revoked_raw_path_can_be_reported_beside_allowed_memory(database):
+def test_explicit_raw_filter_accepts_any_connected_source_under_all_apps(database):
     result = resolve(
-        database, access(["om_recall", "om_conversations"], ["all-apps", "source:revoked"])
+        database,
+        access(["om_conversations"], ["all-apps", "source:cursor"]),
+        raw_source_ids=("codex",),
     )
+    assert result.raw_allowed and result.raw_sources == frozenset({"codex"})
+
+
+def test_no_connected_raw_source_can_be_reported_beside_allowed_memory(database):
+    with closing(sqlite3.connect(database)) as db, db:
+        db.execute("UPDATE source_grants SET revoked_at='2026-09-20' WHERE user_id='local'")
+    result = resolve(database, access(["om_recall", "om_conversations"], ["all-apps"]))
     assert result.memory_allowed and not result.raw_allowed
 
 
@@ -124,7 +131,7 @@ def test_expired_deadline_does_not_open_database(database, monkeypatch):
     with pytest.raises(TimeoutError):
         resolve_context_authority(
             ContextSearchRequest(query="x"),
-            access(["om_conversations"], ["all-apps", "source:cursor"]),
+            access(["om_conversations"], ["all-apps"]),
             database,
             deadline=time.monotonic() - 1,
         )

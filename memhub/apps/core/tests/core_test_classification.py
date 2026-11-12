@@ -14,8 +14,8 @@ from pathlib import Path
 import pytest
 
 PRIMARY_MARKERS = ("unit", "contract", "integration", "performance", "live")
-EXPECTED_TEST_FILE_COUNT = 313
-EXPECTED_TEST_FILES_SHA256 = "dcada5d5421767196a79e415dd47c2b6c6d67681972dbe81481b31867d318928"
+EXPECTED_TEST_FILE_COUNT = 332
+EXPECTED_TEST_FILES_SHA256 = "47729e0d1906a91c4dcf899fafbeb9c6fe56dcb3610ed3d7d162beb0e9c9faca"
 
 # Pure transformations, validation models, parity checks and state machines.
 # This list is intentionally small: uncertain files default to contract.
@@ -52,6 +52,7 @@ INTEGRATION_FILES = frozenset(
     {
         "test_auth.py",
         "test_backup_endpoint.py",
+        "test_backup_includes_memories.py",
         "test_recall_raw_fallback.py",
         "test_core_ready_before_recovery.py",
         "test_embedding_switch_api.py",
@@ -68,8 +69,10 @@ INTEGRATION_FILES = frozenset(
         "test_external_installation_permissions.py",
         "test_fault_matrix.py",
         "test_file_import_operations.py",
+        "test_graph_open_guard.py",
         "test_graph_width_endpoint.py",
         "test_import_api.py",
+        "test_import_job_retention.py",
         "test_live_capture.py",
         "test_live_watch_grants.py",
         "test_log_privacy.py",
@@ -93,6 +96,7 @@ INTEGRATION_FILES = frozenset(
         "test_model_profile_context_reset.py",
         "test_onboarding_profile.py",
         "test_parent_watchdog.py",
+        "test_pinned_sdk_raw_search.py",
         "test_policy_api_wiring.py",
         "test_recall_scope_control.py",
         "test_retrieval_lifespan.py",

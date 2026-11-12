@@ -20,7 +20,8 @@ vi.mock("axios", () => ({
   // `submitBackup`, which posts without an instance.
   default: {
     create: vi.fn(() => transport),
-    get: vi.fn(),
+    // `fetchBackupEstimate` reads without an instance too.
+    get: transport.get,
     post: transport.post,
   },
 }));
@@ -161,6 +162,7 @@ const CORE = new Map<string, { status: number; data: unknown }>([
         blocked_stages: [
           { kind: "extract", reason: "model_missing", count: 2 },
         ],
+        pipeline: { mode: "pro", configured_mode: "pro" },
       },
     },
   ],
@@ -202,7 +204,9 @@ const READ_ONLY_PATHS = [
   "/api/v1/live-sync",
   "/api/v1/memory-processing",
   "/api/v1/model-profiles",
+  "/api/v2/home-projection",
   "/api/v2/home-summary",
+  "/api/v2/raw",
   "/api/v2/memory-library",
   "/api/v2/memories/",
   "/api/v2/user-profile",
@@ -257,6 +261,9 @@ describe("CLI-20 status summary", () => {
     expect(report.sections.model).toMatchObject({ state: "ok", profiles: 1 });
     expect(report.sections.memories).toMatchObject({
       state: "ok",
+      content_plane: "memory",
+      visible_count: 42,
+      effective_mode: "pro",
       memory_count: 42,
     });
     expect(report.summary.state).toBe("ok");
@@ -903,7 +910,10 @@ describe("CLI-21 memory reads", () => {
     expect(isReadOnlyPath("/api/v2/memories/ask")).toBe(false);
     expect(isReadOnlyPath("/api/v2/memories/m1")).toBe(true);
     expect(isReadOnlyPath("/api/v2/memory-library")).toBe(true);
+    expect(isReadOnlyPath("/api/v2/home-projection")).toBe(true);
     expect(isReadOnlyPath("/api/v2/home-summary")).toBe(true);
+    expect(isReadOnlyPath("/api/v2/raw")).toBe(true);
+    expect(isReadOnlyPath("/api/v1/settings/memory-mode/plan")).toBe(true);
     // The retired v1 data plane is no longer a CLI read.
     expect(isReadOnlyPath("/api/v1/memories/m1")).toBe(false);
     expect(isReadOnlyPath("/api/v1/home-summary")).toBe(false);
@@ -1085,7 +1095,8 @@ describe("malformed success responses", () => {
 
   it("refuses a model profile whose string fields are not strings", async () => {
     transport.get.mockImplementation(async (url: string) => {
-      if (url !== "/api/v1/model-profiles") return CORE.get(url);
+      if (url !== "/api/v1/model-profiles")
+        return CORE.get(url) ?? { status: 404, data: { detail: "not_found" } };
       return {
         status: 200,
         data: [
@@ -1140,7 +1151,7 @@ describe("backup create target refusal is rejected, not usage_error", () => {
     let code: number;
     try {
       code = await run(
-        ["backup", "create", "--target", "/tmp/outside.db", "--json"],
+        ["backup", "create", "--target", "/tmp/outside.db", "--yes", "--json"],
         {},
       );
     } finally {
@@ -1157,6 +1168,128 @@ describe("backup create target refusal is rejected, not usage_error", () => {
       state: "rejected",
       code: "backup_target_outside_data_dir",
       exit_code: 1,
+    });
+  });
+});
+
+describe("backup create shows the size first and includes the memories", () => {
+  const ESTIMATE = {
+    target: "/synthetic/data/backups/b.memhub-backup",
+    bytes: 50 * 1024 * 1024,
+    files: 9,
+    local_bytes: 50 * 1024 * 1024,
+    export_bytes: 0,
+    free_bytes: 10 * 1024 * 1024 * 1024,
+    memories_included: true,
+    backend: { kind: "local", vector: "chroma", graph: "kuzu" },
+  };
+
+  it("previews without --yes: the size, the target, nothing written", async () => {
+    transport.get.mockImplementation(async (url: string, config?: unknown) =>
+      String(url).endsWith("/api/v1/backup/estimate")
+        ? { status: 200, data: { ...ESTIMATE, seen: config } }
+        : { status: 404, data: {} },
+    );
+    const streams = captureStreams();
+    let code: number;
+    try {
+      code = await run(
+        ["backup", "create", "--target", "backups/b", "--json"],
+        {},
+      );
+    } finally {
+      streams.restore();
+    }
+    expect(code!).toBe(0);
+    expect(transport.post).not.toHaveBeenCalled();
+    const [, config] = transport.get.mock.calls.find(([url]) =>
+      String(url).endsWith("/api/v1/backup/estimate"),
+    ) as [string, { params?: unknown }];
+    expect(config.params).toEqual({ target: "backups/b" });
+    expect(JSON.parse(streams.stdout())).toMatchObject({
+      command: "backup",
+      verb: "create",
+      state: "preview",
+      target: ESTIMATE.target,
+      memories_included: true,
+      bytes: ESTIMATE.bytes,
+      applied: false,
+      next_step: "memhub backup create --target backups/b --yes",
+    });
+  });
+
+  it("says the size in words for a person", async () => {
+    transport.get.mockImplementation(async (url: string) =>
+      String(url).endsWith("/api/v1/backup/estimate")
+        ? { status: 200, data: ESTIMATE }
+        : { status: 404, data: {} },
+    );
+    const streams = captureStreams();
+    try {
+      expect(await run(["backup", "create", "--target", "backups/b"], {})).toBe(
+        0,
+      );
+    } finally {
+      streams.restore();
+    }
+    expect(streams.stdout()).toContain("全部记忆");
+    expect(streams.stdout()).toContain("50.0 MB");
+    expect(streams.stdout()).toContain("可用空间 10.0 GB");
+    expect(streams.stdout()).toContain("--yes");
+  });
+
+  it("writes with --yes and reports what the backup holds", async () => {
+    transport.post.mockImplementation(async (url: string) =>
+      String(url).endsWith("/api/v1/backup")
+        ? {
+            status: 200,
+            data: {
+              target: ESTIMATE.target,
+              bytes: 1234,
+              files: 9,
+              schema_version: 2,
+              memories_included: true,
+              pause_ms: 84,
+              copy_ms: 15,
+              backend: ESTIMATE.backend,
+              users: ["local"],
+              counts: {},
+            },
+          }
+        : { status: 404, data: {} },
+    );
+    const streams = captureStreams();
+    try {
+      expect(
+        await run(["backup", "create", "--target", "backups/b", "--yes"], {}),
+      ).toBe(0);
+    } finally {
+      streams.restore();
+    }
+    expect(streams.stdout()).toContain("memories_included: true");
+    expect(streams.stdout()).toContain("writes_paused_ms: 84");
+  });
+
+  it("passes a refused target's code through from the preview", async () => {
+    transport.get.mockImplementation(async (url: string) =>
+      String(url).endsWith("/api/v1/backup/estimate")
+        ? { status: 409, data: { detail: "backup_target_exists" } }
+        : { status: 404, data: {} },
+    );
+    const streams = captureStreams();
+    let code: number;
+    try {
+      code = await run(
+        ["backup", "create", "--target", "backups/b", "--json"],
+        {},
+      );
+    } finally {
+      streams.restore();
+    }
+    expect(code!).toBe(1);
+    expect(JSON.parse(streams.stdout())).toMatchObject({
+      state: "rejected",
+      code: "backup_target_exists",
     });
   });
 });

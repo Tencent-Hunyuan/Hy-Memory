@@ -233,6 +233,31 @@ describe("memories add-status", () => {
     });
   });
 
+  it("passes the retry code and time of an addition still waiting", async () => {
+    transport.get.mockResolvedValue({
+      status: 200,
+      data: {
+        ...addReceipt("pending"),
+        error_code: "model_auth_failed",
+        next_retry_at: "2026-11-02T10:00:00+00:00",
+      },
+    });
+    const json = await capturedRun([
+      "memories",
+      "add-status",
+      REQUEST,
+      "--json",
+    ]);
+    expect(JSON.parse(json.stdout).receipt).toMatchObject({
+      state: "pending",
+      error_code: "model_auth_failed",
+      next_retry_at: "2026-11-02T10:00:00+00:00",
+    });
+    const text = await capturedRun(["memories", "add-status", REQUEST]);
+    expect(text.stdout).toContain("error_code: model_auth_failed");
+    expect(text.stdout).toContain("next_retry_at: 2026-11-02T10:00:00+00:00");
+  });
+
   it("reports an unknown request id as not_found, exit 1", async () => {
     transport.get.mockResolvedValue({
       status: 404,
@@ -364,6 +389,33 @@ describe("memories update / delete pass the namespace", () => {
       "/api/v2/memories/fact-1?kind=fact&variant=coding",
       undefined,
     );
+  });
+
+  it("reports a delete answered 404 as already gone and exits 0", async () => {
+    transport.delete.mockResolvedValue({
+      status: 404,
+      data: { detail: "memory_not_found" },
+    });
+    const json = await capturedRun([
+      "memories",
+      "delete",
+      "gone-1",
+      "--yes",
+      "--json",
+    ]);
+    expect(json.code).toBe(0);
+    expect(JSON.parse(json.stdout)).toEqual({
+      schema_version: 2,
+      product: expect.any(String),
+      command: "memories delete",
+      state: "committed",
+      operation: "delete",
+      memory_id: "gone-1",
+      already_gone: true,
+    });
+    const text = await capturedRun(["memories", "delete", "gone-1", "--yes"]);
+    expect(text.code).toBe(0);
+    expect(text.stdout).toContain("未找到记忆 gone-1");
   });
 
   it("explains an ambiguous id instead of a bare code", async () => {

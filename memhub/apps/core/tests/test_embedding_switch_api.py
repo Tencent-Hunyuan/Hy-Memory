@@ -40,7 +40,7 @@ def builtin_base() -> str:
 def backend(monkeypatch) -> FakeReembedBackend:
     fake = FakeReembedBackend()
     monkeypatch.setattr(
-        "one_memory.embedding_switch.default_reembed_backend", lambda _data_dir: fake
+        "one_memory.embedding_switch.default_reembed_backend", lambda _data_dir, **_kw: fake
     )
     return fake
 
@@ -259,6 +259,48 @@ def test_a_switch_over_the_api_pauses_writes_and_keeps_intake(tmp_path, backend)
             moved = await client.post(f"/api/v1/model-profiles/{proxied.profile_id}/activate")
             assert moved.status_code == 200, moved.text
             assert app.state.embedding_spaces.require_live().space_id == spaces["live_space_id"]
+
+    asyncio.run(scenario())
+
+
+def test_graph_backfill_blocks_starting_an_embedding_switch(tmp_path, backend):
+    backend.store.put(
+        builtin_base(),
+        512,
+        {"m1": ("memory", "local")},
+        model="bge-small-zh-v1.5",
+    )
+
+    async def scenario():
+        app = application(tmp_path)
+        async with app.router.lifespan_context(app), client_for(app) as client:
+            await recovered(client)
+            profile = remote_profile(app)
+            plan = (
+                await client.post(
+                    "/api/v1/embedding-switches/plan",
+                    json={"profile_id": profile.profile_id},
+                )
+            ).json()
+            hold = asyncio.Event()
+            task = asyncio.create_task(hold.wait())
+            app.state.memory_graph_backfill._task = task
+            try:
+                response = await client.post(
+                    "/api/v1/embedding-switches",
+                    json={
+                        "profile_id": profile.profile_id,
+                        "expected_revision": profile.revision,
+                        "plan_token": plan["plan_token"],
+                    },
+                )
+                assert response.status_code == 409
+                assert response.json()["detail"] == "memory_lifecycle_busy"
+                assert app.state.embedding_switch.writes_open() is True
+            finally:
+                task.cancel()
+                await asyncio.gather(task, return_exceptions=True)
+                app.state.memory_graph_backfill._task = None
 
     asyncio.run(scenario())
 

@@ -70,18 +70,39 @@ export function R6ImportProgress({
   });
 
   const ids = [...new Set(sourceIds)];
+  const scrollable = ids.length > 3;
   return (
     <section
       className="r6-import-progress"
       aria-label={text("本次应用导入进度")}
-      data-count={ids.length <= 2 ? String(ids.length) : "many"}
+      aria-keyshortcuts={
+        scrollable ? "ArrowLeft ArrowRight Home End" : undefined
+      }
+      data-count={ids.length <= 3 ? String(ids.length) : "many"}
       ref={scroller}
+      tabIndex={scrollable ? 0 : -1}
       onPointerDown={markUserScrollIntent}
       onTouchStart={markUserScrollIntent}
       onWheel={markUserScrollIntent}
       onKeyDown={(event) => {
-        if (["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key))
-          markUserScrollIntent();
+        if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key))
+          return;
+        markUserScrollIntent();
+        const element = event.currentTarget;
+        const card = element.querySelector<HTMLElement>(
+          ".r6-import-progress-card",
+        );
+        const step = (card?.offsetWidth ?? 0) + 16;
+        event.preventDefault();
+        if (event.key === "ArrowLeft" || event.key === "ArrowRight") {
+          element.scrollBy({
+            left: event.key === "ArrowRight" ? step : -step,
+          });
+        } else {
+          element.scrollTo({
+            left: event.key === "End" ? element.scrollWidth : 0,
+          });
+        }
       }}
       onScroll={(event) => {
         if (userScrollIntent.current)
@@ -133,7 +154,7 @@ export function R6ImportProgress({
             <div className="r6-import-progress-orbit" aria-hidden="true">
               <span />
               <div className="r6-import-progress-icon">
-                <AppMark id={id} label={source?.display_name ?? id} size={30} />
+                <AppMark id={id} label={source?.display_name ?? id} size={40} />
               </div>
             </div>
             <h2>{source?.display_name ?? id}</h2>

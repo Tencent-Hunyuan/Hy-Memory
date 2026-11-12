@@ -52,6 +52,24 @@ describe("model profile reports", () => {
     expect(JSON.stringify(document)).not.toContain("internal.example.invalid");
   });
 
+  it("reports the output-token field, max_tokens from an older Core", async () => {
+    const chosen = await readModelProfiles(
+      vi.fn().mockResolvedValue({
+        state: "ok",
+        data: [{ ...PROFILE, output_token_parameter: "max_completion_tokens" }],
+      }) as CoreReader,
+    );
+    expect(chosen).toMatchObject({
+      profiles: [{ output_token_parameter: "max_completion_tokens" }],
+    });
+    const older = await readModelProfiles(
+      vi.fn().mockResolvedValue({ state: "ok", data: [PROFILE] }) as CoreReader,
+    );
+    expect(older).toMatchObject({
+      profiles: [{ output_token_parameter: "max_tokens" }],
+    });
+  });
+
   it("shows one exact profile and rejects malformed success DTOs", async () => {
     const reader = vi.fn().mockResolvedValue({ state: "ok", data: [PROFILE] });
     const shown = await readModelProfile(

@@ -587,3 +587,215 @@
   ) {
   transition: none;
 }
+
+/* The current controller keeps generation-only behavior. The presentation
+   intentionally returns to the original open-source setup composition:
+   an open form column, a separate context column, and a distinct advanced state. */
+.onboarding-model-group {
+  display: block;
+}
+.onboarding-model-group > .onboarding-model-intro {
+  margin-bottom: 0;
+}
+.onboarding-model-field .om-option-menu-button,
+.generation-model-field :is(input, select) {
+  width: 100%;
+  min-width: 0;
+  height: 54px;
+  padding: 12px 16px;
+  border: 1px solid #c0ccd5;
+  border-radius: 8px;
+  background: #f0f5f6;
+  color: #262a2e;
+  font:
+    400 14px / 23px "Noto Sans SC",
+    "PingFang SC",
+    sans-serif;
+  transition:
+    border-color var(--r6-fast, 140ms),
+    background-color var(--r6-fast, 140ms);
+}
+.onboarding-model-field .om-option-menu-button:hover:not(:disabled),
+.generation-model-field :is(input, select):hover:not(:disabled) {
+  border-color: #9fb6ad;
+  background: #eaf1f2;
+}
+.generation-model-field select:not(:disabled),
+.generation-technical-toggle:not(:disabled) {
+  cursor: pointer;
+}
+:is(.onboarding-model-field, .generation-model-field) [aria-invalid="true"] {
+  border-color: #a24646;
+}
+.onboarding-model-field small,
+.generation-model-field small {
+  color: #63707b;
+  font-size: 12px;
+  line-height: 19px;
+}
+.onboarding-model-default-summary {
+  display: grid;
+  gap: 6px;
+  min-height: 54px;
+  margin-top: 12px;
+  color: #63707b;
+  font-size: 12px;
+  line-height: 20px;
+}
+.onboarding-model-default-summary strong {
+  color: #33424d;
+  font-size: 14px;
+  font-weight: 600;
+}
+.generation-technical-disclosure {
+  margin-top: 23px;
+}
+.generation-technical-toggle {
+  display: flex;
+  width: 100%;
+  min-height: 28px;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: #4e6478;
+  font:
+    500 13px / 21px "Noto Sans SC",
+    "PingFang SC",
+    sans-serif;
+  transition:
+    background-color var(--r6-fast, 140ms),
+    color var(--r6-fast, 140ms);
+}
+.generation-technical-toggle:hover:not(:disabled) {
+  background: #ffffff66;
+  color: #33424d;
+}
+.generation-technical-fields {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 19px 30px;
+  margin-top: 34px;
+}
+.generation-technical-fields[hidden] {
+  display: none;
+}
+.generation-model-field {
+  display: grid;
+  min-width: 0;
+  gap: 5px;
+  color: #63707b;
+  font-size: 12px;
+  line-height: 20px;
+}
+.generation-model-field:has([name="base_url"]),
+.generation-runtime-fields,
+.generation-runtime-note,
+.generation-thinking {
+  grid-column: 1 / -1;
+}
+.generation-model-field :is(input, select) {
+  height: 42px;
+  padding: 9px 12px;
+  font-size: 13px;
+  line-height: 21px;
+}
+.generation-runtime-fields {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 24px;
+}
+.generation-runtime-note {
+  color: #63707b;
+  font-size: 12px;
+  line-height: 19px;
+}
+.generation-thinking {
+  display: flex;
+  min-height: 28px;
+  align-items: center;
+  gap: 10px;
+  color: #416e5c;
+  font-size: 14px;
+  line-height: 23px;
+}
+.onboarding-model-r6 .generation-model-error {
+  color: #a24646;
+}
+.onboarding-model-form[data-advanced="true"]
+  :is(
+    .onboarding-model-intro,
+    .onboarding-model-provider,
+    .onboarding-model-key,
+    .onboarding-model-default-summary
+  ) {
+  display: none;
+}
+.onboarding-model-form[data-advanced="true"] .generation-technical-disclosure {
+  margin-top: 0;
+}
+.onboarding-model-form[data-advanced="true"] .generation-technical-toggle {
+  min-height: 28px;
+}
+.onboarding-model-recovery-actions,
+.onboarding-model-feedback {
+  margin-top: 8px;
+}
+@media (min-width: 761px) {
+  .onboarding-model-group {
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    scrollbar-width: thin;
+    scrollbar-gutter: stable;
+    scroll-padding: 12px;
+    padding-inline: 4px 16px;
+  }
+}
+@media (min-width: 761px) and (max-height: 959px) {
+  .onboarding-model-form[data-advanced="false"]
+    .onboarding-model-field
+    :is(input, select, .om-option-menu-button) {
+    height: 44px;
+    padding-top: 8px;
+    padding-bottom: 8px;
+  }
+  .generation-technical-fields {
+    margin-top: 16px;
+  }
+}
+@media (max-width: 760px) {
+  .generation-technical-fields,
+  .generation-runtime-fields {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 12px;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .generation-technical-toggle,
+  .generation-model-field :is(input, select) {
+    transition: none;
+  }
+}
+[data-native-reduce-motion="true"]
+  :is(
+    .generation-technical-toggle,
+    .generation-model-field input,
+    .generation-model-field select
+  ) {
+  transition: none;
+}
+.onboarding-model-r6
+  :is(
+    .om-option-menu-button,
+    .generation-technical-toggle,
+    .generation-model-field input,
+    .generation-model-field select,
+    .onboarding-model-field input
+  ):focus-visible {
+  outline: 2px solid #557c93;
+  outline-offset: 3px;
+}

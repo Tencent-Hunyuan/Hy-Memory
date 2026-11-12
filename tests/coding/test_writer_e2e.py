@@ -36,6 +36,16 @@ def _reconcile_resp(ops):
     return json.dumps({"ops": ops})
 
 
+class _FailingEmbed:
+    """向量化服务整体不可用。"""
+
+    async def embed(self, text):
+        raise RuntimeError("embedding service down")
+
+    async def embed_batch(self, texts):
+        raise RuntimeError("embedding service down")
+
+
 def _coding_messages():
     return [
         ChatMessage(role="user", content="帮我打包发布到私有包索引"),
@@ -220,16 +230,117 @@ class TestCodingWriterE2E:
         assert sorted(await coding_store.list_user_tasks("u1")) == ["T1", "T2"]
 
     async def test_extractor_failure(self, coding_store, mock_embed):
-        """extractor LLM 失败 → 空 drafts → 空 ops"""
+        """extractor LLM 失败 → success=False / LLM_ERROR，什么都不存，trace 也不追加"""
         ext = CodingMemoryExtractor(FailingLLMProvider())
         rec = CodingMemoryReconciler(coding_store, mock_embed, MockLLMProvider("{}"))
         writer = CodingWriter(
             store=coding_store, extractor=ext, reconciler=rec,
             llm_provider=FailingLLMProvider(), embed_service=mock_embed,
         )
-        resp = await writer.write(_coding_messages(), user_id="u1", workspace_id="ws")
-        assert resp["success"] is True
-        assert resp["ops"] == []
+        resp = await writer.write(
+            _coding_messages(), user_id="u1", workspace_id="ws", session_id="s1",
+        )
+        assert resp["success"] is False
+        assert resp["error_code"] == 502
+        assert resp["agent_error_code"] == "LLM_ERROR"
+        assert resp["error_message"].startswith("[LLM_ERROR]")
+        assert resp["ops"] == [] and resp["experience_ids"] == []
+        assert resp["fact_ids"] == []
+        assert await coding_store.list_user_tasks("u1") == []
+        assert await coding_store.get_recent_trace_messages(
+            user_id="u1", agent_id="default_agent", max_user_turns=5,
+        ) == [], "失败的写入不追加 trace：重跑时历史里不会多出这段"
+
+    async def test_extractor_failure_then_rerun_stores(self, coding_store, mock_embed):
+        """LLM 恢复后换 request_id 重跑，正常落库。"""
+        failing = CodingMemoryExtractor(FailingLLMProvider())
+        rec = CodingMemoryReconciler(coding_store, mock_embed, MockLLMProvider("{}"))
+        writer = CodingWriter(
+            store=coding_store, extractor=failing, reconciler=rec,
+            llm_provider=FailingLLMProvider(), embed_service=mock_embed,
+        )
+        first = await writer.write(
+            _coding_messages(), user_id="u1", session_id="s1", request_id="r1",
+        )
+        assert first["success"] is False
+
+        llm = MockLLMProvider([
+            _extract_resp([{"task": "T1", "solution": "S", "confidence": 0.9}]),
+            _reconcile_resp([{"draft_idx": 0, "action": "ADD"}]),
+        ])
+        writer.extractor = CodingMemoryExtractor(llm)
+        writer.reconciler = CodingMemoryReconciler(coding_store, mock_embed, llm)
+        second = await writer.write(
+            _coding_messages(), user_id="u1", session_id="s1", request_id="r2",
+        )
+        assert second["success"] is True
+        assert await coding_store.list_user_tasks("u1") == ["T1"]
+
+    async def test_extractor_empty_reply_is_failure(self, coding_store, mock_embed):
+        llm = MockLLMProvider("")
+        writer = CodingWriter(
+            store=coding_store, extractor=CodingMemoryExtractor(llm),
+            reconciler=CodingMemoryReconciler(coding_store, mock_embed, llm),
+            llm_provider=llm, embed_service=mock_embed,
+        )
+        resp = await writer.write(_coding_messages(), user_id="u1", session_id="s1")
+        assert resp["success"] is False
+        assert resp["agent_error_code"] == "EMPTY_RESPONSE"
+
+    async def test_experience_embedding_failure_is_failure(
+        self, coding_config, mock_embed,
+    ):
+        """经验向量化失败 → EMBEDDING_FAILED，SQLite 里也不留没有向量的经验。"""
+        from hy_memory.coding.store import CodingMemoryStore
+
+        store = CodingMemoryStore(coding_config, embed_service=_FailingEmbed())
+        await store.initialize()
+        try:
+            llm = MockLLMProvider([
+                _extract_resp([{"task": "T1", "solution": "S", "confidence": 0.9}]),
+                _reconcile_resp([{"draft_idx": 0, "action": "ADD"}]),
+            ])
+            writer = CodingWriter(
+                store=store, extractor=CodingMemoryExtractor(llm),
+                reconciler=CodingMemoryReconciler(store, _FailingEmbed(), llm),
+                llm_provider=llm, embed_service=_FailingEmbed(),
+            )
+            resp = await writer.write(
+                _coding_messages(), user_id="u1", session_id="s1",
+            )
+            assert resp["success"] is False
+            assert resp["agent_error_code"] == "EMBEDDING_FAILED"
+            assert resp["experience_ids"] == []
+            assert await store.list_user_tasks("u1") == []
+        finally:
+            await store.close()
+
+    async def test_fact_embedding_failure_is_failure(self, coding_config, mock_embed):
+        """事实向量化失败 → EMBEDDING_FAILED，事实不落库。"""
+        from hy_memory.coding.store import CodingMemoryStore
+
+        store = CodingMemoryStore(coding_config, embed_service=_FailingEmbed())
+        await store.initialize()
+        try:
+            llm = MockLLMProvider(_extract_resp([], {"statement": "构建产物在 dist/"}))
+            writer = CodingWriter(
+                store=store, extractor=CodingMemoryExtractor(llm),
+                reconciler=CodingMemoryReconciler(store, _FailingEmbed(), llm),
+                llm_provider=llm, embed_service=_FailingEmbed(),
+            )
+            resp = await writer.write(
+                _coding_messages(), user_id="u1", session_id="s1",
+            )
+            assert resp["success"] is False
+            assert resp["agent_error_code"] == "EMBEDDING_FAILED"
+            assert resp["fact_ids"] == []
+            with store._lock:
+                n = store._conn.execute(
+                    "SELECT COUNT(*) FROM working_fact WHERE user_id=?", ("u1",),
+                ).fetchone()[0]
+            assert n == 0
+        finally:
+            await store.close()
 
     async def test_existing_tasks_not_shown_to_extractor(self, coding_store, mock_embed):
         """库里已有的 task 不得进抽取 prompt——抽取只读这一段，去重是 reconcile 的事"""
@@ -247,6 +358,142 @@ class TestCodingWriterE2E:
         )
         await writer.write(_coding_messages(), user_id="u1", workspace_id="ws/a")
         assert "老 task" not in llm.calls[0]["prompt"]
+
+
+def _count_rows(store, sql, *args):
+    with store._lock:
+        return store._conn.execute(sql, args).fetchone()[0]
+
+
+def _writer_with(store, embed, *, extract_llm, exp_llm, fact_llm):
+    from hy_memory.coding.fact_reconciler import WorkingFactReconciler
+
+    return CodingWriter(
+        store=store,
+        extractor=CodingMemoryExtractor(extract_llm),
+        reconciler=CodingMemoryReconciler(store, embed, exp_llm),
+        fact_reconciler=WorkingFactReconciler(store, embed, fact_llm),
+        llm_provider=extract_llm,
+        embed_service=embed,
+    )
+
+
+_TWO_LAYER_EXTRACT = _extract_resp(
+    [{"task": "T1", "solution": "S", "confidence": 0.9}],
+    {"statement": "config 位于 /etc/app/config.yaml"},
+)
+
+
+@pytest.mark.asyncio
+class TestReconcileDecisionFailure:
+    """经验层 / 事实层 reconcile 的模型决策失败：整次写入 success=False、
+    agent_error_code=RECONCILE_FAILED，本次一条经验 / 事实都不落库，也不覆盖旧事实。"""
+
+    @pytest.mark.parametrize("exp_llm,cause", [
+        (FailingLLMProvider(), "LLM_UNAVAILABLE"),
+        (MockLLMProvider(""), "EMPTY_RESPONSE"),
+        (MockLLMProvider("not json at all"), "JSON_PARSE_FAILED"),
+    ])
+    async def test_experience_reconcile_failure_stores_nothing(
+        self, coding_store, mock_embed, exp_llm, cause,
+    ):
+        writer = _writer_with(
+            coding_store, mock_embed,
+            extract_llm=MockLLMProvider(_TWO_LAYER_EXTRACT),
+            exp_llm=exp_llm,
+            fact_llm=MockLLMProvider(_reconcile_resp([])),
+        )
+        resp = await writer.write(_coding_messages(), user_id="u1", session_id="s1")
+
+        assert resp["success"] is False
+        assert resp["error_code"] == 502
+        assert resp["agent_error_code"] == "RECONCILE_FAILED"
+        assert resp["reconcile_error_code"] == cause
+        assert resp["error_message"].startswith(f"[RECONCILE_FAILED] {cause}")
+        assert resp["experience_ids"] == [] and resp["fact_ids"] == []
+        assert await coding_store.list_user_tasks("u1") == []
+        assert _count_rows(
+            coding_store, "SELECT COUNT(*) FROM working_fact WHERE user_id=?", "u1",
+        ) == 0, "事实层的决策虽然没问题，也不能先落库"
+        assert await coding_store.get_recent_trace_messages(
+            user_id="u1", agent_id="default_agent", max_user_turns=5,
+        ) == []
+
+    async def test_valid_no_ops_reply_is_success(self, coding_store, mock_embed):
+        """经验层 {"ops": []}：有效的「无需任何操作」，写入成功，经验层不存。"""
+        writer = _writer_with(
+            coding_store, mock_embed,
+            extract_llm=MockLLMProvider(_TWO_LAYER_EXTRACT),
+            exp_llm=MockLLMProvider(_reconcile_resp([])),
+            fact_llm=MockLLMProvider(_reconcile_resp([])),
+        )
+        resp = await writer.write(_coding_messages(), user_id="u1", session_id="s1")
+
+        assert resp["success"] is True
+        assert resp["ops"] == [] and resp["experience_ids"] == []
+        assert await coding_store.list_user_tasks("u1") == []
+        assert len(resp["fact_ids"]) == 1, "事实层照常插入"
+
+    @pytest.mark.parametrize("fact_llm,cause", [
+        (FailingLLMProvider(), "LLM_UNAVAILABLE"),
+        (MockLLMProvider(""), "EMPTY_RESPONSE"),
+        (MockLLMProvider("不是 JSON"), "JSON_PARSE_FAILED"),
+    ])
+    async def test_fact_reconcile_failure_stores_nothing(
+        self, coding_store, mock_embed, fact_llm, cause,
+    ):
+        """事实层覆盖判定失败：新事实不插入、旧事实不被覆盖，经验层也不先落库。"""
+        from hy_memory.coding.types import WorkingFact
+
+        await coding_store.insert_fact(WorkingFact(
+            fact_id="f_old", user_id="u1", agent_id="default_agent",
+            session_id="s1", statement="config 位于 /opt/app/config.yaml",
+        ))
+        writer = _writer_with(
+            coding_store, mock_embed,
+            extract_llm=MockLLMProvider(_TWO_LAYER_EXTRACT),
+            exp_llm=MockLLMProvider(_reconcile_resp([{"draft_idx": 0, "action": "ADD"}])),
+            fact_llm=fact_llm,
+        )
+        resp = await writer.write(_coding_messages(), user_id="u1", session_id="s1")
+
+        assert resp["success"] is False
+        assert resp["agent_error_code"] == "RECONCILE_FAILED"
+        assert resp["reconcile_error_code"] == cause
+        assert await coding_store.list_user_tasks("u1") == [], "经验层不得先落库"
+        assert _count_rows(
+            coding_store, "SELECT COUNT(*) FROM working_fact WHERE user_id=?", "u1",
+        ) == 1, "只剩旧事实，新事实没插入"
+        old = await coding_store.get_fact("f_old", user_id="u1")
+        assert old.status == "active", "旧事实不得被覆盖"
+
+    async def test_rerun_with_new_request_id_after_recovery(
+        self, coding_store, mock_embed,
+    ):
+        writer = _writer_with(
+            coding_store, mock_embed,
+            extract_llm=MockLLMProvider(_TWO_LAYER_EXTRACT),
+            exp_llm=FailingLLMProvider(),
+            fact_llm=MockLLMProvider(_reconcile_resp([])),
+        )
+        first = await writer.write(
+            _coding_messages(), user_id="u1", session_id="s1", request_id="r1",
+        )
+        assert first["success"] is False
+
+        writer.reconciler = CodingMemoryReconciler(
+            coding_store, mock_embed,
+            MockLLMProvider(_reconcile_resp([{"draft_idx": 0, "action": "ADD"}])),
+        )
+        second = await writer.write(
+            _coding_messages(), user_id="u1", session_id="s1", request_id="r2",
+        )
+        assert second["success"] is True
+        assert await coding_store.list_user_tasks("u1") == ["T1"]
+        assert len(second["fact_ids"]) == 1
+        assert _count_rows(
+            coding_store, "SELECT COUNT(*) FROM working_fact WHERE user_id=?", "u1",
+        ) == 1
 
 
 @pytest.mark.asyncio

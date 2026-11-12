@@ -12,10 +12,19 @@ dependencies = [
     "fastapi>=0.141.1",
     "filelock>=3.32.4",
     # Public SDK version validated against MemHub's permission and recall contracts.
-    "hy-memory==2.0.11",
+    "hy-memory==2.0.16",
     # chromadb arrives through the HY SDK; locked here so an unrelated upgrade
     # cannot move the SDK's store. Built-in embedding consumes numpy directly.
     "chromadb==1.5.9",
+    # The drivers the SDK opens for the storage backends a person may choose
+    # with `memhub settings backends` (docs/contracts/storage-backends-v1.md),
+    # ~9 MB in the frozen Core. Pinned to what the SDK's own CI tests.
+    # qdrant's optional `fastembed` is left out on purpose: it downloads its
+    # BM25 model at runtime, and the SDK degrades qdrant to pure vector search
+    # without it. faiss-cpu (~18 MB) is not shipped: MemHub refuses the `faiss`
+    # backend (`storage_backend_faiss_unsupported`).
+    "neo4j==6.4.1",
+    "qdrant-client==1.19.1",
     "numpy==2.5.2",
     "httpx>=0.28.1",
     "keyring>=25.7.0",

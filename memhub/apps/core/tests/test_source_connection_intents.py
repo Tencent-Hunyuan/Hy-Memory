@@ -16,7 +16,7 @@ from one_memory.imports.connections import SourceConnectionStore
 from one_memory.imports.grants import SourceGrantStore
 from one_memory.imports.jobs import ImportJobStore
 from one_memory.imports.sources.registry import build_source_catalog
-from one_memory.onboarding import OnboardingStore
+from one_memory.onboarding import OnboardingProgressUpdate, OnboardingStore
 
 
 @pytest.mark.parametrize("entry", ["connect", "authorize"])
@@ -197,6 +197,82 @@ def test_connection_retry_reuses_completed_job_and_checks_root_snapshot(tmp_path
     asyncio.run(scenario())
 
 
+def test_connection_returns_committed_receipt_before_live_activation_finishes(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setattr("one_memory.model_presets._preset_data", lambda: None)
+
+    async def scenario():
+        home = tmp_path / "home"
+        root = home / ".claude/projects"
+        root.mkdir(parents=True)
+        app = create_app(
+            Settings(
+                data_dir=tmp_path / "data",
+                source_home=home,
+                api_token=SecretStr("test"),
+                automatic_memory_processing=False,
+                live_sync_enabled=False,
+            ),
+            source_catalog=build_source_catalog(home=home, environment={}),
+        )
+        async with (
+            app.router.lifespan_context(app),
+            AsyncClient(
+                transport=ASGITransport(app=app),
+                base_url="http://test",
+                headers={"Authorization": "Bearer test"},
+            ) as client,
+        ):
+            found = await client.post("/api/v1/sources/claude-code/location")
+            started = asyncio.Event()
+            release = asyncio.Event()
+            original = app.state.live_sync_supervisor.initialize_source
+
+            async def blocked_initialize(source_id, *, baseline_missing_files):
+                started.set()
+                await release.wait()
+                return await original(
+                    source_id,
+                    baseline_missing_files=baseline_missing_files,
+                )
+
+            monkeypatch.setattr(
+                app.state.live_sync_supervisor,
+                "initialize_source",
+                blocked_initialize,
+            )
+            try:
+                response = await asyncio.wait_for(
+                    client.post(
+                        "/api/v1/sources/connect",
+                        json={
+                            "source_ids": ["claude-code"],
+                            "request_id": "fast-receipt",
+                            "source_roots": {
+                                "claude-code": found.json()["root_id"],
+                            },
+                            "onboarding": True,
+                            "full_rescan": True,
+                            "enable_sync": True,
+                        },
+                    ),
+                    timeout=1,
+                )
+                assert response.status_code == 200
+                assert response.json()["request_id"] == "fast-receipt"
+                assert app.state.config_store.sync_enabled("claude-code")
+                await asyncio.wait_for(started.wait(), timeout=1)
+                assert not release.is_set()
+            finally:
+                release.set()
+            tasks = tuple(app.state.source_activation_tasks.values())
+            if tasks:
+                await asyncio.gather(*tasks)
+
+    asyncio.run(scenario())
+
+
 @pytest.mark.parametrize(
     ("turn_count", "age_days", "limited"),
     [
@@ -371,7 +447,14 @@ def test_onboarding_persists_one_history_window_on_every_accepted_source(tmp_pat
     database = tmp_path / "data.sqlite"
     grants = SourceGrantStore(database, home=home)
     jobs = ImportJobStore(database)
-    OnboardingStore(database)
+    onboarding = OnboardingStore(database)
+    onboarding.update_progress(
+        OnboardingProgressUpdate(
+            mode_intent="pro",
+            setup_step="model",
+            model_profile_id="9be6d465-4cf2-4c72-93f7-15f3c012bc80",
+        )
+    )
     store = SourceConnectionStore(grants, jobs, home=home)
     catalog = build_source_catalog(home=home, environment={})
     cutoff = datetime(2026, 10, 13, 5, 0, tzinfo=UTC)
@@ -391,3 +474,7 @@ def test_onboarding_persists_one_history_window_on_every_accepted_source(tmp_pat
     assert receipt.accepted_source_ids == ("claude-code", "codex")
     assert {job.history_after for job in receipt.jobs} == {cutoff}
     assert store.get("bounded-first-import") == receipt
+    state = onboarding.get()
+    assert state.mode_intent == "pro"
+    assert state.setup_step == "model"
+    assert state.model_profile_id == "9be6d465-4cf2-4c72-93f7-15f3c012bc80"

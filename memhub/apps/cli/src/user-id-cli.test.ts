@@ -208,6 +208,27 @@ describe("--user-id on the memory commands", () => {
     expect(direct.get.mock.calls[0][1].params).toEqual({ user_id: "wife" });
   });
 
+  it("prints the retry code and time of a write still waiting", async () => {
+    direct.get.mockResolvedValue({
+      data: {
+        request_id: REQUEST,
+        state: "accepted",
+        created_at: "T1",
+        updated_at: "T2",
+        error_code: "model_timeout",
+        next_retry_at: "2026-11-02T10:00:00+00:00",
+      },
+    });
+    const text = await capturedRun(["write", "status", REQUEST]);
+    expect(text.stdout).toContain("error_code: model_timeout");
+    expect(text.stdout).toContain("next_retry_at: 2026-11-02T10:00:00+00:00");
+    const json = await capturedRun(["write", "status", REQUEST, "--json"]);
+    expect(JSON.parse(json.stdout).write).toMatchObject({
+      error_code: "model_timeout",
+      next_retry_at: "2026-11-02T10:00:00+00:00",
+    });
+  });
+
   it("passes the user in the body of memory writes and searches", async () => {
     await capturedRun(["memories", "add", "Prefers tea", "--user-id", "wife"]);
     expect(transport.post.mock.calls[0][0]).toBe("/api/v2/memories");
@@ -372,6 +393,48 @@ describe("sources connect for a Hermes profile", () => {
       expect(result.stderr).toContain("hermes");
     }
     expect(transport.post).not.toHaveBeenCalled();
+  });
+
+  it("says the user id need not equal the Hermes profile name", async () => {
+    const result = await capturedRun([
+      "sources",
+      "connect",
+      "hermes",
+      "--user-id",
+      "wife:work",
+      "--root",
+      "~/.hermes/profiles/wife:work",
+    ]);
+    expect(result.code).toBe(2);
+    expect(result.stderr).toContain("用户 ID 不必等于 Hermes profile 名");
+    expect(result.stderr).toContain(
+      "--user-id wife-work --root ~/.hermes/profiles/wife:work",
+    );
+    expect(transport.post).not.toHaveBeenCalled();
+  });
+
+  it("explains a refused overlapping or profiles-container root", async () => {
+    for (const code of [
+      "hermes_root_is_profiles_container",
+      "hermes_root_overlaps_other_user",
+    ]) {
+      transport.post.mockResolvedValueOnce({
+        status: code.endsWith("container") ? 422 : 409,
+        data: { detail: code },
+      });
+      const result = await capturedRun([
+        "sources",
+        "connect",
+        "hermes",
+        "--user-id",
+        "kid",
+        "--root",
+        "/profiles",
+      ]);
+      expect(result.code).toBe(1);
+      expect(result.stdout).toContain(code);
+      expect(result.stdout).toContain("--root");
+    }
   });
 });
 

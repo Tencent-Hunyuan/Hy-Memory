@@ -15,9 +15,13 @@ it("bakes fallback release identity when the packaging pipeline omits it", async
   expect(config).toMatch(
     /__ONE_MEMORY_BUILD_NUMBER__: JSON\.stringify\(\s*String\(releaseBuildNumber\)/,
   );
-  expect(config).toMatch(
-    /process\.env\.ONE_MEMORY_COMMIT\?\.trim\(\) \|\| readSourceCommit\(\)/,
+  expect(config).toContain(
+    "const releaseCommit = resolveReleaseCommit(process.env.ONE_MEMORY_COMMIT)",
   );
+  expect(config).toMatch(/if \(!trimmed\) return readSourceCommit\(\);/);
+  // A supplied commit must be the full 40-character form the runtime accepts.
+  expect(config).toContain("/^[0-9a-f]{40}$/i.test(trimmed)");
+  expect(config).toContain("return trimmed.toLowerCase();");
   expect(config).toMatch(
     /execFileSync\("git", \["rev-parse", "HEAD"\],[\s\S]*?encoding: "utf8"/,
   );

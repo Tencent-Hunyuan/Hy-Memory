@@ -5,6 +5,7 @@ import {
   translate,
   translateCount,
 } from "@one-memory/i18n";
+import { classifyCallResult } from "@one-memory/operations";
 import {
   clearAllCallEventsRequest,
   clearCallEventsRequest,
@@ -85,13 +86,31 @@ export function callEventHeadline(
   locale: GuiLocale = "zh-Hans",
 ) {
   const name = host ?? callHostName(item.host_id, locale);
-  const fixed = HEADLINES[item.state as keyof typeof HEADLINES];
+  const classification = classifyCallResult(item);
+  const fixed = HEADLINES[classification as keyof typeof HEADLINES];
   if (fixed) return translate(locale, fixed, { host: name });
-  const count = item.raw_count + item.memory_count;
-  return translateCount(locale, "calls.headline.found", count, {
-    host: name,
-    count: plainCount(locale, count),
-  });
+  if (classification === "raw-only")
+    return translateCount(locale, "calls.headline.rawOnly", item.raw_count, {
+      host: name,
+      count: plainCount(locale, item.raw_count),
+    });
+  if (classification === "memory-only")
+    return translateCount(
+      locale,
+      "calls.headline.memoryOnly",
+      item.memory_count,
+      {
+        host: name,
+        count: plainCount(locale, item.memory_count),
+      },
+    );
+  if (classification === "mixed")
+    return translateCount(locale, "calls.headline.mixed", item.memory_count, {
+      host: name,
+      memories: plainCount(locale, item.memory_count),
+      raw: plainCount(locale, item.raw_count),
+    });
+  return translate(locale, "calls.headline.completed", { host: name });
 }
 export function callRowHeadline(
   item: CallEvent,

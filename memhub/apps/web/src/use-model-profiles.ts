@@ -19,6 +19,7 @@ import {
   updateModelProfile,
 } from "./api";
 import { modelErrorText } from "./model-error-text";
+import { profileFromProbe } from "./model-profile-readiness";
 import {
   clearPendingModelCreation,
   readPendingModelCreation,
@@ -82,6 +83,7 @@ export function useModelProfiles() {
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [refreshError, setRefreshError] = useState<string | null>(null);
+  const [refreshing, setRefreshing] = useState(false);
   const [pendingCreation, setPendingCreation] = useState<string | null>(null);
   const [creationMissing, setCreationMissingState] = useState<string | null>(
     null,
@@ -107,6 +109,7 @@ export function useModelProfiles() {
   const alive = useRef(false);
   const session = useRef(0);
   const readVersion = useRef(0);
+  const refreshingReads = useRef(0);
   const flight = useRef<{ key: string; promise: Promise<unknown> } | null>(
     null,
   );
@@ -119,6 +122,8 @@ export function useModelProfiles() {
     async (afterOperation = false) => {
       const version = ++readVersion.current;
       const owner = session.current;
+      refreshingReads.current++;
+      setRefreshing(true);
       try {
         const next = await getModelProfiles();
         if (
@@ -141,6 +146,10 @@ export function useModelProfiles() {
             ? "操作已完成，但配置列表暂未刷新。已保留操作回执，请刷新核对，不要重复保存。"
             : "暂时无法刷新模型配置，已确认的配置仍保留。请重试刷新。",
         );
+      } finally {
+        refreshingReads.current = Math.max(0, refreshingReads.current - 1);
+        if (alive.current && refreshingReads.current === 0)
+          setRefreshing(false);
       }
     },
     [setProfiles],
@@ -165,6 +174,7 @@ export function useModelProfiles() {
       alive.current = false;
       session.current++;
       readVersion.current++;
+      refreshingReads.current = 0;
       flight.current = null;
       creationMissingRef.current = null;
     };
@@ -305,12 +315,7 @@ export function useModelProfiles() {
           })]: result,
         }));
         setProfiles((previous) =>
-          previous.map((item) =>
-            item.profile_id === result.profile_id &&
-            item.revision === result.profile_revision
-              ? { ...item, capabilities: result.capabilities }
-              : item,
-          ),
+          previous.map((item) => profileFromProbe(item, result) ?? item),
         );
       },
       (reason) =>
@@ -336,6 +341,7 @@ export function useModelProfiles() {
     busy,
     error,
     refreshError,
+    refreshing,
     pendingCreation,
     creationMissing,
     pendingProbe,

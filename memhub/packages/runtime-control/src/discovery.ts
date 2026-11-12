@@ -16,7 +16,16 @@ export interface RuntimeAttachment {
    * `degraded`, never `healthy`. Null/absent when the receipt predates the
    * field (an older Runtime), which is treated as "unknown", not "healthy". */
   sidecarState?: "running" | "failed" | "stopped" | null;
+  /** Build the Runtime published in its receipt. `undefined` when the receipt
+   * predates the field (a Runtime older than every build that publishes it);
+   * `null` members when the Runtime does not know its own build. */
+  runtimeBuild?: RuntimeReceiptBuild;
   health: RuntimeIdentity;
+}
+
+export interface RuntimeReceiptBuild {
+  buildNumber: number | null;
+  commit: string | null;
 }
 
 export interface RuntimeAttachmentOptions {
@@ -63,6 +72,7 @@ interface RuntimeServiceReceipt {
   status: "starting" | "running" | "stopping";
   corePort: number | null;
   sidecarState: "running" | "failed" | "stopped" | null;
+  build?: RuntimeReceiptBuild;
 }
 
 /** The Core port a *running* managed Runtime published, or null when there is
@@ -143,6 +153,9 @@ export async function discoverRuntimeAttachment(
     port: receipt.port,
     servicePid: service?.pid ?? null,
     sidecarState: service?.sidecarState ?? null,
+    ...(service?.build === undefined
+      ? {}
+      : { runtimeBuild: Object.freeze({ ...service.build }) }),
     health: Object.freeze({ ...health }),
   });
 }
@@ -190,6 +203,7 @@ async function readRuntimeServiceReceipt(
   ) {
     throw new RuntimeDiscoveryError("runtime_service_receipt_invalid");
   }
+  const build = receiptBuild(item);
   return {
     instanceId: item.instance_id,
     pid: item.pid,
@@ -199,6 +213,28 @@ async function readRuntimeServiceReceipt(
       item.sidecar === undefined
         ? null
         : (item.sidecar as RuntimeServiceReceipt["sidecarState"]),
+    ...(build === undefined ? {} : { build }),
+  };
+}
+
+/** A malformed build field reads as "unknown", never as a receipt error: the
+ * build only decides whether an App adopts this Runtime, and an unknown build
+ * makes it leave the Runtime alone. */
+function receiptBuild(
+  item: Record<string, unknown>,
+): RuntimeReceiptBuild | undefined {
+  if (!("build_number" in item) && !("git_commit" in item)) return undefined;
+  const build = item.build_number;
+  const commit = item.git_commit;
+  return {
+    buildNumber:
+      typeof build === "number" && Number.isSafeInteger(build) && build > 0
+        ? build
+        : null,
+    commit:
+      typeof commit === "string" && /^[0-9a-f]{7,40}$/.test(commit)
+        ? commit
+        : null,
   };
 }
 

@@ -259,7 +259,7 @@ def test_old_branch_job_executes_its_frozen_revision_after_harness_rewind(tmp_pa
         ):
             assert request_id == old_job.request_id
             captured.extend(records)
-            await before_hy_invocation()
+            await before_hy_invocation(True)
             return SimpleNamespace(raw_ids=(), memory_ids=())
 
     asyncio.run(

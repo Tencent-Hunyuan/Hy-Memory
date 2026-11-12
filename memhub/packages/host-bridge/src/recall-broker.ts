@@ -968,6 +968,12 @@ export class RecallBroker {
         sendJson(response, error.status, { error: error.message });
         return;
       }
+      // Core took the request and has not answered: it is running and busy,
+      // which a 502 ("unavailable") misreported as stopped (#231).
+      if (isCoreTimeout(error)) {
+        sendJson(response, 504, { error: "recall_timeout" });
+        return;
+      }
       sendJson(response, 502, {
         error: "MemHub Core recall is unavailable",
       });
@@ -1377,6 +1383,16 @@ function sendJson(
   response.statusCode = status;
   response.setHeader("Content-Type", "application/json; charset=utf-8");
   response.end(`${JSON.stringify(value)}\n`);
+}
+
+/** Core accepted the call and did not answer in time, or answered 504 itself. */
+function isCoreTimeout(error: unknown): boolean {
+  return (
+    axios.isAxiosError(error) &&
+    (error.response?.status === 504 ||
+      (!error.response &&
+        (error.code === "ECONNABORTED" || error.code === "ETIMEDOUT")))
+  );
 }
 
 function isLoopback(address: string | undefined): boolean {

@@ -47,20 +47,46 @@ from one_memory.local_embedding import LocalEmbedder
 from one_memory.log_file import confine_hy_sdk_logging
 from one_memory.memory_features import (
     FEATURES,
-    FEATURES_BY_NAME,
+    PARAMETERS,
+    SETTINGS_BY_NAME,
     FeatureOverrides,
+    SettingValue,
     feature_overrides,
+    parameter_value,
 )
 from one_memory.model_profiles import (
     ModelProfileSnapshot,
     ProviderKind,
     disable_thinking_params,
+    output_token_field,
 )
+from one_memory.storage_backends import ResolvedStorage, storage_kwargs
 
 _RUNTIME_LOCK = threading.RLock()
 BUILTIN_RETRIEVAL_PROFILE_ID = "builtin-retrieval"
 _LOCAL_ONNX_PLACEHOLDER_URL = "http://127.0.0.1/local-onnx"
 DEFAULT_RELEVANCE_FLOOR = 0.35
+
+#: `PUT /api/v2/memories/{id}`: the new text of a Coding/Working memory could
+#: not be embedded; the SDK kept the stored memory unchanged (hy-memory #399).
+MEMORY_UPDATE_EMBEDDING_FAILED = "memory_update_embedding_failed"
+#: Response header of the same route when the SDK updated a chat memory in the
+#: vector store but not its graph node (`graph_sync_failed`, hy-memory #439).
+GRAPH_SYNC_HEADER = "X-Memory-Graph-Sync"
+
+
+def sdk_edit_embedding_failed(error: BaseException) -> bool:
+    """Whether an SDK edit was refused because its new text could not be embedded.
+
+    hy-memory 2.0.16 raises `CodingWriteError` with the stable
+    `error_code="EMBEDDING_FAILED"` from a Coding/Working `update` instead of
+    storing the edit without a vector. The class is not exported from the
+    package root, so the stable code is what is read.
+    """
+    return isinstance(error, RuntimeError) and getattr(error, "error_code", None) == (
+        "EMBEDDING_FAILED"
+    )
+
 
 #: The SDK's memory modes. A mode never changes a collection name: the space
 #: names the collections, the mode only which stores the client opens.
@@ -192,6 +218,7 @@ class SdkClientHandle:
         mode: str | None = None,
         features: FeatureOverrides = (),
         language: str | None = None,
+        storage: ResolvedStorage | None = None,
     ) -> None:
         self._profile = profile
         self._api_key = api_key
@@ -204,6 +231,8 @@ class SdkClientHandle:
         self.features = features
         #: The SDK prompt language (`ui_language`); None = SDK auto-detect.
         self.language = language
+        #: The storage backends (`storage_backends`); None = Kuzu + Chroma.
+        self.storage = storage
         self._lease: ClientLease | None = None
         self._constructing: asyncio.Future[ClientLease] | None = None
         self._lock = asyncio.Lock()
@@ -236,6 +265,7 @@ class SdkClientHandle:
                         mode=self.mode,
                         features=self.features,
                         **language_kwargs(self.language),
+                        **storage_kwargs(self.storage),
                     )
                 )
                 self._constructing = constructing
@@ -321,21 +351,27 @@ def sdk_relevance_floor() -> float:
     return min(1.0, max(0.0, value))
 
 
-def sdk_feature_defaults() -> dict[str, bool]:
-    """Each `memory_features` feature's SDK default, as a fresh config has it.
+def sdk_feature_defaults() -> dict[str, SettingValue]:
+    """Each `memory_features` setting's SDK default, as a fresh config has it.
 
     That is the SDK's code default unless the process environment sets the
     SDK's own variable (`FeatureSpec.env`), exactly what an unset feature
     leaves on a client.
     """
     config = MemoryConfig()
-    return {
+    defaults: dict[str, SettingValue] = {
         spec.name: bool(getattr(getattr(config, spec.section), spec.field)) for spec in FEATURES
     }
+    for parameter in PARAMETERS:
+        defaults[parameter.name] = parameter_value(
+            parameter.name, getattr(getattr(config, parameter.section), parameter.field)
+        )
+    return defaults
 
 
 def apply_sdk_features(
-    config: MemoryConfig, features: Mapping[str, bool] | Iterable[tuple[str, bool]]
+    config: MemoryConfig,
+    features: Mapping[str, SettingValue] | Iterable[tuple[str, SettingValue]],
 ) -> MemoryConfig:
     """Set each feature a person chose on its `MemoryConfig` field.
 
@@ -346,7 +382,7 @@ def apply_sdk_features(
     """
     values = dict(features.items() if isinstance(features, Mapping) else features)
     for name, value in feature_overrides(values):
-        spec = FEATURES_BY_NAME[name]
+        spec = SETTINGS_BY_NAME[name]
         setattr(getattr(config, spec.section), spec.field, value)
     return config
 
@@ -367,9 +403,10 @@ def language_kwargs(language: str | None) -> LanguageKwargs:
 def apply_sdk_language(config: MemoryConfig, language: str | None) -> MemoryConfig:
     """Set the SDK prompt language (`MemoryConfig.language`), when there is one.
 
-    None (zh-Hans, or no choice) sets nothing: the SDK detects zh/en as it
-    always did. Like a feature, the language never touches `vector_store`, so
-    the collection identity never depends on it.
+    None (no language set) sets nothing: the SDK detects zh/en as it always
+    did. Every display language, zh-Hans included, is set explicitly. Like a
+    feature, the language never touches `vector_store`, so the collection
+    identity never depends on it.
     """
     if language is not None:
         config.language = language
@@ -383,8 +420,9 @@ def build_sdk_config(
     *,
     api_key: str | None,
     data_dir: Path,
-    features: Mapping[str, bool] | Iterable[tuple[str, bool]] = (),
+    features: Mapping[str, SettingValue] | Iterable[tuple[str, SettingValue]] = (),
     language: str | None = None,
+    storage: ResolvedStorage | None = None,
 ) -> MemoryConfig:
     """Map a model snapshot and its embedding space to an SDK configuration.
 
@@ -397,6 +435,13 @@ def build_sdk_config(
     (`memory_features`), which are set on top; with none the config is
     exactly what it was before the setting existed. So is `language`
     (`apply_sdk_language`); None leaves the SDK's own zh/en detection.
+
+    `storage` is the `storage_backends` setting with its secrets; None is the
+    embedded Kuzu + Chroma pair. Every backend field is always set here and
+    never left to the SDK's environment defaults, so a stray
+    `MEMORY_VECTOR_STORE` or `MEMORY_GRAPH_PROVIDER` has no effect. A Qdrant
+    server gets `<prefix>_<space base>`: the home's prefix keeps two homes on
+    one server apart.
     """
     if mode is not None and mode not in {"lite", "pro", "ultra"}:
         raise HySdkRuntimeError("hy_sdk_memory_mode_invalid")
@@ -439,6 +484,8 @@ def build_sdk_config(
         "model": profile.model,
         "api_key": generation_key,
         "base_url": generation_endpoint,
+        # Always the profile's, never `MEMORY_LLM_OUTPUT_TOKEN_PARAMETER`.
+        "output_token_parameter": output_token_field(profile),
     }
     # The SDK sends `extra_body` on every chat call, chat and coding/working
     # alike. Without it DeepSeek spent the whole agent_max_tokens on thinking
@@ -446,6 +493,40 @@ def build_sdk_config(
     thinking_off = disable_thinking_params(profile)
     if thinking_off:
         llm["extra_body"] = thinking_off
+
+    vector_store: dict[str, Any] = {
+        "provider": "chroma",
+        "collection_name": collection,
+        "persist_directory": str(root / "vector"),
+        "embedding_dims": dimensions,
+        "host": None,
+        "port": None,
+        "api_key": None,
+    }
+    graph_store: dict[str, Any] = {
+        "provider": "kuzu",
+        "db_path": str(root / (space.graph_dir or DEFAULT_GRAPH_DIR)),
+        "url": None,
+        "username": None,
+        "password": None,
+        "database": None,
+    }
+    if storage is not None and storage.vector_is_custom:
+        vector_store.update(
+            provider=storage.vector_provider,
+            collection_name=storage.collection_name(collection),
+            host=storage.vector_host,
+            port=storage.vector_port,
+            api_key=storage.vector_api_key,
+        )
+    if storage is not None and storage.graph_is_remote:
+        graph_store.update(
+            provider=storage.graph_provider,
+            url=storage.graph_url,
+            username=storage.graph_username,
+            password=storage.graph_password,
+            database=storage.graph_database,
+        )
 
     config = MemoryConfig.from_dict(
         {
@@ -459,29 +540,18 @@ def build_sdk_config(
                 "base_url": embedding_endpoint,
                 "embedding_dims": dimensions,
             },
-            "vector_store": {
-                "provider": "chroma",
-                "collection_name": collection,
-                "persist_directory": str(root / "vector"),
-                "embedding_dims": dimensions,
-                "host": None,
-                "port": None,
-                "api_key": None,
-            },
-            "graph_store": {
-                "provider": "kuzu",
-                "db_path": str(root / (space.graph_dir or DEFAULT_GRAPH_DIR)),
-                "url": None,
-                "username": None,
-                "password": None,
-                "database": None,
-            },
+            "vector_store": vector_store,
+            "graph_store": graph_store,
             "cache": {
                 "backend": "sqlite",
                 "db_path": str(root / "cache.sqlite3"),
             },
             "history": {"db_path": str(root / "history.sqlite3")},
             "coding": {"db_path": str(root / "coding.sqlite3")},
+            # hy-memory 2.0.16 can keep the Coding/Working store in PostgreSQL
+            # (`MEMORY_BUSINESS_STORE`). MemHub's store is the SQLite file above,
+            # which backups and migrations copy: never left to the environment.
+            "business_store": {"backend": "sqlite", "postgres_dsn": None},
         }
     )
     return apply_sdk_language(apply_sdk_features(config, features), language)
@@ -497,6 +567,7 @@ def _acquire_for_handle(
     mode: str | None,
     features: FeatureOverrides = (),
     language: str | None = None,
+    storage: ResolvedStorage | None = None,
 ) -> ClientLease:
     # `acquire_client` is looked up at call time, so a stand-in replaces every
     # construction. A handle without a space keeps the call it always made.
@@ -510,6 +581,7 @@ def _acquire_for_handle(
         features=features,
         **named,
         **language_kwargs(language),
+        **storage_kwargs(storage),
     )
 
 
@@ -523,6 +595,7 @@ def acquire_client(
     mode: str | None = None,
     features: FeatureOverrides = (),
     language: str | None = None,
+    storage: ResolvedStorage | None = None,
 ) -> ClientLease:
     """Construct a public SDK client and return its explicit runtime lease.
 
@@ -531,7 +604,8 @@ def acquire_client(
     the pre-setting default (ultra when `ONE_MEMORY_GRAPH_STORE` is set, else
     pro). `features` are the `memory_features` set on its config; none keeps
     every SDK default. `language` is the SDK prompt language; None
-    auto-detects. Waits while `hold_stores_offline` holds this home's stores.
+    auto-detects. `storage` is the `storage_backends` setting; None is Kuzu +
+    Chroma. Waits while `hold_stores_offline` holds this home's stores.
     """
     key = data_dir.resolve()
     with _STORE_GATE:
@@ -549,6 +623,7 @@ def acquire_client(
             features=features,
             **named,
             **language_kwargs(language),
+            **storage_kwargs(storage),
         )
     finally:
         with _STORE_GATE:
@@ -605,6 +680,7 @@ def _acquire_client(
     mode: str = "pro",
     features: FeatureOverrides = (),
     language: str | None = None,
+    storage: ResolvedStorage | None = None,
 ) -> ClientLease:
     config = build_sdk_config(
         profile,
@@ -614,6 +690,7 @@ def _acquire_client(
         data_dir=data_dir,
         features=features,
         language=language,
+        storage=storage,
     )
     config.http_transport_factory = http_transport_factory
     mismatch = inspect_graph_width_mismatch(config)

@@ -1,4 +1,5 @@
 import type {
+  HomeProjectionV1,
   ImportIssue,
   ImportJob,
   LiveSyncHealth,
@@ -26,6 +27,9 @@ export const MEMORY_STATUSES = [
 const ID_MAX = 128;
 const LABEL_MAX = 256;
 const LIST_MAX = 500;
+const USER_ID = /^[A-Za-z0-9._-]{1,64}$/;
+const ISO_TIME =
+  /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$/;
 const LIVE_SYNC_STATES = [
   "idle",
   "running",
@@ -406,6 +410,153 @@ export function validateHomeSummary(value: unknown): SdkHomeSummary | null {
   return summary as unknown as SdkHomeSummary;
 }
 
+/** `GET /api/v2/home-projection`: the mode-aware home content plane. */
+export function validateHomeProjection(
+  value: unknown,
+): HomeProjectionV1 | null {
+  const projection = exactRecord(value, [
+    "projection_version",
+    "user_id",
+    "effective_mode",
+    "capabilities",
+    "visible_count",
+    "display_state",
+    "latest",
+    "observed_at",
+  ]);
+  if (!projection) return null;
+  const mode = projection.effective_mode;
+  const capabilities = exactRecord(projection.capabilities, [
+    "content_plane",
+    "generation_required",
+    "graph_enabled",
+    "evolve_available",
+  ]);
+  if (
+    projection.projection_version !== 1 ||
+    typeof projection.user_id !== "string" ||
+    !USER_ID.test(projection.user_id) ||
+    !oneOf(mode, ["lite", "pro", "ultra"] as const) ||
+    !capabilities ||
+    capabilities.content_plane !== (mode === "lite" ? "raw" : "memory") ||
+    capabilities.generation_required !== (mode !== "lite") ||
+    capabilities.graph_enabled !== (mode === "ultra") ||
+    capabilities.evolve_available !== (mode === "ultra") ||
+    count(projection.visible_count) === null ||
+    !oneOf(projection.display_state, [
+      "empty",
+      "excerpt",
+      "no_user_excerpt",
+      "no_displayable_memory",
+    ] as const) ||
+    !isoTime(projection.observed_at) ||
+    !validProjectionLatest(projection.latest, mode)
+  ) {
+    return null;
+  }
+  const visible = projection.visible_count as number;
+  const latest = projection.latest as Record<string, unknown> | null;
+  if (
+    (visible === 0 &&
+      (latest !== null || projection.display_state !== "empty")) ||
+    (visible > 0 && projection.display_state === "empty") ||
+    (latest === null &&
+      ["excerpt", "no_user_excerpt"].includes(
+        projection.display_state as string,
+      )) ||
+    (latest?.type === "raw" &&
+      projection.display_state !== latest.display_state) ||
+    (latest?.type === "memory" && projection.display_state !== "excerpt")
+  ) {
+    return null;
+  }
+  return projection as unknown as HomeProjectionV1;
+}
+
+function validProjectionLatest(
+  value: unknown,
+  mode: "lite" | "pro" | "ultra",
+): boolean {
+  if (value === null) return true;
+  const base = [
+    "type",
+    "time",
+    "time_basis",
+    "excerpt",
+    "truncated",
+    "source_id",
+  ];
+  const candidate = record(value);
+  if (!candidate) return false;
+  const keys =
+    candidate.type === "raw"
+      ? [...base, "raw_id", "session_id", "display_state"]
+      : [...base, "memory_id", "scene", "kind", "variant"];
+  const latest = exactRecord(value, keys);
+  if (
+    !latest ||
+    !(latest.time === null || isoTime(latest.time)) ||
+    ![null, "conversation", "import", "write", "update"].includes(
+      latest.time_basis as null | string,
+    ) ||
+    text(latest.excerpt, 200) === null ||
+    typeof latest.truncated !== "boolean" ||
+    text(latest.source_id, ID_MAX) === null
+  ) {
+    return false;
+  }
+  if (latest.type === "raw") {
+    return (
+      mode === "lite" &&
+      nonemptyText(latest.raw_id, ID_MAX) &&
+      nonemptyText(latest.session_id, LABEL_MAX) &&
+      oneOf(latest.display_state, ["excerpt", "no_user_excerpt"] as const) &&
+      (latest.display_state !== "no_user_excerpt" ||
+        (latest.excerpt === "" && latest.truncated === false))
+    );
+  }
+  return (
+    latest.type === "memory" &&
+    mode !== "lite" &&
+    nonemptyText(latest.memory_id, ID_MAX) &&
+    oneOf(latest.scene, ["chat", "working", "coding"] as const) &&
+    oneOf(latest.kind, ["chat", "experience"] as const) &&
+    [null, "working", "coding"].includes(latest.variant as null | string) &&
+    ((latest.kind === "chat" &&
+      latest.scene === "chat" &&
+      latest.variant === null) ||
+      (latest.kind === "experience" &&
+        latest.scene === latest.variant &&
+        oneOf(latest.scene, ["working", "coding"] as const)))
+  );
+}
+
+/** The bounded `/api/v2/raw?limit=1` envelope used only for its real total. */
+export function validateRawTotal(value: unknown): number | null {
+  const page = exactRecord(value, [
+    "user_id",
+    "items",
+    "total",
+    "offset",
+    "limit",
+    "time_filtered",
+  ]);
+  if (
+    !page ||
+    typeof page.user_id !== "string" ||
+    !USER_ID.test(page.user_id) ||
+    !Array.isArray(page.items) ||
+    page.items.length > 1 ||
+    count(page.total) === null ||
+    page.offset !== 0 ||
+    page.limit !== 1 ||
+    page.time_filtered !== false
+  ) {
+    return null;
+  }
+  return page.total as number;
+}
+
 function identifiers(value: unknown): string[] | null {
   return list(value ?? [], (item) => text(item, ID_MAX));
 }
@@ -428,6 +579,30 @@ function record(value: unknown): Record<string, unknown> | null {
   return typeof value === "object" && value !== null && !Array.isArray(value)
     ? (value as Record<string, unknown>)
     : null;
+}
+
+function exactRecord(
+  value: unknown,
+  keys: readonly string[],
+): Record<string, unknown> | null {
+  const item = record(value);
+  return item &&
+    Object.keys(item).length === keys.length &&
+    keys.every((key) => Object.hasOwn(item, key))
+    ? item
+    : null;
+}
+
+function isoTime(value: unknown): value is string {
+  return (
+    typeof value === "string" &&
+    ISO_TIME.test(value) &&
+    Number.isFinite(Date.parse(value))
+  );
+}
+
+function nonemptyText(value: unknown, max: number): value is string {
+  return typeof value === "string" && value.length > 0 && value.length <= max;
 }
 
 function text(value: unknown, max: number): string | null {

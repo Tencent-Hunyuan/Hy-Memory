@@ -77,6 +77,36 @@ def test_workbuddy_record_parsing_never_blocks_the_event_loop(tmp_path) -> None:
     asyncio.run(scenario())
 
 
+def test_jsonl_live_probe_listing_is_reused_by_the_import(tmp_path, monkeypatch) -> None:
+    root = tmp_path / ".workbuddy" / "projects"
+    write_jsonl(
+        root / "project" / "session.jsonl",
+        [{"role": "user", "sessionId": "session", "content": "new conversation"}],
+    )
+    adapter = create_workbuddy_adapter(grant("workbuddy", root))
+    from one_memory.imports.sources import common
+
+    calls = 0
+    original = common.list_changed_files
+
+    def counted(*args, **kwargs):
+        nonlocal calls
+        calls += 1
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(common, "list_changed_files", counted)
+
+    async def probe_then_scan():
+        options = ScanOptions()
+        assert await adapter.has_changes(options)
+        return [event async for event in adapter.scan(options)]
+
+    records = evidence(asyncio.run(probe_then_scan()))
+
+    assert [item.evidence.verbatim for item in records] == ["new conversation"]
+    assert calls == 1
+
+
 def test_cursor_store_user_info_envelope_is_not_attributed_to_the_person(tmp_path) -> None:
     """A Cursor store blob can be the host's session context, not the user's words.
 
@@ -1350,6 +1380,68 @@ def test_cursor_transcripts_with_the_same_name_in_two_projects_are_both_kept(
     ]
     assert len({item.evidence.conversation_id for item in records}) == 1
     assert len({item.evidence.source_ordinal for item in records}) == 2
+
+
+def test_cursor_discovery_does_not_enter_non_conversation_trees(tmp_path) -> None:
+    root = tmp_path / ".cursor"
+    write_jsonl(
+        root / "projects" / "project" / "agent-transcripts" / "kept" / "kept.jsonl",
+        [
+            {
+                "role": "user",
+                "message": {"content": [{"type": "text", "text": "kept conversation"}]},
+            }
+        ],
+    )
+    write_jsonl(
+        root / "extensions" / "large-cache" / "agent-transcripts" / "ignored" / "ignored.jsonl",
+        [
+            {
+                "role": "user",
+                "message": {"content": [{"type": "text", "text": "must not be scanned"}]},
+            }
+        ],
+    )
+
+    records = evidence(asyncio.run(scan(CursorUnifiedSourceAdapter(grant=grant("cursor", root)))))
+
+    assert [item.evidence.verbatim for item in records] == ["kept conversation"]
+
+
+def test_cursor_live_probe_listing_is_reused_by_the_import(tmp_path, monkeypatch) -> None:
+    root = tmp_path / ".cursor"
+    write_jsonl(
+        root / "projects" / "project" / "agent-transcripts" / "new" / "new.jsonl",
+        [
+            {
+                "role": "user",
+                "message": {"content": [{"type": "text", "text": "new conversation"}]},
+            }
+        ],
+    )
+    adapter = CursorUnifiedSourceAdapter(grant=grant("cursor", root))
+    from one_memory.imports.adapters import ScanOptions
+    from one_memory.imports.sources import cursor_unified
+
+    calls = 0
+    original = cursor_unified._list_cursor_files
+
+    def counted(*args, **kwargs):
+        nonlocal calls
+        calls += 1
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(cursor_unified, "_list_cursor_files", counted)
+
+    async def probe_then_scan():
+        options = ScanOptions()
+        assert await adapter.has_changes(options)
+        return [event async for event in adapter.scan(options)]
+
+    records = evidence(asyncio.run(probe_then_scan()))
+
+    assert [item.evidence.verbatim for item in records] == ["new conversation"]
+    assert calls == 1
 
 
 def test_cursor_bounded_scans_reuse_the_authorized_file_listing(tmp_path, monkeypatch) -> None:

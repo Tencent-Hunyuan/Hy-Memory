@@ -32,6 +32,7 @@ prompt and no extra call.
 | `session_episodes` | `recall.session_episode_enabled` (`MEMORY_SESSION_EPISODE_ENABLED`) | off | pro or ultra | none |
 | `episode_summary` | `recall.episode_summary_enabled` (`MEMORY_EPISODE_SUMMARY_ENABLED`) | off | pro or ultra | LLM: one call per closed episode of 3+ memories |
 | `intention` | `llm.enable_intention` (`MEMORY_ENABLE_INTENTION`) | **on** | pro or ultra | none (off shortens the prompt) |
+| `intention_dedup` | `recall.intention_dedup_enabled` (`MEMORY_INTENTION_DEDUP_ENABLED`) | **on** | pro or ultra | none |
 | `few_shot` | `llm.few_shot_enabled` (`MEMORY_FEW_SHOT_ENABLED`) | off | pro or ultra | tokens (extraction and reconcile) |
 
 - **Graph rerank (usage A).** It propagates support over the graph edges
@@ -52,8 +53,43 @@ prompt and no extra call.
   write half of episodes, and both are off by default. Usage B only helps once
   episodes are being written. The SDK's session narrative (L3, `finalize_session`)
   is a separate feature and is not exposed (section 2).
-- **`intention`** is the only feature that is on by default. Turning it off
-  stops L7 intention memories from being extracted.
+- **`intention`** is on by default. Turning it off stops L7 intention
+  memories from being extracted.
+- **`intention_dedup`** (hy-memory 2.0.12) is on by default, which is what
+  every earlier version did. A search treats intentions of one user and agent
+  with the same `memory_at` day, the same `valid_until` day and a cosine
+  similarity at or above `intention_dedup_threshold` as copies: it returns the
+  earliest and deletes the others from the store. Off, no intention dedup
+  runs, at read time or within a write batch, and nothing is hidden, dropped
+  or deleted.
+
+### Parameters
+
+Numeric settings beside the features. One that tunes a feature acts only
+while that feature acts; one that tunes none (`agent_max_tokens`) acts
+whenever the mode reaches its `requires_mode`.
+
+| Name | SDK field (env) | Default | Range | Tunes |
+|---|---|---|---|---|
+| `intention_dedup_threshold` | `recall.intention_dedup_threshold` (`MEMORY_INTENTION_DEDUP_THRESHOLD`, else `MEMORY_DEDUP_THRESHOLD`) | 0.95 | 0.8–1.0 inclusive | `intention_dedup` (read time only) |
+| `agent_max_tokens` | `llm.agent_max_tokens` (`MEMORY_AGENT_MAX_TOKENS`) | 2000 | 512–32000 inclusive, whole numbers only | nothing; the output budget of the SDK's agent calls (evolve, System 2), pro and ultra |
+
+Why `agent_max_tokens`: with some local models evolve and System 2 answers
+are cut off at the SDK default of 2000 tokens (`invalid_operations_json`,
+`truncated: true`). Setting `MEMORY_AGENT_MAX_TOKENS` in the launch
+environment worked but was lost on reboot; the setting persists in
+`config.json`. Unset, an env var that is already set still supplies the
+default. Below 512 no evolve answer fits; above 32000 no supported model
+returns that much in one answer. It is an integer throughout: stored, keyed,
+reported and passed to the SDK as an int, and a non-integer is 422.
+
+Why 0.8–1.0: with dedup on, every intention at or above the threshold is
+deleted from the store at read time, and that cannot be undone. Below about
+0.8 the embedding models MemHub ships or connects score different plans on
+one topic as that close, so a lower value would delete intentions that are
+not copies. Cosine similarity cannot exceed 1.0, and 1.0 keeps dedup for
+exact copies only. Someone who wants no dedup turns `intention_dedup` off
+rather than picking a threshold.
 
 ### Left out, and why
 
@@ -81,11 +117,12 @@ prompt and no extra call.
 holds only the features they set:
 
 ```json
-{"memory_mode": "pro", "memory_features": {"episode_recall": true, "session_episodes": true}}
+{"memory_mode": "pro", "memory_features": {"episode_recall": true, "intention_dedup_threshold": 0.9}}
 ```
 
-The values are strict booleans and unknown keys are refused, so a hand-edited
-file with an unknown feature fails to load (`config_invalid`), like any other
+Feature values are strict booleans, a parameter is a number in its range, and
+unknown keys are refused. So a hand-edited file with an unknown feature or an
+out-of-range threshold fails to load (`config_invalid`), like any other
 malformed setting.
 
 ## 3. How a setting reaches the SDK
@@ -104,7 +141,8 @@ malformed setting.
 - Each client's features are fixed when it is built, like its mode. Both the
   write handles (`SdkWriteCoordinator`) and the read handle
   (`ActiveProfileReadHandle`) are keyed by (profile, revision, mode,
-  features).
+  features). The features part of the key is the sorted (name, value) pairs
+  a person set, parameters included, so a new threshold is a new key.
 - A change runs `retire_stale_handles`, the #218 use count. An idle write
   handle closes at once, and a write in flight finishes with the features it
   started with. The next read builds a client with the new key. The old read
@@ -135,6 +173,38 @@ malformed setting.
       "description": "Usage A: propagate support over knowledge-graph edges ..."
     }
   ],
+  "parameters": [
+    {
+      "name": "intention_dedup_threshold",
+      "value": 0.95,
+      "configured": null,
+      "default": 0.95,
+      "minimum": 0.8,
+      "maximum": 1.0,
+      "active": true,
+      "reason": null,
+      "requires_feature": "intention_dedup",
+      "requires_mode": "pro",
+      "sdk_field": "recall.intention_dedup_threshold",
+      "env": "MEMORY_INTENTION_DEDUP_THRESHOLD",
+      "description": "Cosine similarity at or above which ..."
+    },
+    {
+      "name": "agent_max_tokens",
+      "value": 2000,
+      "configured": null,
+      "default": 2000,
+      "minimum": 512,
+      "maximum": 32000,
+      "active": true,
+      "reason": null,
+      "requires_feature": null,
+      "requires_mode": "pro",
+      "sdk_field": "llm.agent_max_tokens",
+      "env": "MEMORY_AGENT_MAX_TOKENS",
+      "description": "Output token budget of the SDK's agent calls ..."
+    }
+  ],
   "non_default": {"graph_rerank": true}
 }
 ```
@@ -143,27 +213,35 @@ malformed setting.
 - `configured` is null when unset.
 - `default` is the SDK default: its code default, or its own env var when set.
 - `active` is false with a `reason` when the feature does nothing right now.
-  The reason is one of `disabled`, `requires_pro` (lite), `requires_ultra`, or
-  `requires_graph_rerank` (for `same_series_timeline`).
+  The reason is one of `disabled`, `requires_pro` (lite), `requires_ultra`,
+  `requires_graph_rerank` (for `same_series_timeline`), or
+  `requires_intention_dedup` (for the threshold while `intention_dedup` is off).
 - `cost` is one of `none`, `extra_query`, `llm_call`, `prompt_tokens`.
 - `features` always lists every feature, in the table's order.
+- `parameters` lists every parameter. `value` is what clients are built with;
+  `minimum` and `maximum` are the range a `PUT` accepts. A parameter with a
+  `requires_feature` is active exactly when that feature is; one without
+  (`requires_feature: null`) is active when the mode reaches `requires_mode`,
+  else `requires_pro`. An integer parameter's numbers are JSON integers.
 
 ## 5. `PUT /api/v1/settings/memory-features`
 
 The body has any of the feature names as keys:
 
 - `true` or `false` sets that feature.
+- A JSON number sets a parameter, if it is in range (inclusive).
 - `null` resets it to the default.
 - An absent key is left as it is.
-- Anything else answers `422`, including a non-boolean, `"true"`, `1`, or an
-  unknown name.
+- Anything else answers `422`, including a non-boolean feature, `"true"`, `1`,
+  an unknown name, a threshold outside 0.8–1.0, a string, or a boolean, and
+  an `agent_max_tokens` outside 512–32000 or that is not a whole number.
 
 ```json
-{"graph_rerank": true, "episode_recall": true, "few_shot": null}
+{"graph_rerank": true, "intention_dedup_threshold": 0.9, "few_shot": null}
 ```
 
-The answer is the state of section 4, plus `changed`: the features whose
-effective value changed, in the table's order. When the set of configured
+The answer is the state of section 4, plus `changed`: the features and then
+the parameters whose effective value changed, in the tables' order. When the set of configured
 features changes, the SDK clients are rebuilt (section 3). That includes a
 reset to a value equal to the default, after which the client carries no
 override at all.
@@ -172,10 +250,11 @@ override at all.
 
 `pipeline` in `GET /api/v1/memory-processing` (memory-mode contract §7) gains
 `features`, which lists the features whose effective value differs from the
-default. It is `{}` while every feature is at its default:
+default, and the parameters (as numbers) likewise. It is `{}` while every
+setting is at its default:
 
 ```json
-{"pipeline": {"mode": "pro", "...": "...", "features": {"episode_recall": true, "intention": false}}}
+{"pipeline": {"mode": "pro", "...": "...", "features": {"episode_recall": true, "intention_dedup_threshold": 0.9}}}
 ```
 
 `memhub status --json` and `memhub progress --json` carry it as
@@ -188,14 +267,22 @@ to the memory-mode line.
 memhub settings features                                       # list them
 memhub settings features set episode_recall=true session_episodes=true   # plan only
 memhub settings features set episode_recall=true session_episodes=true --yes
+memhub settings features set intention_dedup=false --yes        # no intention dedup
+memhub settings features set intention_dedup_threshold=0.9 --yes # a looser dedup
+memhub settings features set agent_max_tokens=6000 --yes        # longer evolve / System 2 answers
+memhub settings features reset agent_max_tokens                 # back to 2000 (or the env var)
 memhub settings features reset few_shot                         # back to the default
 memhub settings features reset                                  # every set feature
 ```
 
 `set` prints its plan and needs `--yes`, like `settings mode`, because some
 features spend model calls. `reset` only returns features to their defaults,
-so it applies at once. Unknown names or values other than `true` / `false` are
-a usage error (exit 2) before the Runtime is asked.
+so it applies at once. Unknown names, feature values other than `true` /
+`false`, a threshold that is not a plain decimal in 0.8–1.0, and an
+`agent_max_tokens` that is not a plain whole number in 512–32000 are a usage
+error (exit 2) before the Runtime is asked. Against an older Runtime that does
+not list a parameter, `set` answers `rejected` /
+`memory_feature_unsupported` without sending it.
 
 ## 8. Rules kept
 
@@ -216,6 +303,8 @@ a usage error (exit 2) before the Runtime is asked.
 | session_episodes | 片段写入：同一会话中提取的记忆归入同一片段。 | Episodes per conversation: memories extracted from one conversation share one episode. | Episodios por conversación: las memorias extraídas de una conversación comparten un episodio. |
 | episode_summary | 片段摘要：片段结束时总结一次（每个片段一次模型调用）。 | Episode summaries: each finished episode is summarized once (one model call per episode). | Resúmenes de episodio: cada episodio terminado se resume una vez (una llamada al modelo por episodio). |
 | intention | 意图提取：随事实一起记住你提到的计划和意图。 | Intentions: remembers the plans and intentions you mention, along with facts. | Intenciones: recuerda los planes e intenciones que mencionas, junto con los hechos. |
+| intention_dedup | 意图去重：同一天里几乎相同的意图只保留最早一条，其余删除。 | Intention dedup: of near-identical intentions from one day, keeps the earliest and deletes the rest. | Deduplicación de intenciones: de las intenciones casi idénticas de un mismo día, conserva la más antigua y borra las demás. |
+| intention_dedup_threshold | 去重阈值：越高，越少的意图被视为重复。 | Dedup threshold: the higher it is, the fewer intentions count as copies. | Umbral de deduplicación: cuanto más alto, menos intenciones cuentan como copias. |
 | few_shot | 提取示例：在提取提示中加入示例，可帮助较弱的模型（输入更长）。 | Extraction examples: adds examples to the extraction prompt, which can help a weaker model (longer input). | Ejemplos de extracción: añade ejemplos a la instrucción de extracción, lo que puede ayudar a un modelo más débil (entrada más larga). |
 | default | 默认 | Default | Predeterminado |
 | requires_ultra | 当前模式下不生效，需要 ultra。 | Has no effect in this mode; needs ultra. | No tiene efecto en este modo; requiere ultra. |

@@ -62,7 +62,6 @@ export const workbenchChineseMessages = {
   "memory:整理需要处理": "整理需要处理",
   "memory:正在整理记忆": "正在整理记忆",
   "memory:整理状态": "整理状态",
-  "memory:重新整理": "重新整理",
   "memory:自动提炼范围": "自动提炼范围",
   "memory:手动提炼下一批": "手动提炼下一批",
   "memory:刷新核对": "刷新核对",
@@ -88,10 +87,6 @@ export const workbenchChineseMessages = {
   "memory:处理（操作）": "处理",
   "memory:{count} 条原话": "{count} 条原话",
   "memory:{count} 条原话.one": "{count} 条原话",
-  "memory:有 {count} 段对话的整理结果不确定":
-    "有 {count} 段对话的整理结果不确定",
-  "memory:有 {count} 段对话的整理结果不确定.one":
-    "有 {count} 段对话的整理结果不确定",
   "memory:{count} 次整理已完成": "{count} 次整理已完成",
   "memory:{count} 次整理已完成.one": "{count} 次整理已完成",
   "memory: · {count} 条在窗口外（原文可搜）":
@@ -392,7 +387,6 @@ export const workbenchSpanishMessages: Record<
   "memory:整理需要处理": "El procesamiento requiere atención",
   "memory:正在整理记忆": "Procesando memorias",
   "memory:整理状态": "Estado del procesamiento",
-  "memory:重新整理": "Volver a procesar",
   "memory:自动提炼范围": "Alcance de extracción automática",
   "memory:手动提炼下一批": "Extraer el siguiente lote manualmente",
   "memory:刷新核对": "Actualizar y verificar",
@@ -419,10 +413,6 @@ export const workbenchSpanishMessages: Record<
   "memory:处理（操作）": "procesar",
   "memory:{count} 条原话": "{count} textos originales",
   "memory:{count} 条原话.one": "{count} texto original",
-  "memory:有 {count} 段对话的整理结果不确定":
-    "El resultado del procesamiento de {count} conversaciones es incierto",
-  "memory:有 {count} 段对话的整理结果不确定.one":
-    "El resultado del procesamiento de {count} conversación es incierto",
   "memory:{count} 次整理已完成": "{count} procesamientos completados",
   "memory:{count} 次整理已完成.one": "{count} procesamiento completado",
   "memory: · {count} 条在窗口外（原文可搜）":

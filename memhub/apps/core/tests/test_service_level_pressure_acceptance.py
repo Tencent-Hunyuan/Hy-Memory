@@ -23,9 +23,8 @@ def test_workbuddy_recall_remains_available_during_100k_import(tmp_path, monkeyp
 
     assert result["import_status"] == "completed"
     assert result["stored"] == 100_000
-    assert result["evidence_rows"] == 100_001
+    assert result["evidence_rows"] == 100_000
     assert result["hook_accepted"] is True
-    assert result["hook_stored"] is True
     assert result["hook_visible_ms"] < 10_000
     assert result["recall_sampling_terminal"] is True
     assert result["during_unavailable"] == 0

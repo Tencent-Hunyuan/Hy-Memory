@@ -1,5 +1,6 @@
-/** Mirrors desktop `SOURCE_HOST`. OpenClaw and DeepSeek Harness profiles
- * are not accepted by one-click insertion. */
+/** Mirrors desktop `SOURCE_HOST`. OpenClaw is not accepted by one-click
+ * insertion; DeepSeek Harness has no single host and goes through
+ * `PROFILE_SOURCES` instead. */
 export const SOURCE_HOST: Readonly<Record<string, string>> = {
   cursor: "cursor",
   "claude-code": "claude-code",
@@ -13,6 +14,23 @@ export const SOURCE_HOST: Readonly<Record<string, string>> = {
 };
 
 export const ONE_CLICK_SOURCES = new Set(Object.keys(SOURCE_HOST));
+
+/** Sources configured per profile. Each profile is its own host
+ * (`deepseek-harness:<profile>`, with its own patch, credential and grant), so
+ * the app's one switch covers every profile the desktop detected. */
+export const PROFILE_SOURCES: ReadonlySet<string> = new Set([
+  "deepseek-harness",
+]);
+
+export function isProfileSource(sourceId: string) {
+  return PROFILE_SOURCES.has(sourceId);
+}
+
+/** `deepseek-harness:web` -> `web`. */
+export function profileName(hostId: string) {
+  const colon = hostId.indexOf(":");
+  return colon < 0 ? hostId : hostId.slice(colon + 1);
+}
 
 export function connectionHostId(sourceId: string): string | null {
   return SOURCE_HOST[sourceId] ?? null;
