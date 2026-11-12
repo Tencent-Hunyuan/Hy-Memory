@@ -195,7 +195,7 @@ class ChromaVectorStore(VectorStoreBase):
             return False
 
     async def update_payload(self, node_id: str, updates: Dict[str, Any]) -> bool:
-        """更新 payload 字段；若 updates 含 'embedding'，同时更新向量与 documents。"""
+        """更新 payload；content 同步 documents，仅显式 embedding 才替换向量。"""
         if not updates:
             return True
         point_id = self._node_id_to_point_id(node_id)
@@ -224,6 +224,25 @@ class ChromaVectorStore(VectorStoreBase):
                     kwargs["embeddings"] = [new_embedding]
                 if "content" in updates:  # content 变更同步全文 documents
                     kwargs["documents"] = [updates["content"]]
+                    if new_embedding is None:
+                        if not isinstance(updates["content"], str):
+                            raise ValueError("Content must be a string")
+                        # Collection.update re-embeds documents without an explicit
+                        # vector. Chroma >=1.5.9's underlying local/HTTP update
+                        # accepts a partial update with embeddings omitted. Do not
+                        # read/restore a vector: another writer may have changed it.
+                        # Keep the collection's sparse-metadata preparation, but
+                        # deliberately skip its dense embedding function.
+                        kwargs["metadatas"] = self._collection._apply_sparse_embeddings_to_metadatas(
+                            kwargs.get("metadatas"), kwargs["documents"],
+                        )
+                        self._collection._client._update(
+                            collection_id=self._collection.id,
+                            tenant=self._collection.tenant,
+                            database=self._collection.database,
+                            **kwargs,
+                        )
+                        return
                 self._collection.update(**kwargs)
             await _run_in_vdb_pool(_update)
             logger.debug(
