@@ -59,6 +59,7 @@ jobs:
 
   memhub:
     runs-on: ubuntu-latest
+    timeout-minutes: 45
     defaults:
       run:
         working-directory: memhub
@@ -96,11 +97,7 @@ jobs:
           pnpm fetch:embedding-model
           uv run --directory apps/core python -c \
             "from one_memory.embedding_assets import assets_present, verify_assets; assert assets_present(); verify_assets()"
-      - name: Test public Core smoke suite
-        run: >-
-          bash scripts/run-tests-isolated.sh core-pr
-          tests/test_core_test_reporting.py
-          tests/test_import_api.py
-          tests/test_recent_first_import.py
-          tests/test_source_session_count_api.py
-          tests/test_schema_migrations.py
+      # The whole PR suite, not a hand-picked smoke list: files left out of a
+      # named list broke on main unnoticed. ~4.8k tests, about 5 minutes.
+      - name: Test Core (full core-pr suite)
+        run: bash scripts/run-tests-isolated.sh core-pr -q
