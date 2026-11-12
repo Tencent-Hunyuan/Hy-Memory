@@ -6,7 +6,7 @@ Hy Memory and MemHub are versioned and released independently.
 
 ## MemHub 1.0.7 — 2026-11-12
 
-Build 47, on `hy-memory==2.0.16`. Linux x64/arm64 Runtime and macOS arm64
+Build 48, on `hy-memory==2.0.16`. Linux x64/arm64 Runtime and macOS arm64
 App and Runtime.
 
 - Ultra no longer restarts Core forever on a broken knowledge graph (#413,
