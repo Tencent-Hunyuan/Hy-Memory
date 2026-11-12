@@ -1661,6 +1661,8 @@ export const russianMessages: Record<MessageKey, string> = {
     "{host} недавно не смог обратиться к памяти. Фоновая служба может быть занята и должна восстановиться автоматически.",
   "apps.autoHostFailed": "Не удалось автоматически подключить {name}{reason}.",
   "apps.failureReason": ": {reason}",
+  "apps.desktopBridgeUnavailable":
+    "Подключение в один клик доступно только в настольном приложении MemHub",
   "apps.autoSyncFailed":
     "Не удалось автоматически включить постоянную синхронизацию для {name}. {reason}",
   "apps.noAutoRetry": "Автоматического повтора не будет.",

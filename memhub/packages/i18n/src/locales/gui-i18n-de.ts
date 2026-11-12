@@ -1686,6 +1686,8 @@ export const germanMessages: Record<MessageKey, string> = {
   "apps.autoHostFailed":
     "{name} konnte nicht automatisch verbunden werden{reason}.",
   "apps.failureReason": ": {reason}",
+  "apps.desktopBridgeUnavailable":
+    "Die Ein-Klick-Verbindung muss in der MemHub-Desktop-App erfolgen",
   "apps.autoSyncFailed":
     "Fortlaufende Synchronisierung konnte für {name} nicht automatisch aktiviert werden. {reason}",
   "apps.noAutoRetry": "Es erfolgt kein automatischer neuer Versuch.",

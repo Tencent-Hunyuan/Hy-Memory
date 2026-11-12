@@ -1655,6 +1655,8 @@ export const indonesianMessages: Record<MessageKey, string> = {
     "{host} tidak dapat mencari memori baru-baru ini. Layanan latar belakang mungkin sedang sibuk dan seharusnya pulih otomatis.",
   "apps.autoHostFailed": "{name} tidak dapat terhubung otomatis{reason}.",
   "apps.failureReason": ": {reason}",
+  "apps.desktopBridgeUnavailable":
+    "Koneksi sekali klik memerlukan aplikasi desktop MemHub",
   "apps.autoSyncFailed":
     "Sinkronisasi berkelanjutan tidak dapat diaktifkan otomatis untuk {name}. {reason}",
   "apps.noAutoRetry": "Tidak akan dicoba ulang secara otomatis.",

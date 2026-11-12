@@ -127,6 +127,7 @@ export const applicationsChineseMessages = {
     "{host} 最近几次没查到记忆，后台可能正忙，稍后会自动恢复",
   "apps.autoHostFailed": "{name} 未能自动接入{reason}。",
   "apps.failureReason": "：{reason}",
+  "apps.desktopBridgeUnavailable": "一键插入需要在 MemHub 桌面 App 中操作",
   "apps.autoSyncFailed": "{name} 的持续同步未能自动开启。{reason}",
   "apps.noAutoRetry": "不会自动重试。",
   "apps.cardUnavailable":
@@ -284,6 +285,8 @@ export const applicationsSpanishMessages: Record<
     "Las últimas consultas de {host} no se completaron. El servicio puede estar ocupado; se recuperará automáticamente.",
   "apps.autoHostFailed": "No se pudo conectar {name} automáticamente{reason}. ",
   "apps.failureReason": ": {reason}",
+  "apps.desktopBridgeUnavailable":
+    "La conexión con un clic debe hacerse en la aplicación de escritorio de MemHub",
   "apps.autoSyncFailed":
     "No se pudo activar la sincronización continua de {name}. {reason}",
   "apps.noAutoRetry": "No se reintentará automáticamente.",

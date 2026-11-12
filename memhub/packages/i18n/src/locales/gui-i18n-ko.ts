@@ -1612,6 +1612,8 @@ export const koreanMessages: Record<MessageKey, string> = {
     "{host}이(가) 최근 기억을 조회하지 못했습니다. 백그라운드 서비스가 바쁠 수 있으며 자동으로 복구됩니다.",
   "apps.autoHostFailed": "{name}을(를) 자동으로 연결하지 못했습니다{reason}.",
   "apps.failureReason": ": {reason}",
+  "apps.desktopBridgeUnavailable":
+    "원클릭 연결은 MemHub 데스크톱 앱에서 진행해야 합니다",
   "apps.autoSyncFailed":
     "{name}의 지속 동기화를 자동으로 켜지 못했습니다. {reason}",
   "apps.noAutoRetry": "자동으로 다시 시도하지 않습니다.",
