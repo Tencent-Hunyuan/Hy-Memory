@@ -1109,13 +1109,45 @@ export async function* askMemoriesStream(
     if (done) break;
     buffer += decoder.decode(value, { stream: true });
     // SSE frames are separated by a blank line; keep any partial tail buffered.
-    const frames = buffer.split("\n\n");
+    const frames = splitAskStreamFrames(buffer);
     buffer = frames.pop() ?? "";
     for (const frame of frames) {
-      const line = frame.trim();
-      if (!line.startsWith("data:")) continue;
-      yield JSON.parse(line.slice(5).trim()) as HostAskMemoryEvent;
+      const event = parseAskStreamFrame(frame);
+      if (event !== null) yield event;
     }
+  }
+  // A server may close right after the last `data:` without a trailing blank
+  // line, and a multi-byte character may still be held by the decoder. Flush
+  // both so the final event is not silently lost.
+  buffer += decoder.decode();
+  for (const frame of splitAskStreamFrames(buffer)) {
+    const event = parseAskStreamFrame(frame);
+    if (event !== null) yield event;
+  }
+}
+
+/** Split a chunk on blank lines, accepting both LF and CRLF streams. */
+export function splitAskStreamFrames(chunk: string): string[] {
+  return chunk.replace(/\r\n/g, "\n").split("\n\n");
+}
+
+/** Decode one SSE frame; a malformed frame must not abort the whole stream. */
+export function parseAskStreamFrame(frame: string): HostAskMemoryEvent | null {
+  const data: string[] = [];
+  for (const line of frame.replace(/\r\n/g, "\n").split("\n")) {
+    if (!line.startsWith("data:")) continue;
+    // SSE allows several `data:` lines; one optional leading space is removed
+    // and the lines are joined with a newline before parsing.
+    data.push(line.slice(5).replace(/^ /, ""));
+  }
+  if (data.length === 0) return null;
+  try {
+    const value: unknown = JSON.parse(data.join("\n"));
+    return value !== null && typeof value === "object" && !Array.isArray(value)
+      ? (value as HostAskMemoryEvent)
+      : null;
+  } catch {
+    return null;
   }
 }
 
