@@ -1,4 +1,4 @@
-import { constants, type Stats } from "node:fs";
+import { constants } from "node:fs";
 import { lstat, open } from "node:fs/promises";
 import path from "node:path";
 import type {
@@ -9,6 +9,7 @@ import type {
   SdkContextSearchResponse,
 } from "@one-memory/contracts";
 import axios from "axios";
+import { assertPrivateCredentialNode } from "./credential-node.js";
 import {
   HOST_CONTEXT_TIMEOUT_MS,
   isContextResponseForRequest,
@@ -118,33 +119,36 @@ export class BrokerClientError extends Error {
   }
 }
 
-/** Installer-owned POSIX file: raw omhg_v1_ token with an optional final LF.
- * Dedicated immediate parent must be owner-only; ancestors/ACLs are installer
+/** Installer-owned credential file: raw omhg_v1_ token with an optional final LF.
+ * Dedicated immediate parent must be private; ancestors/ACLs are installer
  * responsibilities. No JSON, no automatic repair, no credential caching. Same
- * OS-account adversaries are outside this boundary. Windows needs ACL support.
- * The environment is deliberately read only by executable entry points. */
+ * OS-account adversaries are outside this boundary. The node checks are
+ * platform-aware (see credential-node.ts). The environment is deliberately
+ * read only by executable entry points. */
 export async function readHostCredentialFile(
   targetPath: string,
 ): Promise<string> {
+  const windows = process.platform === "win32";
   try {
     if (
-      process.platform === "win32" ||
-      typeof process.getuid !== "function" ||
+      (!windows && typeof process.getuid !== "function") ||
       typeof targetPath !== "string" ||
       !path.isAbsolute(targetPath) ||
       targetPath.includes("\0")
     ) {
       throw new BrokerClientError("host_credential_unavailable");
     }
-    checkPrivateCredentialNode(await lstat(path.dirname(targetPath)), true);
-    checkPrivateCredentialNode(await lstat(targetPath), false);
-    const handle = await open(
-      targetPath,
-      constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK,
-    );
+    assertPrivateCredentialNode(await lstat(path.dirname(targetPath)), true);
+    assertPrivateCredentialNode(await lstat(targetPath), false);
+    // O_NOFOLLOW / O_NONBLOCK do not exist on Windows; OR-ing undefined would
+    // silently coerce to 0, so be explicit about the platform difference.
+    const flags =
+      constants.O_RDONLY |
+      (windows ? 0 : (constants.O_NOFOLLOW ?? 0) | (constants.O_NONBLOCK ?? 0));
+    const handle = await open(targetPath, flags);
     try {
       const info = await handle.stat();
-      checkPrivateCredentialNode(info, false);
+      assertPrivateCredentialNode(info, false);
       if (info.size < 51 || info.size > 52)
         throw new BrokerClientError("host_credential_unavailable");
       // Bounded even if a faulty writer grows the file after stat.
@@ -171,16 +175,6 @@ export async function readHostCredentialFile(
     }
   } catch {
     // Filesystem/parser/provider errors can contain paths and secret bytes.
-    throw new BrokerClientError("host_credential_unavailable");
-  }
-}
-
-function checkPrivateCredentialNode(info: Stats, directory: boolean): void {
-  if (
-    (directory ? !info.isDirectory() : !info.isFile() || info.nlink !== 1) ||
-    info.uid !== process.getuid?.() ||
-    (info.mode & 0o7777) !== (directory ? 0o700 : 0o600)
-  ) {
     throw new BrokerClientError("host_credential_unavailable");
   }
 }
