@@ -8,205 +8,116 @@ Hy Memory and MemHub are versioned and released independently.
   detector and uses a majority vote, so code-heavy Chinese facts are not diluted
   by long ASCII payloads. Explicit language settings still take precedence.
 
-- MemHub: pinned to `hy-memory==2.0.16` and uses what it adds.
-  - **Embedding switch on Qdrant.** The SDK now re-embeds Qdrant collections
-    (#422), so `embedding_switch_backend_unsupported` is lifted on Qdrant and
-    the startup stray-space scan, merge, retention sweep and space cleanup run
-    there too. The re-embed is handed the configured server (host, port, API
-    key) and every name carries this home's collection prefix: a scan lists
-    only `<prefix>_*`, and a drop refuses any name outside it, so homes sharing
-    a server never see or drop each other's collections; the home's Chroma
-    files from before the setting are never opened. A switch in ultra on a
-    Neo4j/Memgraph graph stays refused (one fixed-width vector index per
-    database). The space registry is one per home, so a retired space that
-    still holds the only records of the store configured now is never swept
-    or cleaned up (`embedding_space_only_copy`).
-  - **Restore onto Qdrant.** A backup on Qdrant now exports every memory with
-    `export_user_memories` (#424): ids, layers, statuses, evolution links,
-    times and vectors, raw turns included. A restore onto the same home's
-    namespace writes them back with `import_user_memories` after the local
-    files are swapped, keeps the server's previous memories in
-    `backups/pre-restore-*.memhub-previous-vectors.jsonl`, and on any failure
-    writes those back before the files roll back.
-    `backup_restore_remote_sdk_unsupported` is gone. What 2.0.16 still cannot
-    carry is refused before anything changes, with a code naming the gap:
-    Coding/Working experience vectors
-    (`backup_restore_qdrant_experiences_unsupported`) and the retrieval-clause
-    index (`backup_restore_qdrant_retrieval_clauses_unsupported`); also a
-    pre-2.0.16 export without vectors (`backup_restore_export_without_vectors`),
-    a backup of another embedding space (`backup_restore_qdrant_space_changed`)
-    and the offline `one-memory restore`, which has no SDK client
-    (`backup_restore_vector_client_unavailable`).
-  - **Output token parameter** (#421): a model profile names the field its
-    provider takes for the output budget, `max_tokens` (default) or
-    `max_completion_tokens`. The SDK config, the model probe and both Q&A paths
-    send the same field; a probe refused for the field fails with
-    `output_token_parameter_rejected` instead of passing on a retry the SDK
-    would not make. Supersedes #427; refs #287.
-  - A Coding/Working edit whose new text cannot be embedded (#399) answers
-    503 `memory_update_embedding_failed` (the stored memory is unchanged). A
-    chat edit whose graph node could not be updated (#439) still succeeds and
-    says so in `X-Memory-Graph-Sync: failed`. An embedding response with a
-    malformed index mapping (#437) fails its write once and does not pause
-    the provider.
-  - Build: 2.0.16's `hy-memory[postgres]` extra (`psycopg`) is not installed
-    and is excluded from the frozen Core; MemHub keeps the SDK's Coding/Working
-    store in SQLite (`business_store` is always set to `sqlite`, so
-    `MEMORY_BUSINESS_STORE` has no effect). The SBOM and notices are
-    regenerated from the installed tree (only `hy-memory` changes).
-- MemHub: backups now include the memories. A backup (`memhub backup create`,
-  `POST /api/v1/backup`) used to hold only MemHub's management database; the
-  memories and raw turns in the SDK stores under `hy-memory/` were never in
-  it, so a restore could not bring them back. A backup is now a directory
-  `backups/<name>.memhub-backup/` (owner-only) with a manifest (schema 2),
-  the management database and every SDK file of the home: Chroma with the
-  live embedding space and any space kept for retention, the Kuzu graphs and
-  the SDK's SQLite caches; on a Qdrant server also a JSONL export of every
-  memory through the SDK (every layer and status, raw turns included; no
-  vectors, which hy-memory 2.0.15 does not return). SDK writes are paused with
-  the embedding switch's gate, every SDK client is closed (Kuzu checkpoints)
-  and the stores are held offline while files are copied (SQLite through its
-  backup API); writes resume on every path. The pause is reported
-  (`pause_ms`; about 1.3 s for 1,000 memories). The manifest records the
-  backend, the embedding space, the SDK version, the users and the counts per
-  user and layer, per vector collection and per graph layer. `memhub backup
-  create` shows the size first (`GET /api/v1/backup/estimate`) and writes
-  with `--yes`. A restore verifies every file, stages the data, swaps it in
-  under a journal, runs the registry, space-scan and graph-probe checks (a
-  corrupt graph is quarantined and rebuilt), counts again through the SDK and
-  rolls back on any mismatch (`backup_restore_counts_mismatch`); the previous
-  data is kept in `backups/pre-restore-*.memhub-previous/`. A killed restore
-  is rolled back by the next start. Old backups (one `.sqlite3` file) restore
-  as before and say they hold no memories. Restores across backends are
-  refused (`backup_restore_backend_mismatch`), and restoring memories onto
-  Qdrant is refused (`backup_restore_remote_sdk_unsupported`) until MemHub
-  pins an SDK that can write a memory back with its id and vector. The evolve
-  schedule no longer holds a read client for good, which kept a backup (and an
-  ultra embedding switch's graph re-embed) from closing every client. Contract:
+## MemHub 1.0.7 — 2026-11-12
+
+Build 48, on `hy-memory==2.0.16`. Linux x64/arm64 Runtime and macOS arm64
+App and Runtime.
+
+- Ultra no longer restarts Core forever on a broken knowledge graph (#413,
+  #414). Kuzu's open of a corrupt graph held the GIL, grew to 5–13 GB and got
+  Core killed, and the Runtime relaunched it into the same file. Before Core
+  reports ready, a short-lived child process now opens the live graph under a
+  wall clock (60 s plus 0.5 s per MB, at most 120 s;
+  `ONE_MEMORY_GRAPH_PROBE_TIMEOUT_S`) and a 2 GB RSS cap
+  (`ONE_MEMORY_GRAPH_PROBE_MAX_RSS_MB`). A failed probe renames the graph to
+  `graph.quarantined-<UTC>` (never deleted, the two newest kept), starts Core
+  without it and rebuilds the graph per user. `memory-processing`,
+  `settings/memory-mode` and `memhub status` report `pipeline.graph_store`,
+  and the App shows "知识图谱文件损坏，已自动重建" in all 11 languages. The
+  Runtime supervisor waits for the declared startup phase (at most 3 minutes),
+  restarts a Core that stops answering for 90 s after ready, and only forgives
+  a crash streak after 2 minutes up, so relaunches back off instead of looping.
+  With `hy-memory` 2.0.15/2.0.16 the ultra read and write clients share one
+  `kuzu.Database` (their checkpoints used to overwrite each other and lose
+  graph writes), opened with a 512 MB buffer pool and at most 4 threads
+  (`MEMORY_GRAPH_BUFFER_POOL_MB`, `MEMORY_GRAPH_MAX_THREADS`).
+- Graph and vector backends from the CLI (#423): `memhub settings backends
+  show|set|test|reset` (and `/api/v1/settings/storage-backends`) select a
+  Neo4j or Memgraph server for the ultra graph and a Qdrant server for
+  vectors; the default stays embedded Kuzu + Chroma. Core connects before it
+  saves, the password and API key go to the secret store, Qdrant collections
+  carry a per-home prefix, and a database that already holds a graph must be
+  adopted explicitly. Switching moves no memory; switching back shows the old
+  store again. FAISS and embedded Qdrant are refused. `MEMORY_GRAPH_PROVIDER` /
+  `MEMORY_VECTOR_STORE` still have no effect. The App shows the active
+  backends read-only. Contract: `memhub/docs/contracts/storage-backends-v1.md`.
+- Embedding switch and restore on Qdrant (#444). The embedding switch, the
+  startup stray-space scan, merge, retention sweep and space cleanup now run
+  on Qdrant, limited to this home's collection prefix. A restore onto Qdrant
+  writes every memory back with its id and vector and keeps the server's
+  previous memories in `backups/pre-restore-*.memhub-previous-vectors.jsonl`.
+  What 2.0.16 cannot carry (Coding/Working experience vectors, the
+  retrieval-clause index, a pre-2.0.16 export) is refused before anything
+  changes, with a code naming the gap. A retired space that still holds a
+  store's only records is never swept or cleaned up
+  (`embedding_space_only_copy`). Ultra on Neo4j/Memgraph still refuses a
+  switch.
+- Backups include the memories (#425). `memhub backup create` and
+  `POST /api/v1/backup` used to hold only the management database. A backup
+  is now a directory `backups/<name>.memhub-backup/` with a manifest, the
+  management database and every SDK store of the home (Chroma, Kuzu, the SDK
+  caches; on Qdrant a JSONL export). SDK writes pause while files are copied
+  (`pause_ms`, about 1.3 s for 1,000 memories). `memhub backup create` shows
+  the size first and writes with `--yes`. A restore verifies, swaps in under a
+  journal, counts again through the SDK and rolls back on any mismatch; the
+  previous data is kept in `backups/pre-restore-*.memhub-previous/`, and a
+  killed restore is rolled back on the next start. Old single-file backups
+  restore as before; restores across backends are refused. Backup paths are
+  confined to `<home>/backups`. Contract:
   `memhub/docs/contracts/backup-v2.md`.
-- MemHub: the graph and vector stores can be chosen from the CLI and the API.
-  The default stays the embedded Kuzu + Chroma pair. `memhub settings backends
-  show|set|test|reset` (and `GET/PUT/DELETE /api/v1/settings/storage-backends`,
-  `POST .../test`) select a Neo4j or Memgraph server for the ultra graph and a
-  Qdrant server for vectors. The setting is persisted in `config.json`
-  (`storage_backends`); the graph password and the Qdrant API key go to the
-  secret store. Core connects to the chosen servers before it saves anything,
-  then rebuilds the SDK clients the way a mode change does. Before, MemHub
-  hard-coded `kuzu` and `chroma`, so `MEMORY_GRAPH_PROVIDER=neo4j` or
-  `MEMORY_VECTOR_STORE=qdrant` still logged `provider=kuzu` / `provider=chroma`;
-  those SDK variables still have no effect (the setting is the only source).
-  Qdrant collections carry a per-home prefix so homes sharing a server stay
-  apart; a Neo4j/Memgraph database that already holds a graph must be adopted
-  explicitly. Switching moves no memory: what the old store holds stays there,
-  untouched, and switching back shows it again. FAISS and Qdrant's embedded
-  mode are refused (`storage_backend_faiss_unsupported`,
-  `storage_backend_vector_host_required`): they are not safe with the several
-  SDK clients MemHub runs on one home. On a custom backend, the embedding
-  switch is refused on Qdrant, and in ultra on Neo4j/Memgraph
-  (`embedding_switch_backend_unsupported`, until the SDK can re-embed them).
-  The Kuzu open probe, the graph-width tools, the startup stray-space scan and
-  every upgrade migration are skipped, and none of them touch the old Kuzu or
-  Chroma files. Backup, restore, search, recall, delete, evolve and the
-  memory map work on every backend. `memhub status` and `memory-processing`
-  show the active backends and whether they answer. The App shows them
-  read-only ("存储后端：Neo4j + Qdrant（通过 CLI 配置）") in every language and
-  offers no control. The frozen Core now ships the `neo4j` and
-  `qdrant-client` drivers (+6 MB on macOS arm64, after no longer shipping the
-  SDK's unused `.py` copies). A managed restore now also accepts a backup taken
-  after the SDK cutover; it used to refuse any backup without the legacy
-  `evidence` table. Contract: `memhub/docs/contracts/storage-backends-v1.md`.
-- The CLI keeps the refusal Core names in a 5xx body instead of dropping
-  it. `memhub models configure` on a machine without a key store answered
-  `http_503_result_unknown` while Core had sent `{"detail":"secure_storage_unavailable"}`
-  -- an instruction, not a status: the machine has no key store, and the fix
-  is to give it one. The four mutation verbs in `core-operations.ts` and
-  `submitMemoryWrite` in `core-client.ts` now carry that code
-  (`secure_storage_unavailable_result_unknown`). `state` stays `unknown`,
-  because a 5xx may have committed part of the request. The body value is held
-  to the shape every Core refusal code has -- lowercase words joined by
-  underscores -- so a bind address such as `127.0.0.1:8765` can never be
-  promoted to a code, which the looser 4xx matcher would have allowed.
-- MemHub: a knowledge graph that freezes or kills the process opening it is
-  quarantined and rebuilt instead of restarting Core forever. In ultra, Kuzu's
-  open of a corrupt graph file held the GIL, grew RSS to 5–13 GB and the OS
-  killed Core after 26–33 s; the Runtime relaunched it into the same file in an
-  endless `restart_scheduled → spawn_started → ready` loop. Before Core reports
-  ready, the live graph is now opened once by a short-lived child process,
-  bounded by a wall clock (60 s plus 0.5 s per MB, at most 120 s;
-  `ONE_MEMORY_GRAPH_PROBE_TIMEOUT_S`) and an RSS cap polled from Core (2 GB;
-  `ONE_MEMORY_GRAPH_PROBE_MAX_RSS_MB`). A probe that is killed, crashes or
-  exits non-zero renames the graph and its sidecars to
-  `graph.quarantined-<UTC>` on the first failure (never deleted, the two newest
-  kept), records `graph_store.quarantined`, starts Core without it and runs the
-  normal per-user graph rebuild. `graph-open-in-progress.json` still
-  quarantines after two starts in which Core itself died mid-probe. The
-  graph-width check reads through the same child and is primed by the probe,
-  so Core no longer opens its own `kuzu.Database` (with Kuzu's default buffer
-  pool) beside the SDK's. An embedding switch's staging graph is never
-  touched, and quarantine waits while a switch is open. `memory-processing`,
-  `settings/memory-mode` and `memhub status` report `pipeline.graph_store`
-  (`opening` / `ready` / `rebuilding_after_quarantine`, the quarantine count
-  and reason), and the App shows "知识图谱文件损坏，已自动重建" in all 11
-  languages. The Runtime supervisor waits for the declared startup phase
-  (now at most 3 minutes) instead of killing Core at the readiness budget,
-  respawns a Core that died inside it (bounded), restarts a Core that is alive
-  but has not answered for 90 s after ready (twice the longest loop stall seen
-  in the field), and only forgives a crash streak once Core stayed up 2
-  minutes, so the relaunch delay grows and the circuit opens instead of a
-  relaunch every ~20 s.
-- MemHub: `agent_max_tokens` (512–32000) is now a persistent memory-features
-  setting (`memhub settings features set agent_max_tokens=6000 --yes` /
-  `reset agent_max_tokens`), applied to the SDK's `MemoryConfig` when clients
-  are built, so evolve and System 2 output from local models is no longer cut
-  off at 2000 tokens without a `launchctl setenv` that is lost on reboot. An
-  existing `MEMORY_AGENT_MAX_TOKENS` still sets the default while it is unset.
-- MemHub pins `hy-memory==2.0.15`. In ultra, the read client and the write
-  coordinator's client in one Core now share one `kuzu.Database` on the live
-  graph instead of each opening their own, whose checkpoints overwrote each
-  other and lost graph writes; that graph is opened with a 512 MB buffer pool
-  and at most 4 Kuzu threads (`MEMORY_GRAPH_BUFFER_POOL_MB`,
-  `MEMORY_GRAPH_MAX_THREADS`). The startup graph-open probe now opens the
-  graph with the same bounds.
-- Hermes and OpenCode history imports now produce memories. Neither adapter
-  ended a file with a `ScanCursorTouch`, and that event is the only thing that
-  turns staged records into a write job: `finalize_sdk_file` is reached from
-  the runner's cursor-touch branch alone, while `flush_idle_assemblies` covers
-  `priority='live'` and history is staged as `normal`. A history import of
-  either source therefore reported `completed` with a non-zero `stored` count
-  and left every record in `state='assembling'`, so the library stayed empty.
-  Both adapters now emit the touch after a file is read to its end, matching
-  `sources/common.py`; a read that stopped early or failed emits none, so a
-  partial scan never claims to have reached the end.
+- Output token parameter per model profile (#444, SDK #421): a profile names
+  the field its provider takes for the output budget, `max_tokens` (default)
+  or `max_completion_tokens`. The SDK config, the model probe and both Q&A
+  paths send the same field; a probe refused for it fails with
+  `output_token_parameter_rejected`.
+- `agent_max_tokens` (512–32000) is a persistent memory-features setting
+  (`memhub settings features set agent_max_tokens=6000 --yes`), so evolve and
+  System 2 output from local models is no longer cut off at 2000 tokens.
+  `MEMORY_AGENT_MAX_TOKENS` still sets the default while it is unset.
+- Edits and embeddings on 2.0.16: a Coding/Working edit whose new text cannot
+  be embedded answers 503 `memory_update_embedding_failed` and leaves the
+  memory unchanged (#399); a chat edit whose graph node could not be updated
+  succeeds and says so in `X-Memory-Graph-Sync: failed` (#439); a malformed
+  embedding index mapping fails one write without pausing the provider (#437).
+- OpenCode V2 (#401): sessions from OpenCode 2's new store are imported, the
+  capture plugin loads in V2, and the MCP config is written in V2's
+  `mcp.servers` shape. History imported under V1 is not imported again.
+- Linux keyring: the frozen Core ships the Secret Service backend (#382), and
+  D-Bus keyring reads, writes and deletes run in a killable child, so
+  `sdk-migrate` and `memhub models configure` can no longer hang (#411).
+- Hermes and OpenCode history imports now produce memories (#397). They
+  reported `completed` but left every record staged, so the library stayed
+  empty.
 - `memory-processing` reports stranded writes on the SDK data plane instead of
-  a constant zero. `active_depths()` returns the same number twice there — both
-  are the count of `running` rows — so the legacy `running - in_flight_count`
-  difference was always zero, and the panel called a stalled queue healthy
-  however many workers had died. The field exists for exactly that case (#231),
-  and had been constant since #145 moved memory authority to the SDK. The new
-  `stranded_depths()` counts the rows whose lease is missing or lapsed, from
-  the same read as `running`. The web client also treated only `undefined` as
-  "not reported"; JSON carries an unknown value as `null`, which read as a
-  healthy zero and suppressed the "status unverified" line.
-- MemHub host capture hooks no longer write the database. `one-memory
-  capture <host>` used to open the main SQLite file from its own short-lived
-  process on every hook, re-create the retired `evidence` / FTS tables on an
-  SDK-authority home and write the write queue outside Core's single writer,
-  contending for the file lock with Core and with other hosts' hooks. It now
-  reads only the runtime receipt and token and posts the hook's JSON to the
-  running Core (`POST /api/v1/live-capture/{source}`, 1.5 s budget). Core
-  applies the same gates (grant, sync switch, rejection counting, automated
-  sessions, the Cursor/Claude Code rule; the migration fence stays on the hook
-  side) and stages the turn in-process through the live file-sync path. When
-  Core is not running the turn is dropped silently; nothing falls back to a
-  local write.
-- MemHub no longer sends one turn to the SDK twice when a host's hook and live
-  file sync both see it. The two lanes gave the same message different
-  identities (the hook carries no workspace and often no message id) and
-  separate assembly rows, so both were written as raws. Hook input for a
-  source that live sync reads from its own files (every hooked host except
-  Qwen Work, while live sync is on) is now left to the file path; only a
-  source without file polling is staged from its hook. Tables an older hook
-  re-created on an SDK home are dropped by the existing startup cleanup.
+  a constant zero (#398), and the App no longer reads an unknown value as a
+  healthy zero.
+- The CLI keeps the refusal Core names in a 5xx body (#407), e.g.
+  `secure_storage_unavailable_result_unknown` instead of
+  `http_503_result_unknown`.
+- Migrations 40/44/56/61 can be replayed after a crash instead of leaving a
+  database that no longer opens (#394); MySQL DDL splits on `#` comments
+  (#395).
+- The model probe reports a 401/403 as quota or rate limit only on an explicit
+  provider code, so a permission error asks for a key fix rather than a wait
+  (#370).
+- The browser Console no longer reports an approved host as unsupported on
+  every load; one-click connect is left to the desktop App, with the reason
+  shown in all 11 languages (#440).
+- Recall: SDK search honors the caller's remaining budget (#289), and raw
+  fallback timeouts are logged without the query text (#389).
+- Smaller fixes: the diagnostics usage panel records SDK write model usage
+  again (#324); high-degree memory graphs lay out stably (#306); a zstd
+  session snapshot taken mid-append is no longer reported as corrupt (#303);
+  the capture rejection record survives a crash (#343); a Cursor grant on one
+  project folder finds its transcripts again (#445).
+- Build: the frozen Core ships the `neo4j` and `qdrant-client` drivers;
+  2.0.16's `hy-memory[postgres]` extra is not installed (MemHub keeps the
+  SDK's Coding/Working store in SQLite, so `MEMORY_BUSINESS_STORE` has no
+  effect). The SBOM and notices are regenerated.
+- The architecture's first principle: retrieval uses only the storage
+  backend's native capabilities, with no side index beside the store (#433;
+  `memhub/docs/ARCHITECTURE.md`).
+- CI runs the full Core suite (#445).
 
 ## Hy Memory 2.0.16 — 2026-11-12
 
@@ -500,6 +411,26 @@ App and Runtime.
   endpoint no longer follows the generation `base_url`.
 - Hermes import drops gateway notices and probes and unwraps relayed
   messages; `memhub logs` no longer reports valid older records as damaged.
+- MemHub host capture hooks no longer write the database. `one-memory
+  capture <host>` used to open the main SQLite file from its own short-lived
+  process on every hook, re-create the retired `evidence` / FTS tables on an
+  SDK-authority home and write the write queue outside Core's single writer,
+  contending for the file lock with Core and with other hosts' hooks. It now
+  reads only the runtime receipt and token and posts the hook's JSON to the
+  running Core (`POST /api/v1/live-capture/{source}`, 1.5 s budget). Core
+  applies the same gates (grant, sync switch, rejection counting, automated
+  sessions, the Cursor/Claude Code rule; the migration fence stays on the hook
+  side) and stages the turn in-process through the live file-sync path. When
+  Core is not running the turn is dropped silently; nothing falls back to a
+  local write.
+- MemHub no longer sends one turn to the SDK twice when a host's hook and live
+  file sync both see it. The two lanes gave the same message different
+  identities (the hook carries no workspace and often no message id) and
+  separate assembly rows, so both were written as raws. Hook input for a
+  source that live sync reads from its own files (every hooked host except
+  Qwen Work, while live sync is on) is now left to the file path; only a
+  source without file polling is staged from its hook. Tables an older hook
+  re-created on an SDK home are dropped by the existing startup cleanup.
 
 ## Hy Memory 2.0.11 — 2026-11-01
 
