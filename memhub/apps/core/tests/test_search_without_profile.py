@@ -235,7 +235,21 @@ async def test_a_committed_switch_rebuilds_reads_without_closing_one_in_flight(
     from one_memory.secrets import InMemorySecretStore
 
     recorder = _Recorder(tmp_path)
-    monkeypatch.setattr("one_memory.hy_sdk_runtime.acquire_client", recorder)
+    loop = asyncio.get_running_loop()
+    client_closed = asyncio.Event()
+
+    def acquire(*args, **kwargs):
+        lease = recorder(*args, **kwargs)
+        close = lease.close
+
+        def signal_close() -> None:
+            close()
+            loop.call_soon_threadsafe(client_closed.set)
+
+        lease.close = signal_close
+        return lease
+
+    monkeypatch.setattr("one_memory.hy_sdk_runtime.acquire_client", acquire)
     profiles = ModelProfileStore(tmp_path / "one-memory.sqlite3")
     secrets = InMemorySecretStore()
     spaces = EmbeddingSpaceStore(profiles.database_path)
@@ -277,8 +291,7 @@ async def test_a_committed_switch_rebuilds_reads_without_closing_one_in_flight(
 
     finish.set()
     assert await in_flight == old
-    for _ in range(5):
-        await asyncio.sleep(0)
+    await asyncio.wait_for(client_closed.wait(), timeout=5)
     assert recorder.closed == [old]
     await handle.close()
     assert recorder.closed == [old, new]

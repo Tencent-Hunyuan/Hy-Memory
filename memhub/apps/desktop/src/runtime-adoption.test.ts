@@ -7,6 +7,7 @@ import {
   type RunningRuntime,
   reconcileRunningRuntime,
 } from "./runtime-adoption";
+import { shutdownRuntime } from "./runtime-shutdown";
 
 const app = { buildNumber: 38, commit: "abcdef1234567" };
 const enabled = (jobPid: number | null): RuntimeServiceState => ({
@@ -80,6 +81,43 @@ describe("comparing the running Runtime's build with the App's", () => {
 });
 
 describe("App start adopts or replaces a running Runtime", () => {
+  it("stops an adopted fallback on quit only while the service is disabled", async () => {
+    const { result, stopRuntime } = reconcile({
+      running: running({ buildNumber: 38, commit: null }),
+      service: disabled,
+    });
+    const adoption = await result;
+    expect(adoption.adopted).toBe(true);
+    expect(stopRuntime).not.toHaveBeenCalled();
+
+    for (const service of [disabled, enabled(4321)]) {
+      const stopRuntimes = vi.fn(async () => ({
+        stopped: [4321],
+        unverified: [],
+      }));
+      const outcome = await shutdownRuntime({
+        dataDir: "/tmp/runtime-data",
+        standalone: true,
+        queryServiceState: async () => service,
+        preserveReason: adoption.preserveReason,
+        stopRuntimes,
+      });
+
+      if (service.state === "disabled") {
+        expect(outcome).toEqual({ runtime: "stopped" });
+        expect(stopRuntimes).toHaveBeenCalledWith({
+          dataDir: "/tmp/runtime-data",
+        });
+      } else {
+        expect(outcome).toEqual({
+          runtime: "preserved",
+          reason: "background-service-enabled",
+        });
+        expect(stopRuntimes).not.toHaveBeenCalled();
+      }
+    }
+  });
+
   it("starts one when nothing runs, without asking the service manager", async () => {
     const { result, stopRuntime, queryServiceState } = reconcile({
       running: null,
