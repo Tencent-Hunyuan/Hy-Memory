@@ -407,7 +407,11 @@ def test_system2_prompts_follow_language(code):
 
 
 @pytest.mark.asyncio
-async def test_system2_agent_uses_explicit_language(monkeypatch):
+@pytest.mark.parametrize("fact_content", [
+    "用户每天跑步",
+    "用户使用 Python 开发，运行 pytest tests/test_search_client.py --maxfail=1",
+])
+async def test_system2_agent_uses_explicit_language(monkeypatch, fact_content):
     from hy_memory.pipelines import system2_agent as s2
 
     seen = {}
@@ -422,7 +426,7 @@ async def test_system2_agent_uses_explicit_language(monkeypatch):
 
     monkeypatch.setattr("hy_memory.agent.llm_provider.LLMProvider", _Provider)
     materials = {"stats": {}, "clusters": [{"facts": [
-        {"layer": "L2", "content": "用户每天跑步", "node_id": "f1"}], "centroid_text": "跑步"}]}
+        {"layer": "L2", "content": fact_content, "node_id": "f1"}], "centroid_text": "跑步"}]}
     async def _run(**kwargs):
         # Only the prompt sent to the model matters here; executing the
         # (empty) operation list needs a real tool executor.
