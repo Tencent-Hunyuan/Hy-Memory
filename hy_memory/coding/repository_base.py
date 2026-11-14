@@ -3,7 +3,9 @@
 from abc import ABC, abstractmethod
 from typing import Any, Dict, List, Optional, Set, Tuple
 
-from .types import CodingMemory, WorkingFact
+from .types import (
+    CodingMemory, WorkingFact, ConsolidationScope, ConsolidationSnapshot, ConsolidationReceipt,
+)
 
 
 class MemoryRepository(ABC):
@@ -12,6 +14,26 @@ class MemoryRepository(ABC):
     Implementations must preserve input ordering, scope filters and idempotent
     trace insertion. They never create or query a vector store.
     """
+
+    supports_consolidation = False
+
+    def get_experience_for_withdrawal(self, experience_id: str, user_id: Optional[str]) -> Optional[CodingMemory]:
+        """Read a withdrawal target, including an inactive derived product."""
+        return self.get_experience(experience_id, user_id)
+
+    def consolidation_snapshot(self, scope: ConsolidationScope, session_ids: List[str]) -> ConsolidationSnapshot:
+        """Read an exact, consistent basis and its current activation baseline."""
+        raise NotImplementedError("Repository does not support atomic consolidation")
+
+    def get_consolidation(self, consolidation_id: str, user_id: str) -> Optional[ConsolidationReceipt]:
+        """Read the authoritative receipt, including explicitly marked diagnostics."""
+        raise NotImplementedError("Repository does not support atomic consolidation")
+
+    def publish_consolidation(
+        self, snapshot: ConsolidationSnapshot, memories: List[CodingMemory], attempt_id: str, *, reuse: bool = False,
+    ) -> ConsolidationReceipt:
+        """Validate a frozen basis and atomically publish or reactivate a decision."""
+        raise NotImplementedError("Repository does not support atomic consolidation")
 
     @abstractmethod
     def initialize(self) -> None: ...

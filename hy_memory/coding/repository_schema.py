@@ -19,7 +19,9 @@ CREATE TABLE IF NOT EXISTS coding_memory_meta (
     extraction_source TEXT NOT NULL DEFAULT 'auto_extract',
     memory_at        INTEGER,
     created_at       TEXT NOT NULL,
-    updated_at       TEXT NOT NULL
+    updated_at       TEXT NOT NULL,
+    consolidation_id TEXT,
+    evidence_refs    TEXT NOT NULL DEFAULT '[]'
 );
 """
 
@@ -99,6 +101,8 @@ _ADDED_COLUMNS = {
         "extraction_source": "TEXT NOT NULL DEFAULT 'auto_extract'",
         # 对话时间，秒级 epoch（同 chat）。老库里的行是 NULL：那时没存过。
         "memory_at": "INTEGER",
+        "consolidation_id": "TEXT",
+        "evidence_refs": "TEXT NOT NULL DEFAULT '[]'",
     },
     # 早期版本存过一列 fact_chain（机械累积的历代说法），已废弃：同样的信息顺着
     # fact_link 反查就有。老库里那一列留着不管，有默认值不影响插入。
@@ -115,3 +119,35 @@ _ADDED_COLUMNS = {
         "memory_at": "INTEGER",
     },
 }
+
+_CREATE_CONSOLIDATION_SQL = """
+CREATE TABLE IF NOT EXISTS consolidation_receipt (
+    consolidation_id TEXT PRIMARY KEY,
+    group_key TEXT NOT NULL,
+    basis_digest TEXT NOT NULL,
+    scope_json TEXT NOT NULL,
+    session_ids TEXT NOT NULL,
+    decision TEXT NOT NULL CHECK (decision IN ('published', 'no_result')),
+    is_current INTEGER NOT NULL CHECK (is_current IN (0, 1)),
+    basis_valid INTEGER NOT NULL CHECK (basis_valid IN (0, 1)),
+    activation_epoch BIGINT NOT NULL,
+    experience_ids TEXT NOT NULL,
+    withdrawn_ids TEXT NOT NULL DEFAULT '[]',
+    attempt_id TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    UNIQUE(group_key, basis_digest)
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_consolidation_current
+    ON consolidation_receipt(group_key) WHERE is_current = 1;
+CREATE TABLE IF NOT EXISTS consolidation_read_set (
+    consolidation_id TEXT NOT NULL REFERENCES consolidation_receipt(consolidation_id),
+    kind TEXT NOT NULL CHECK (kind IN ('fact', 'experience')),
+    material_id TEXT NOT NULL,
+    session_id TEXT NOT NULL,
+    fingerprint TEXT NOT NULL,
+    memory_at BIGINT,
+    PRIMARY KEY (consolidation_id, kind, material_id)
+);
+CREATE INDEX IF NOT EXISTS idx_consolidation_dependents
+    ON consolidation_read_set(kind, material_id, consolidation_id);
+"""

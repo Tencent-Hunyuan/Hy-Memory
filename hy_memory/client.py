@@ -234,7 +234,7 @@ def _ensure_internal_loop(method):
             started_at = time.perf_counter()
             result = await method(self, *args, **kwargs)
             if isinstance(result, dict) and method.__name__ in {
-                "async_add", "async_add_extracted", "async_finalize_session",
+                "async_add", "async_add_extracted", "async_finalize_session", "async_consolidate",
             }:
                 runtime_diag = result.setdefault("runtime", {})
                 runtime_diag["submit_wait_ms"] = round(
@@ -1676,6 +1676,7 @@ class HyMemoryClient:
                 "updated_at": d.updated_at.isoformat() if d.updated_at else None,
                 "source": d.source,
                 "extraction_source": d.extraction_source,
+                **d.derived_metadata(),
             })
 
         elapsed = round((time.perf_counter() - t0) * 1000, 2)
@@ -1843,6 +1844,87 @@ class HyMemoryClient:
             ),
             include_runtime_diag=True,
         )
+
+    def consolidate(
+        self, session_ids: List[str], *, user_id: str,
+        workspace_id: Optional[str], branch: Optional[str],
+        agent_id: str = "default_agent", source: str = "default", scene: str = "working",
+        request_id: Optional[str] = None, embed_override: Optional[Dict[str, Any]] = None,
+        language: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Publish reusable experiences from explicitly selected sessions.
+
+        workspace_id and branch are required; None matches only stored NULL.
+        request_id is a tracing ID, not the consolidation identity.
+        """
+        return self._loop_thread.run(self.async_consolidate(
+            session_ids, user_id=user_id, agent_id=agent_id, source=source,
+            workspace_id=workspace_id, branch=branch, scene=scene, request_id=request_id,
+            embed_override=embed_override, language=language,
+        ), include_runtime_diag=True)
+
+    @_ensure_internal_loop
+    async def async_consolidate(
+        self, session_ids: List[str], *, user_id: str,
+        workspace_id: Optional[str], branch: Optional[str],
+        agent_id: str = "default_agent", source: str = "default", scene: str = "working",
+        request_id: Optional[str] = None, embed_override: Optional[Dict[str, Any]] = None,
+        language: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Async counterpart of consolidate, using the client's existing write loop."""
+        from contextlib import nullcontext
+        from .coding.consolidator import ExperienceConsolidator
+        from .coding.evidence import validate_sessions
+        from .coding.types import ConsolidationScope
+
+        started = time.perf_counter()
+        scope = ConsolidationScope(user_id, agent_id, source, workspace_id, branch, scene)
+        sessions = validate_sessions(session_ids)
+        language = self._resolve_language(language)
+        request_id = (request_id or "").strip() or str(uuid.uuid4())
+        set_request_id(request_id)
+        if not self._config.coding.enable:
+            raise ValueError("working/coding memory is disabled")
+        await self._get_coding_writer(variant=scene)
+        store = self._store_for_variant(scene)
+        override = embed_override or {}
+        with (embed_endpoint_override(
+            base_url=override.get("base_url"), api_key=override.get("api_key"),
+            extra_headers=override.get("extra_headers"), timeout=override.get("timeout"),
+        ) if override else nullcontext()):
+            result = await ExperienceConsolidator(
+                store, self._coding_llm_provider, self._config,
+            ).consolidate(scope, sessions, language=language)
+        return {**result.to_dict(), "request_id": request_id,
+                "success": result.status != "outcome_unknown", "scene": scene,
+                "elapsed_ms": round((time.perf_counter() - started) * 1000, 2)}
+
+    def get_consolidation(
+        self, consolidation_id: str, *, user_id: str, scene: str = "working",
+    ) -> Optional[Dict[str, Any]]:
+        """Read authoritative publication state and explicitly marked evidence diagnostics."""
+        return self._loop_thread.run(self.async_get_consolidation(
+            consolidation_id, user_id=user_id, scene=scene,
+        ))
+
+    @_ensure_internal_loop
+    async def async_get_consolidation(
+        self, consolidation_id: str, *, user_id: str, scene: str = "working",
+    ) -> Optional[Dict[str, Any]]:
+        """SQL-only receipt query; unavailable databases raise rather than return not found."""
+        from .coding.store import CodingMemoryStore, _run_in_pool
+        if scene not in ("working", "coding"):
+            raise ValueError("receipt query requires scene='working' or 'coding'")
+        if not isinstance(consolidation_id, str) or not consolidation_id or not user_id:
+            raise ValueError("consolidation_id and user_id are required")
+        store = self._store_for_variant(scene)
+        if store is not None:
+            receipt = await _run_in_pool(store._repository.get_consolidation, consolidation_id, user_id)
+        else:
+            receipt = await CodingMemoryStore.read_consolidation(
+                self._config, consolidation_id, user_id, variant=scene,
+            )
+        return receipt.to_dict() if receipt else None
 
     def search(
         self,
@@ -4698,6 +4780,7 @@ class HyMemoryClient:
         kind: Optional[str],
         variant: Optional[str],
         chat_lookups: Dict[str, Any],
+        for_withdrawal: bool = False,
     ) -> Tuple[List[Tuple[str, Any]], Dict[str, Any], Dict[str, Any]]:
         """按 kind/variant 在 chat 与 working/coding 的经验/事实里精确查 ID。
 
@@ -4737,7 +4820,8 @@ class HyMemoryClient:
                 task_names.append(name)
         for candidate_variant, store in stores.items():
             if "experience" in coding_kinds:
-                tasks.append(store.get_by_id(memory_id))
+                lookup = store.get_for_withdrawal if for_withdrawal else store.get_by_id
+                tasks.append(lookup(memory_id))
                 task_names.append(f"{candidate_variant}:experience")
             if "fact" in coding_kinds:
                 tasks.append(store.get_fact(memory_id))
@@ -5263,7 +5347,7 @@ class HyMemoryClient:
                 return None
 
         matches, _, stores = await self._resolve_memory_namespace(
-            memory_id, kind=kind, variant=variant,
+            memory_id, kind=kind, variant=variant, for_withdrawal=True,
             chat_lookups={
                 "chat:vdb": lambda: self._vector_store.get_by_id(memory_id),
                 "chat:graph": _get_graph,
@@ -6138,6 +6222,7 @@ class HyMemoryClient:
                 "created_at": d.created_at.isoformat() if d.created_at else None,
                 "updated_at": d.updated_at.isoformat() if d.updated_at else None,
                 "source": d.source,
+                **d.derived_metadata(),
             }
             for d in mems
         ]

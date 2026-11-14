@@ -257,3 +257,61 @@ python -m pytest -q \
   tests/coding/test_scene_coding_search.py \
   tests/coding/test_coding_pipeline_log.py
 ```
+
+
+## 显式跨会话经验巩固（Working / Coding）
+
+`consolidate()` / `async_consolidate()` 将调用方明确选定的多个会话归纳为独立经验，
+不调用普通写入抽取、场景分类或 Chat evolve。例：
+
+```python
+result = client.consolidate(
+    ["S1", "S2", "S3"],
+    user_id="alice", agent_id="assistant", source="cli",
+    workspace_id="my-project", branch="main", scene="coding",
+    language="zh-Hans", request_id="trace-only",
+)
+receipt = client.get_consolidation(
+    result["consolidation_id"], user_id="alice", scene="coding",
+)
+# 异步入口参数相同：
+# result = await client.async_consolidate(...)
+# receipt = await client.async_get_consolidation(...)
+```
+
+范围必须是同一个 user / agent / source / workspace / branch / scene，至少两个不同
+session，且每个 session 必须有原始事实或普通经验。`workspace_id`、`branch` 必须显式传入；
+`None` 仅匹配存储 NULL，与普通 search/list 的可选过滤语义不同。只读取 active / superseded
+原始事实的本代正文及普通经验，不消费已有综合经验、继承块、关系展开或链摘要。
+
+返回 `status` 为 `published`、`no_result` 或 `outcome_unknown`。合法空结果是可复用的
+`no_result` 决策；空响应、截断、未知引用、单会话结论和半批非法输出均整批报错
+（`CodingWriteError`），不会被转换为空结果。每条结论含适用条件、验证状态及按支持、条件、
+反例分类的 `evidence_refs`。结构校验不能证明引用在语义上确实支持结论，应用仍应评审归纳质量。
+
+相同完整输入快照复用同一 `consolidation_id` 和权威产物清单，session 顺序、重复 session
+和 request ID 不改变身份。输入、输出预算默认 16,000 / 4,096 token；输入按完整 prompt 的
+cl100k_base token 数估算，超预算拒绝而不裁材料。调用级 `embed_override` 和 `language`
+与普通写入一致。综合经验 `session_id`、`memory_at` 均为 `None`；`created_at` 表示首次发布
+该产物的时间，证据引用携带各来源的事件时间。
+
+综合经验进入当前配置 VDB 的原生经验稠密向量通道（task + search_keys），不新增稀疏、
+关键词、全文或混合检索通道。指定 session 集合检索时，必须允许完整 read_set 中的所有
+session；只允许 S1/S2 时不能读到消费了 S3 的综合结果，即使答案未引用 S3。
+
+任一实际输入材料正文或投影元数据被修改、删除，整批在同一业务事务中进入 `needs_review`，
+退出正常 get/search/list/stats；向量中的残留也不返回匹配片段。回执诊断仍可查看明确标记为
+失效的综合正文，`read_set` 中每项为 `unchanged` / `changed` / `missing`，不保存历史原文。
+只改关系状态、互链或继承块不使依据失效；新增材料须显式重跑才消费。A→B→A 恢复原文也
+不会自动恢复旧成果，必须显式巩固重审。发布竞争抛 `ConsolidationConflict`，重试会读取新快照。
+
+普通 insert/update/edit 和事实来源回填禁止改写综合经验。使用已有
+`client.delete(id, kind="experience", variant="coding")` 撤回成果；回执保留 `withdrawn_ids`，
+相同依据复用及历史重激活不会复活被撤回正文。全部撤回仍保留原始 `published` 决策，
+不会改称模型原先得出了 `no_result`。
+
+`outcome_unknown` 表示业务提交未获得确定确认，不能据此认定失败或清理候选向量。
+用稳定 ID 查询回执，按 `is_current`、`basis_valid`、`activation_epoch`、`attempt_id` 和
+`experience_ids` 查证当前权威状态；数据库不可用会抛错，不会伪装为未找到。
+查询不承诺还原每次并发 attempt 的完整历史。回执读取只访问业务库，冷路径不初始化模型或
+任何 VDB；但构造 `HyMemoryClient` 自身仍遵循现有 SDK 初始化流程。
