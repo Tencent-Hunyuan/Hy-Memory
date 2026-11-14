@@ -66,6 +66,15 @@ from __future__ import annotations
 import logging
 from typing import TYPE_CHECKING
 
+from .utils.init_rollback import (
+    close_component,
+    finish_cleanup,
+    initialize_component,
+    rollback_metrics,
+    run_initialization,
+    stop_failed_loops,
+)
+
 if TYPE_CHECKING:
     from .config import MemoryConfig
 
@@ -88,6 +97,7 @@ class SharedRuntime:
         # search 专用 loop：与 write loop 物理隔离，避免 write 队列挤占 search 调度。
         self._search_loop_thread = None  # type: Optional[object]  # _LoopThread
         self._cache = None        # type: Optional[CacheBase]
+        self._initializing_metrics = None
         self._metrics = None      # type: Optional[object]  # MetricsCollector
         self._observability_installed = False
         self._closed = False
@@ -121,13 +131,32 @@ class SharedRuntime:
         # 因此把真正的 init 委托过去。
         from .client import _LoopThread
 
-        self._loop_thread = _LoopThread()
-        # search 专用 loop（独立线程 + 独立 event loop），只承载 async_search 协程。
-        # cache pool 仍绑在 write loop（self._loop_thread），search loop 上产生的
-        # pipeline-log DB 落库会被 observability 层派发回 cache 所属 loop 执行。
-        self._search_loop_thread = _LoopThread()
-        # 在 _LoopThread 的 loop 上做所有需要 loop affinity 的 init
-        await self._loop_thread.run_async(self._init_on_loop())
+        try:
+            self._loop_thread = _LoopThread()
+            self._search_loop_thread = _LoopThread()
+            await run_initialization(
+                self._loop_thread, self._initialize_components, self._rollback_initialization,
+            )
+            self._initializing_metrics = None
+        except BaseException:
+            stop_failed_loops(self._search_loop_thread, self._loop_thread)
+            self._closed = True
+            raise
+
+    async def _initialize_components(self) -> None:
+        try:
+            await self._init_on_loop()
+        except BaseException:
+            await finish_cleanup(self._rollback_initialization())
+            raise
+
+    async def _rollback_initialization(self) -> None:
+        state, self._initializing_metrics = self._initializing_metrics, None
+        await rollback_metrics(state, self._cache)
+        self._metrics = None
+        cache, self._cache = self._cache, None
+        if cache is not None:
+            await close_component("cache", cache.close)
 
     async def _init_on_loop(self) -> None:
         """在 _LoopThread 的 loop 上执行的初始化。"""
@@ -135,7 +164,7 @@ class SharedRuntime:
         from .data.cache import create_cache
 
         self._cache = create_cache(self._config)
-        await self._cache.initialize()
+        await initialize_component(self._cache)
         logger.info(
             f"[runtime] Cache ready (backend={self._config.cache.backend})"
         )
@@ -145,6 +174,9 @@ class SharedRuntime:
         from .metrics import MetricsCollector
 
         self._metrics = MetricsCollector.get()
+        self._initializing_metrics = (
+            self._metrics, self._metrics._cache, self._metrics._background_started,
+        )
         self._metrics.bind_cache(self._cache)
         await self._metrics.start_background_tasks()
         logger.info("[runtime] MetricsCollector bound to shared cache")
