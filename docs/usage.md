@@ -372,6 +372,25 @@ restored = other_client.import_user_memories("user_001", exported["nodes"])
 必须为空，写入失败会回滚。两者都不碰图库：图是派生数据，恢复后用
 `build_memory_graph()` 重建。Chroma、Qdrant、FAISS 后端都适用。
 
+Qdrant BM25 schema/backfill 是显式维护操作，不在普通初始化时修改远程数据：
+
+```python
+plan = client.plan_qdrant_bm25_upgrade()  # 只读；不会加载或下载模型
+
+# 仅在所有写入者均已停止的维护窗口执行。
+if plan["state"] == "upgrade_required":
+    result = client.upgrade_qdrant_bm25(
+        writers_stopped=True,
+        batch_size=256,
+    )
+```
+
+升级使用 Qdrant 1.18+ 原生 named sparse vector 与 IDF modifier，只回填派生的
+`bm25` vector；不会改 dense vector、payload 或 point id。Qdrant 服务端过旧、
+FastEmbed 不可用或覆盖校验失败时返回结构化 `blocked`/失败状态，不删除 collection。
+对应异步方法为 `async_plan_qdrant_bm25_upgrade()` 和
+`async_upgrade_qdrant_bm25()`。
+
 `get()` / `async_get()` 是统一的 ID 精确读取：返回结果的 `layer`、`kind` 和
 `variant` 表明实际类型。授权由调用 SDK 前的产品边界完成，不由 SDK 根据 layer
 猜测。`list_memories()` 默认仍不包含 `L1_RAW`；显式传
