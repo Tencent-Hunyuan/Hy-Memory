@@ -31,6 +31,7 @@ from ..prompts import (
     with_output_language,
 )
 from .store import CodingMemoryStore
+from .evidence import _DETAILS_INHERIT_MARKER, _own_details
 from .types import (
 
 
@@ -83,7 +84,7 @@ _CHAIN_SUMMARY_MAX_TOKENS = 600
 #      会迅速吃穿上下文。所以有总预算。
 #   3. 预算内的取舍。按代际由近到远填，填不下就停——近代的具体取值比远代的更可能
 #      还有效。这一步是有损的，损在哪里会写进过继块的尾注，不静默截断。
-_DETAILS_INHERIT_MARKER = "--- inherited from superseded facts ---"# 总预算。约等于抽取器单条 details 的上限（_MAX_DETAILS_CHARS=4000），即"过继来的
+# 总预算。约等于抽取器单条 details 的上限（_MAX_DETAILS_CHARS=4000），即"过继来的
 # 全部历史"最多再占一条事实的份量，不让历史盖过当前状态。
 _MAX_INHERITED_DETAILS_CHARS = 4000
 # 单条祖先的上限，防一条巨型 details 把整个预算吃光、后面几代一个字都进不来。
@@ -98,18 +99,6 @@ def _inherit_details_default() -> bool:
     if raw is None or not raw.strip():
         return _INHERIT_DETAILS_DEFAULT
     return raw.strip().lower() not in {"0", "false", "no", "off"}
-
-
-def _own_details(details: str) -> str:
-    """剥掉一条事实自己过继来的段，只留它本代产生的 details。
-
-    没有标记就原样返回。这是防指数膨胀的关键一步：血统由 _collect_history 一次走全，
-    每代只贡献自己那一份。
-    """
-    if not details:
-        return ""
-    head = details.split(_DETAILS_INHERIT_MARKER, 1)[0]
-    return head.rstrip()
 
 
 def _build_inherited_details(history: List[WorkingFact]) -> Tuple[str, int, int]:

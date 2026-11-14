@@ -22,7 +22,7 @@ from ..data.vector_store import create_vector_store
 from ..data.vector_store_base import VectorStoreBase
 from ..models.memory import MemoryLayer, MemoryNode, MemoryStatus
 from ..utils.async_executor import run_in_executor_guarded
-from .types import CodingMemory, CodingWriteError, WorkingFact
+from .types import CodingMemory, CodingWriteError, ConsolidationReceipt, WorkingFact
 from .repository import create_memory_repository, memory_repository_exists
 from .relational_repository import _to_epoch, _scope_where as _scope_where
 from .repository_schema import (
@@ -301,6 +301,26 @@ class CodingMemoryStore:
         await _run_in_pool(self._repository.close)
         self._initialized = False
 
+    @classmethod
+    async def read_consolidation(
+        cls, config: MemoryConfig, consolidation_id: str, user_id: str, *, variant: str = "working",
+    ) -> Optional["ConsolidationReceipt"]:
+        """Cold SQL-only receipt read. Database failures propagate to the caller."""
+        if not await _run_in_pool(cls.database_exists, config, config.coding.db_path, variant):
+            return None
+        store = cls(config, embed_service=None, db_path=config.coding.db_path, variant=variant)
+        try:
+            await _run_in_pool(store._repository.initialize)
+            return await _run_in_pool(store._repository.get_consolidation, consolidation_id, user_id)
+        finally:
+            await _run_in_pool(store._repository.close)
+
+    async def get_for_withdrawal(
+        self, experience_id: str, user_id: Optional[str] = None,
+    ) -> Optional[CodingMemory]:
+        """Resolve an inactive or invalid derived body for explicit withdrawal."""
+        return await _run_in_pool(self._repository.get_experience_for_withdrawal, experience_id, user_id)
+
     # ------------------------------------------------------------
     # 写入
     # ------------------------------------------------------------
@@ -311,6 +331,8 @@ class CodingMemoryStore:
         先向量化再落业务库：向量化失败抛 CodingWriteError(EMBEDDING_FAILED)，
         什么都不写，不留一条没有向量、永远检索不到的经验。
         """
+        if memory.consolidation_id:
+            raise ValueError("consolidated experiences require atomic publication")
         self._fill_timestamps(memory)
         embeddings = await self._embed_vec_keys(memory)
         await _run_in_pool(self._repository.upsert_experience, memory)
@@ -359,12 +381,16 @@ class CodingMemoryStore:
 
     async def delete(self, experience_id: str, user_id: str) -> bool:
         """删除一条 coding memory，返回是否真有删到。"""
-        prev = await self.get_by_id(experience_id, user_id=user_id)
+        prev = await _run_in_pool(self._repository.get_experience_for_withdrawal, experience_id, user_id)
         if prev is None:
             logger.info(f"[coding-store] delete skipped (not found): {experience_id}")
             return False
-        await self._delete_vec_keys_by_count(experience_id, 1 + len(prev.search_keys))
-        await _run_in_pool(self._repository.delete_experience, experience_id, user_id)
+        if prev.consolidation_id:
+            await _run_in_pool(self._repository.delete_experience, experience_id, user_id)
+            await self._delete_vec_keys_by_count(experience_id, 1 + len(prev.search_keys))
+        else:
+            await self._delete_vec_keys_by_count(experience_id, 1 + len(prev.search_keys))
+            await _run_in_pool(self._repository.delete_experience, experience_id, user_id)
         logger.info(f"[coding-store] deleted experience_id={experience_id}")
         return True
 
@@ -391,6 +417,8 @@ class CodingMemoryStore:
         if prev is None:
             return None
         updated = deepcopy(prev)
+        if prev.consolidation_id:
+            raise ValueError("consolidated experiences cannot be edited")
         if task is not None:
             updated.task = task
         if solution is not None:
@@ -614,6 +642,7 @@ class CodingMemoryStore:
         effective_session_ids = list(session_ids) if session_ids else (
             [session_id] if session_id else []
         )
+        requested_top = top
         allowed: Optional[Set[str]] = None
         if effective_agent_ids or effective_session_ids or workspace_id:
             allowed, total = await _run_in_pool(
@@ -634,41 +663,56 @@ class CodingMemoryStore:
                 return []
             top = _scope_overfetch(top, len(allowed), total)
 
-        raw = await self._vec.search(
-            query_embedding=query_embedding,
-            user_id=user_id,
-            limit=top,
-            score_threshold=0.0,
-            only_latest=True,
-            include_sources=include_sources,
-            exclude_sources=exclude_sources,
-        )
+        while True:
+            raw = await self._vec.search(
+                query_embedding=query_embedding,
+                user_id=user_id,
+                limit=top,
+                score_threshold=0.0,
+                only_latest=True,
+                include_sources=include_sources,
+                exclude_sources=exclude_sources,
+            )
 
-        best: Dict[str, Dict[str, Any]] = {}
-        for hit in raw:
-            node: MemoryNode = hit.get("node")
-            score: float = hit.get("score", 0.0)
-            if node is None:
-                continue
-            custom = node.custom or {}
-            eid = custom.get("coding_experience_id")
-            if not eid:
-                continue
-            # 认业务库那份而不是向量行 payload 里的 coding_workspace_id 副本：
-            # 两边不是一个事务写的，经验换 workspace 后 payload 可能还是旧值。
-            if allowed is not None and eid not in allowed:
-                continue
-            # dedup by experience_id, 保留最高分
-            cur = best.get(eid)
-            if cur is None or score > cur["score"]:
-                best[eid] = {
-                    "experience_id": eid,
-                    "score": score,
-                    "matched_key_kind": custom.get("coding_key_kind", "aspect"),
-                    "matched_key_text": custom.get("coding_key_text") or node.content,
-                }
-        # 排序
-        return sorted(best.values(), key=lambda h: -h["score"])
+            best: Dict[str, Dict[str, Any]] = {}
+            for hit in raw:
+                node: MemoryNode = hit.get("node")
+                score: float = hit.get("score", 0.0)
+                if node is None:
+                    continue
+                custom = node.custom or {}
+                eid = custom.get("coding_experience_id")
+                if not eid:
+                    continue
+                # 认业务库那份而不是向量行 payload 里的 coding_workspace_id 副本：
+                # 两边不是一个事务写的，经验换 workspace 后 payload 可能还是旧值。
+                if allowed is not None and eid not in allowed:
+                    continue
+                # dedup by experience_id, 保留最高分
+                cur = best.get(eid)
+                if cur is None or score > cur["score"]:
+                    best[eid] = {
+                        "experience_id": eid,
+                        "score": score,
+                        "matched_key_kind": custom.get("coding_key_kind", "aspect"),
+                        "matched_key_text": custom.get("coding_key_text") or node.content,
+                    }
+            visible_memories = await _run_in_pool(
+                self._repository.get_experiences, list(best), user_id, include_sources, exclude_sources,
+            )
+            visible = {
+                memory.experience_id for memory in visible_memories
+                if (not effective_agent_ids or memory.agent_id in effective_agent_ids)
+                and (not effective_session_ids or memory.consolidation_id
+                     or memory.session_id in effective_session_ids)
+                and _scope_matches(memory.workspace_id, memory.branch, workspace_id, branch)
+            }
+            hits = sorted((hit for eid, hit in best.items() if eid in visible), key=lambda h: -h["score"])
+            if len(hits) >= requested_top or len(raw) < top or top >= _SCOPE_OVERFETCH_MAX_ROWS:
+                return hits
+            # Inactive batches may retain vectors. Expand native ANN recall rather
+            # than letting hidden candidates permanently starve the current batch.
+            top = min(top * 2, _SCOPE_OVERFETCH_MAX_ROWS)
 
     # ------------------------------------------------------------
     # 事实层
@@ -971,6 +1015,17 @@ class CodingMemoryStore:
                 logger.warning(f"[coding-store] embed_batch failed: {e}")
                 return
 
+        nodes = self._experience_vec_nodes(memory, embeddings)
+
+        try:
+            await self._vec.upsert_batch(nodes)
+        except Exception as e:
+            logger.warning(f"[coding-store] vdb upsert_batch failed: {e}")
+
+    def _experience_vec_nodes(
+        self, memory: CodingMemory, embeddings: List[List[float]],
+    ) -> List[MemoryNode]:
+        all_keys = self._vec_key_texts(memory)
         nodes: List[MemoryNode] = []
         for i, ((kind, text), emb) in enumerate(zip(all_keys, embeddings)):
             node = MemoryNode(
@@ -995,10 +1050,28 @@ class CodingMemoryStore:
             )
             nodes.append(node)
 
+        return nodes
+
+    async def prewrite_consolidated(self, memory: CodingMemory) -> None:
+        """Strict candidate write; no SQL visibility until atomic publication."""
+        from numbers import Real
+        if self._vec is None:
+            raise CodingWriteError("VECTOR_WRITE_FAILED", "consolidation requires an experience vector store")
+        embeddings = await self._embed_vec_keys(memory)
+        expected_dims = self._coding_config.vector_store.embedding_dims
+        if any(len(vector) != expected_dims or not all(
+            isinstance(value, Real) and not isinstance(value, bool) and math.isfinite(value)
+            for value in vector) or not any(vector) for vector in embeddings):
+            raise CodingWriteError("EMBEDDING_FAILED", "invalid consolidation embedding dimensions or values")
+        nodes = self._experience_vec_nodes(memory, embeddings)
         try:
-            await self._vec.upsert_batch(nodes)
-        except Exception as e:
-            logger.warning(f"[coding-store] vdb upsert_batch failed: {e}")
+            written = await self._vec.upsert_batch(nodes)
+        except Exception as error:
+            raise CodingWriteError("VECTOR_WRITE_FAILED", "consolidation vector write failed") from error
+        expected = [node.node_id for node in nodes]
+        if (not isinstance(written, (list, tuple)) or len(written) != len(expected)
+                or set(written) != set(expected)):
+            raise CodingWriteError("VECTOR_WRITE_FAILED", "vector store did not acknowledge the complete batch")
 
     @staticmethod
     def _fact_vector_text(fact: WorkingFact) -> str:

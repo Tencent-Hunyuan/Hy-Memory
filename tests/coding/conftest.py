@@ -8,6 +8,9 @@ import uuid
 
 import pytest
 
+from hy_memory.config import BusinessStoreConfig, MemoryConfig
+from hy_memory.coding.repository import create_memory_repository
+
 from ._helpers import MockEmbedService
 
 
@@ -47,3 +50,40 @@ async def coding_store(coding_config, mock_embed):
     await store.initialize()
     yield store
     await store.close()
+
+
+@pytest.fixture(params=["sqlite", "postgres"])
+def repositories(request, tmp_path):
+    cfg = MemoryConfig()
+    cfg.business_store = BusinessStoreConfig(
+        backend=request.param,
+        postgres_dsn=os.getenv("HY_MEMORY_TEST_POSTGRES_DSN"),
+        postgres_schema="test_business_" + uuid.uuid4().hex[:16],
+    )
+    if request.param == "postgres":
+        if not cfg.business_store.postgres_dsn:
+            pytest.skip("Set HY_MEMORY_TEST_POSTGRES_DSN to run the PostgreSQL contract")
+        pytest.importorskip("psycopg")
+    opened = []
+
+    def create(variant="working", initialize=True):
+        suffix = "_cv" if variant == "coding" else ""
+        repo = create_memory_repository(
+            cfg, str(tmp_path / f"memory{suffix}.db"), str(tmp_path / "trace.db"), variant,
+        )
+        opened.append(repo)
+        if initialize:
+            repo.initialize()
+        return repo
+
+    yield cfg, create, opened
+    for repo in opened:
+        repo.close()
+    if request.param == "postgres":
+        from psycopg import sql
+        from hy_memory.coding.repository_postgres import connect_postgres, namespace
+        with connect_postgres(cfg.business_store) as connection:
+            for kind in ("working", "coding", "trace", "chain"):
+                connection.execute(sql.SQL("DROP SCHEMA IF EXISTS {} CASCADE").format(
+                    sql.Identifier(namespace(cfg.business_store, kind))
+                ))

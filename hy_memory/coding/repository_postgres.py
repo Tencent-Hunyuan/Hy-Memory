@@ -1,14 +1,16 @@
 """Optional PostgreSQL authoritative business storage (psycopg 3)."""
 
 from contextlib import contextmanager
+from typing import Iterable, Iterator, Tuple
 
 from ..config import BusinessStoreConfig
 from .relational_repository import RelationalMemoryRepository
 from .repository_schema import (
     _CREATE_TABLE_SQL, _CREATE_FACT_TABLE_SQL, _CREATE_TRACE_TABLE_SQL, _CREATE_INDEX_SQL,
+    _CREATE_CONSOLIDATION_SQL,
 )
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 
 def connect_postgres(settings: BusinessStoreConfig, *, mapping_rows: bool = True):
@@ -53,7 +55,7 @@ def initialize_namespace(connection, schema: str):
         version = (row["version"] if isinstance(row, dict) else row[0]) if row else 0
         if version > SCHEMA_VERSION:
             raise RuntimeError("PostgreSQL business schema is newer than this SDK")
-        yield
+        yield version
         connection.execute(
             "INSERT INTO business_schema_version(id,version) VALUES(1,%s) "
             "ON CONFLICT(id) DO UPDATE SET version=excluded.version", (SCHEMA_VERSION,),
@@ -88,13 +90,17 @@ class PostgresMemoryRepository(RelationalMemoryRepository):
     def initialize(self) -> None:
         try:
             self._conn = connect_postgres(self.settings)
-            with initialize_namespace(self._conn, self.schema):
+            with initialize_namespace(self._conn, self.schema) as version:
                 # Epoch seconds need BIGINT beyond 2038; confidence must retain
                 # SQLite's double precision rather than PostgreSQL REAL precision.
                 ddl = (_CREATE_TABLE_SQL + _CREATE_FACT_TABLE_SQL).replace(
                     "memory_at        INTEGER", "memory_at        BIGINT"
                 ).replace("memory_at              INTEGER", "memory_at              BIGINT")
                 execute_schema(self._conn, ddl.replace("REAL", "DOUBLE PRECISION"))
+                if version < 2:
+                    self._conn.execute("ALTER TABLE coding_memory_meta ADD COLUMN IF NOT EXISTS consolidation_id TEXT")
+                    self._conn.execute("ALTER TABLE coding_memory_meta ADD COLUMN IF NOT EXISTS evidence_refs TEXT NOT NULL DEFAULT '[]'")
+                    execute_schema(self._conn, _CREATE_CONSOLIDATION_SQL)
                 for statement in _CREATE_INDEX_SQL:
                     self._conn.execute(statement)
             self._trace_conn = connect_postgres(self.settings)
@@ -108,6 +114,38 @@ class PostgresMemoryRepository(RelationalMemoryRepository):
         # Only SDK-owned query templates contain '?'; data always stays bound.
         # No SQLite DDL or runtime query emulation belongs in the business facade.
         return super()._execute(sql.replace("?", "%s"), params, trace=trace)
+
+    @contextmanager
+    def _business_transaction(self, *, write: bool = True) -> Iterator[None]:
+        from .types import ConsolidationOutcomeUnknown
+        transaction = self._conn.transaction()
+        transaction.__enter__()
+        try:
+            if not write:
+                self._conn.execute("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY")
+            yield
+        except BaseException:
+            import sys
+            transaction.__exit__(*sys.exc_info())
+            raise
+        try:
+            transaction.__exit__(None, None, None)
+        except BaseException as error:
+            raise ConsolidationOutcomeUnknown("PostgreSQL commit acknowledgement lost") from error
+
+    def _lock_sources(self, refs: Iterable[Tuple[str, str]]) -> None:
+        for kind, key in sorted(set(refs)):
+            # Key locks also cover deletion/reinsertion, for which no row exists.
+            self._conn.execute("SELECT pg_advisory_xact_lock(hashtext(%s),hashtext(%s))",
+                               (self.schema, f"source:{kind}:{key}"))
+            table, column = (("working_fact", "fact_id") if kind == "fact"
+                             else ("coding_memory_meta", "experience_id"))
+            self._conn.execute(f"SELECT {column} FROM {table} WHERE {column}=%s FOR UPDATE", (key,))
+
+    def _lock_groups(self, groups: Iterable[str]) -> None:
+        for group in sorted(set(groups)):
+            self._conn.execute("SELECT pg_advisory_xact_lock(hashtext(%s),hashtext(%s))",
+                               (self.schema, f"group:{group}"))
 
     @contextmanager
     def _trace_transaction(self, user_id: str, agent_id: str):
