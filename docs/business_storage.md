@@ -103,18 +103,22 @@ SQLite 使用 WAL；新列、新表和约束在 `BEGIN IMMEDIATE` 升级事务�
 历史回执重激活仅保留未撤回的产物；依据失效后恢复原文仍需要重新归纳与发布。
 
 
-### 2026-11-14 本地实施验收记录
+### 2026-11-14 原 Qdrant 分支上的历史实施验收记录
+
+以下是原实现提交携带的历史记录，对应 Qdrant 功能分支的依赖和基点，不是移植到上游
+`7b85404be1b1` 后的验证结果。独立分支的实际版本与检查结果见
+[经验巩固独立分支验证记录](plans/2026-11-14-cross-session-consolidation-validation.md)。
 
 代码基点：`b591b4076c747f9b0310bce776251115e1ff4b8d` 加本地未提交改动。
 Python 3.12.10（Windows），SQLite 3.49.1，PostgreSQL Server 17.7 / psycopg 3.3.6；
-Chroma 1.5.9（嵌入式），Qdrant client 1.20.0（当前仓库锁定版本，较原方案的 1.19.1 更新）
+Chroma 1.5.9（嵌入式），Qdrant client 1.20.0（当时 Qdrant 分支的锁定版本）
 / Server 1.20.0（独立 Docker 实例），FAISS CPU 1.15.1（嵌入式）。
 业务仓储与 VDB 分开配置，没有新增运行依赖或修改锁文件。模型和 embedding 合同测试使用
 现有 MockLLMProvider / MockEmbedService；下面的模型质量抽样另行使用真实 provider。
 
 依赖安装实际使用 `uv export --locked --extra dev --extra postgres --format requirements.txt
 --no-hashes --no-emit-project` 导出锁定约束后，通过 PyPI 镜像安装；额外安装当前锁定的
-`qdrant-client==1.20.0`、`faiss-cpu==1.15.1` 执行可选后端合同。
+`qdrant-client==1.20.0`、`faiss-cpu==1.15.1` 执行当时的可选后端合同。
 原始 PyPI 文件下载在本机阻塞，未把中断的安装命令当作成功。
 
 实际执行（`python` 指本仓库 `.venv/Scripts/python.exe`，外部服务均为本次独立测试实例）：
