@@ -197,11 +197,17 @@ def test_one_processing_switch_starts_history_and_future_scans_then_freezes(tmp_
             for job in connected.json()["jobs"]:
                 await app.state.import_supervisor.wait(job["job_id"])
             assert app.state.evidence_store.count() == 1
-            assert app.state.live_sync_watch is not None
+            watcher = app.state.live_sync_watch
+            assert watcher is not None
             write_turn(root, "after-thaw")
-            synced = await app.state.live_sync_supervisor.trigger("claude-code")
-            assert synced is not None
+            # The OS watcher can finish before an explicit automatic trigger;
+            # a settled source correctly returns no job on that second call.
+            changed_sources = await asyncio.wait_for(
+                watcher.handle_changes({root / "after-thaw.jsonl"}), timeout=10
+            )
+            assert changed_sources == ("claude-code",)
             assert app.state.evidence_store.count() == 2
+            assert await app.state.live_sync_supervisor.trigger("claude-code") is None
             grant = app.state.source_grant_store.require_receipt(
                 user_id="local", source_id="claude-code"
             )
@@ -211,6 +217,7 @@ def test_one_processing_switch_starts_history_and_future_scans_then_freezes(tmp_
             )
             assert stopped.status_code == 200 and not stopped.json()["sync_enabled"]
             assert app.state.live_sync_watch is None
+            assert watcher._task is None
             write_turn(root, "after-sync-disabled")
             assert await app.state.live_sync_supervisor.trigger("claude-code") is None
             assert app.state.evidence_store.count() == 2

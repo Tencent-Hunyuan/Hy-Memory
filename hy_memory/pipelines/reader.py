@@ -34,9 +34,13 @@ def _build_impl(
     vector_store: Optional[VectorStoreBase],
     graph_store: Optional[GraphStoreBase] = None,
     cache: Any = None,
+    reader_name: str = "",
 ) -> ReadPipeline:
     """按环境变量选择内部实现类并构造实例。"""
-    name = _retrieval_config.resolve_reader_name()
+    name = _retrieval_config.resolve_reader_name(reader_name)
+    if name == _retrieval_config.READER_NATIVE:
+        from .reader_native import NativeReadPipeline
+        return NativeReadPipeline(config, embed_service, vector_store)
     if name == _retrieval_config.READER_HYBRID:
         try:
             from .reader_hybrid import HybridReadPipeline
@@ -73,10 +77,12 @@ class MemoryReader(ReadPipeline):
         vector_store: Optional[VectorStoreBase] = None,
         graph_store: Optional[GraphStoreBase] = None,
         cache: Any = None,
+        reader_name: str = "",
     ):
         self.config = config
         self._impl: ReadPipeline = _build_impl(
             config, embed_service, vector_store, graph_store=graph_store, cache=cache,
+            reader_name=reader_name,
         )
         logger.info(
             f"[reader-dispatch] active impl = {self._impl.__class__.__name__} "

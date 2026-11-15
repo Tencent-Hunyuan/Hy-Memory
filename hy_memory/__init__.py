@@ -98,7 +98,10 @@ from .embedding import (
     EmbeddingService,
     EmbeddingServiceProtocol,
 )
-from .retrieval import AmbiguousMemoryIdError, MemoryKind, MemoryVariant
+from .retrieval import (
+    AmbiguousMemoryIdError, MemoryKind, MemoryVariant,
+    NativeRetrievalError, NativeScoreThreshold,
+)
 
 # ====== Embedding 端点覆盖（per-call，不改 model/dims，只换接入端点）======
 from .core.embed_service import embed_endpoint_override
@@ -193,6 +196,8 @@ __all__ = [
     "MemoryKind",
     "MemoryVariant",
     "AmbiguousMemoryIdError",
+    "NativeScoreThreshold",
+    "NativeRetrievalError",
     # Embedding 端点覆盖
     "embed_endpoint_override",
     # 高级 API

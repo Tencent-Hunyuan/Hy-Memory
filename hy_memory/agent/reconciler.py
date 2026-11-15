@@ -394,6 +394,376 @@ class MemoryReconciler:
 
         return [], None
 
+    async def _prepare_legacy_candidates(
+        self, *, new_memories: List[str], search_queries: List[str],
+        new_memory_embeddings: Optional[Dict[str, List[float]]],
+        embed_service: Any, vector_store: Any, user_id: str, agent_id: str,
+        layers: List[Any], source: str, graph_store: Any, cache: Any,
+        request_id: str, session_id: str,
+    ) -> Tuple[Dict[str, Any], Dict[str, List[Tuple[str, float]]], Dict[str, List[float]]]:
+        """Prepare legacy candidates without changing their scoring or dedup lifecycle."""
+        from ..models.memory import MemoryLayer, MemoryStatus, MemoryNode
+        import asyncio
+        import time as _time
+        # ── Step 2: 候选搜索，合并候选池 ──
+        candidate_map: Dict[str, MemoryNode] = {}
+        candidate_scores: Dict[str, float] = {}
+
+        supplied_embeddings = dict(new_memory_embeddings or {})
+        mem_embeddings: List[Optional[List[float]]] = [
+            supplied_embeddings.get(text) for text in new_memories
+        ]
+        missing_mem_indices = [
+            i for i, emb in enumerate(mem_embeddings) if not emb
+        ]
+        texts_to_embed = [new_memories[i] for i in missing_mem_indices]
+        texts_to_embed.extend(search_queries)
+        computed_embeddings = (
+            await embed_service.embed_batch(texts_to_embed)
+            if texts_to_embed else []
+        )
+        for i, emb in zip(
+            missing_mem_indices,
+            computed_embeddings[: len(missing_mem_indices)],
+        ):
+            mem_embeddings[i] = emb
+        query_embeddings = computed_embeddings[len(missing_mem_indices):]
+
+        def _merge_hits(hits: List[Dict[str, Any]], source: str) -> None:
+            logger.debug(f"[reconciler] search {source}: {len(hits)} results")
+            for r in hits:
+                node = r.get("node")
+                score = float(r.get("score", 0))
+                if not node:
+                    continue
+                # Canonical states are materialized and versioned by nightly
+                # evoling using an exact state_key.  Letting the free-form S1
+                # reconciler mutate them turns a stable state back into an
+                # event summary and breaks deterministic lifecycle handling.
+                if is_canonical_state_node(node):
+                    continue
+                nid = node.node_id
+                if nid not in candidate_map:
+                    candidate_map[nid] = node
+                    candidate_scores[nid] = score
+                else:
+                    candidate_scores[nid] = max(candidate_scores[nid], score)
+
+        from ..pipelines._retrieval.reconcile_retrieval import (
+            ReconcileHybridRetriever,
+            ReconcileRetrievalConfig,
+        )
+
+        hybrid = ReconcileHybridRetriever(
+            ReconcileRetrievalConfig.from_env(
+                limit=self.SEARCH_TOPK,
+                vec_pool_multiplier=self.VEC_POOL_MULTIPLIER,
+                min_score=self.HYBRID_MIN_SCORE,
+            )
+        )
+
+        new_memory_embeddings = {
+            text: emb
+            for text, emb in zip(new_memories, mem_embeddings)
+            if text and emb
+        }
+
+        hybrid_indices = [
+            i for i in range(len(new_memories))
+            if i < len(mem_embeddings) and mem_embeddings[i]
+        ]
+
+        query_indices = []
+        if self._enable_search_query and search_queries:
+            query_indices = [
+                i for i in range(len(search_queries))
+                if i < len(query_embeddings)
+            ]
+
+        _t_candidate_search = _time.perf_counter()
+        hybrid_result = []
+        query_result = []
+        tasks = []
+        if hybrid_indices:
+            tasks.append(hybrid.search_candidates_batch(
+                [new_memories[i] for i in hybrid_indices],
+                [mem_embeddings[i] for i in hybrid_indices],
+                vector_store=vector_store,
+                user_id=user_id,
+                agent_id=agent_id,
+                layers=layers,
+                embed_service=embed_service,
+                graph_store=graph_store,
+                include_sources=[source],
+            ))
+        if query_indices:
+            tasks.append(vector_store.search_batch([
+                {
+                    "query_embedding": query_embeddings[i],
+                    "user_id": user_id,
+                    "agent_ids": None,
+                    "layers": layers,
+                    "limit": self.QUERY_SEARCH_TOPK,
+                    "score_threshold": self.SEARCH_THRESHOLD,
+                    "status_filter": [
+                        MemoryStatus.ACTIVE, MemoryStatus.SUPERSEDED,
+                    ],
+                    "only_latest": False,
+                    "include_sources": [source],
+                }
+                for i in query_indices
+            ]))
+        if tasks:
+            task_results = await asyncio.gather(*tasks, return_exceptions=True)
+            cursor = 0
+            if hybrid_indices:
+                hybrid_result = task_results[cursor]
+                cursor += 1
+            if query_indices:
+                query_result = task_results[cursor]
+        _candidate_search_ms = round(
+            (_time.perf_counter() - _t_candidate_search) * 1000, 2,
+        )
+        # 关系图用：记下"每条新记忆的 hybrid 候选及其分数"。
+        # 这些分数本来算完就丢，写侧拿它建 semantic_neighbor 边是零额外计算的。
+        # 用 content 作 key —— 新记忆此刻还没入库，没有 node_id。
+        per_memory_candidates: Dict[str, List[Tuple[str, float]]] = {}
+
+        if isinstance(hybrid_result, Exception):
+            logger.warning("[reconciler] hybrid batch failed: %s", hybrid_result)
+            hybrid_result = []
+        if isinstance(query_result, Exception):
+            logger.warning("[reconciler] query batch failed: %s", query_result)
+            query_result = []
+
+        for source_index, result in zip(hybrid_indices, hybrid_result):
+            _merge_hits(result, f"memory_hybrid[{source_index}]")
+            per_memory_candidates[new_memories[source_index]] = [
+                        (r["node"].node_id, float(r.get("score", 0.0)))
+                        for r in (result or [])
+                        if r.get("node") is not None
+                        and not is_canonical_state_node(r["node"])
+            ]
+        for source_index, result in zip(query_indices, query_result):
+            _merge_hits(
+                [
+                    {"node": r.get("node"), "score": r.get("score", 0)}
+                    for r in result
+                ],
+                f"query[{source_index}]",
+            )
+
+        logger.debug(
+            f"[reconciler] search: {len(new_memories)} memories (hybrid) + "
+            f"{len(search_queries)} queries → {len(candidate_map)} raw candidates"
+        )
+
+        # ── Step 2.5: 按演化链合并（复用 reader 侧 _trace_full_chain）──
+        # 召回池可能含 SUPERSEDED 旧节点（链身）。对每个候选节点双向追溯
+        # （supersedes / superseded_by）补全整条链，以链头（is_latest）为代表
+        # 去重：同一条链的多个命中（链头+链身）合并为一个候选，链头作代表，
+        # 链头分数取该链所有命中的最高分。
+        # 注：祖先节点仅用于去重/避免重复候选，**不进 prompt**（见 Step 4，
+        # supersede 时只暴露 head 的 id+content，history 不提供，防止 LLM 误操作）。
+        from ..pipelines._retrieval.evolution import trace_full_chains
+
+        chain_head_node: Dict[str, MemoryNode] = {}   # head_id → head node
+        chain_best_score: Dict[str, float] = {}       # head_id → 链上最高命中分
+        node_to_head: Dict[str, str] = {}             # 任一命中 node_id → 其链头 id
+        chain_members: Dict[str, List[str]] = {}      # head_id → 整条链 node_id（head+bodies）
+
+        _t_chain_expand = _time.perf_counter()
+        try:
+            traced_chains = await trace_full_chains(
+                vector_store, list(candidate_map.values()),
+            )
+        except Exception as e:
+            logger.warning("[reconciler] batch chain trace failed: %s", e)
+            traced_chains = {}
+        for nid, node in candidate_map.items():
+            if nid in node_to_head:
+                continue  # 已被某条已展开的链覆盖
+            chain = traced_chains.get(nid) or [node]
+            head = chain[0]  # _trace_full_chain 保证 [0] 为链头（is_latest 优先）
+            head_id = head.node_id
+            chain_head_node.setdefault(head_id, head)
+            chain_members[head_id] = [cn.node_id for cn in chain]
+            # 该链上所有“恰好被召回”的节点，分数并入链头候选分
+            for cn in chain:
+                node_to_head[cn.node_id] = head_id
+                if cn.node_id in candidate_scores:
+                    chain_best_score[head_id] = max(
+                        chain_best_score.get(head_id, 0.0),
+                        candidate_scores[cn.node_id],
+                    )
+
+        # 按链头候选分排序，取 top（留足余量）
+        sorted_chains = sorted(
+            chain_head_node.keys(),
+            key=lambda hid: chain_best_score.get(hid, 0.0),
+            reverse=True,
+        )[: self.FINAL_TOPK * 2]
+
+        # 最终候选：以链头为代表（prompt 只展示 head）
+        final_candidates: Dict[str, MemoryNode] = {}
+        for head_id in sorted_chains:
+            final_candidates[head_id] = chain_head_node[head_id]
+            candidate_scores[head_id] = chain_best_score.get(head_id, 0.0)
+
+        candidate_map = final_candidates
+        _chain_expand_ms = round(
+            (_time.perf_counter() - _t_chain_expand) * 1000, 2,
+        )
+        logger.debug(
+            f"[reconciler] after chain merge: {len(candidate_map)} chain groups "
+            f"(traced from {len(node_to_head)} recalled chain nodes)"
+        )
+
+        # ── Step 2.7: 候选构成埋点 ──
+        # 候选检索已放宽到 user 维度（不再按 agent 收窄），候选池里会混入其他
+        # agent 的记忆。在 topk 不变的前提下，多 agent 用户的本 agent 候选
+        # 可能被挤出去（"稀释"）。这里把构成落进 pipeline log，上线后可直接
+        # 从日志确认稀释是否真的发生，而不必等业务反馈。
+        #
+        # 单 agent 用户 cross_agent_count 恒为 0 —— 放宽前后捞回的是同一批。
+        try:
+            _cand_own_agent = 0
+            _cand_cross_agent = 0
+            _cand_owner_user = 0
+            _cand_owner_agent = 0
+            _cross_agent_ids: set = set()
+            for _n in candidate_map.values():
+                _naid = getattr(_n, "agent_id", "") or ""
+                if _naid and _naid != agent_id:
+                    _cand_cross_agent += 1
+                    _cross_agent_ids.add(_naid)
+                else:
+                    _cand_own_agent += 1
+                if (getattr(_n, "owner", None) or "user") == "agent":
+                    _cand_owner_agent += 1
+                else:
+                    _cand_owner_user += 1
+
+            _cand_parsed = {
+                "candidate_count": len(candidate_map),
+                "own_agent_count": _cand_own_agent,
+                "cross_agent_count": _cand_cross_agent,
+                "cross_agent_ids": sorted(_cross_agent_ids)[:20],
+                "owner_user_count": _cand_owner_user,
+                "owner_agent_count": _cand_owner_agent,
+                "recalled_chain_nodes": len(node_to_head),
+                "final_topk": self.FINAL_TOPK * 2,
+                # 候选池打满时才可能发生稀释；未打满说明没有竞争
+                "topk_saturated": len(candidate_map) >= self.FINAL_TOPK * 2,
+                "scope": "user",
+                "new_memory_count": len(new_memories),
+                "hybrid_query_count": len(hybrid_indices),
+                "query_query_count": len(query_indices),
+                "dense_batch_count": int(bool(hybrid_indices))
+                + int(bool(query_indices)),
+                "keyword_batch_count": int(bool(hybrid_indices)),
+                "candidate_search_ms": _candidate_search_ms,
+                "chain_expand_ms": _chain_expand_ms,
+                "vector_store_local": bool(
+                    getattr(vector_store, "_is_local", False)
+                ),
+            }
+            logger.info(
+                f"[reconciler] candidates={len(candidate_map)} "
+                f"own_agent={_cand_own_agent} cross_agent={_cand_cross_agent} "
+                f"owner_user={_cand_owner_user} owner_agent={_cand_owner_agent} "
+                f"saturated={_cand_parsed['topk_saturated']}"
+            )
+            if cache:
+                await cache.store_pipeline_log(
+                    request_id=request_id,
+                    user_id=user_id,
+                    agent_id=agent_id,
+                    session_id=session_id,
+                    step="RECONCILE_CANDIDATES",
+                    prompt="",
+                    response="",
+                    parsed=json.dumps(_cand_parsed, ensure_ascii=False),
+                )
+        except Exception as e:
+            logger.debug(f"[reconciler] store RECONCILE_CANDIDATES log failed: {e}")
+
+        # ── Step 2.6: 候选去重（pre-search）──
+        # 候选都是链头（is_latest）。只对 L2_FACT + L4_IDENTITY（重复重灾区）
+        # 判重，其他层不参与（与 search 链路一致）。命中即置 SHADOW（逻辑删除，
+        # 被判重的链头连带其历史链），并从 candidate_map 移除，避免 LLM 看到
+        # 重复候选。
+        #
+        # 分批维度由 owner 决定（group_items_by_owner）：owner=user 的记忆属于
+        # 用户这一侧，跨 agent 合并判重；owner=agent 的按 agent 隔离。
+        try:
+            import time as _time
+            from ..pipelines._retrieval.dedup import (
+                DedupItem, execute_dedup, group_items_by_owner,
+            )
+
+            _DEDUP_LAYERS = {MemoryLayer.L2_FACT, MemoryLayer.L4_IDENTITY}
+            head_ids = [
+                hid for hid, node in candidate_map.items()
+                if node.layer in _DEDUP_LAYERS
+            ]
+            _t_emb = _time.perf_counter()
+            head_embs = await vector_store.get_embeddings(head_ids)
+            _get_emb_ms = round((_time.perf_counter() - _t_emb) * 1000, 2)
+            dedup_items = []
+            for hid in head_ids:
+                node = candidate_map[hid]
+                emb = head_embs.get(hid)
+                if not emb:
+                    continue
+                dedup_items.append(DedupItem(
+                    node_id=hid,
+                    embedding=emb,
+                    content=node.content or "",
+                    is_latest=True,
+                    is_chain_head=True,
+                    gmt_created=(node.gmt_created.timestamp() if node.gmt_created else None),
+                    chain_node_ids=chain_members.get(hid, [hid]),
+                    # 分批维度：owner 决定跨不跨 agent
+                    owner=getattr(node, "owner", None),
+                    user_id=getattr(node, "user_id", "") or user_id,
+                    agent_id=getattr(node, "agent_id", "") or agent_id,
+                    source=getattr(node, "source", "default") or "default",
+                ))
+
+            if len(dedup_items) >= 2:
+                # 每批传各自准确的 user_id/agent_id，DEDUP log 归属才正确
+                for _batch in group_items_by_owner(
+                    dedup_items,
+                    default_user_id=user_id,
+                    default_agent_id=agent_id,
+                ):
+                    plan = await execute_dedup(
+                        _batch["items"],
+                        vector_store=vector_store,
+                        cache=cache,
+                        trigger="reconcile",
+                        request_id=request_id,
+                        user_id=_batch["user_id"],
+                        agent_id=_batch["agent_id"],
+                        delete_from_store=True,
+                        extra_parsed={
+                            "embedding_source": "vdb_get_embeddings",
+                            "get_embeddings_ms": _get_emb_ms,
+                            "embed_count": len(head_ids),
+                            "embed_ok_count": len(dedup_items),
+                            "owner_bucket": _batch["owner"],
+                            "source_bucket": _batch["source"],
+                            "batch_size": len(_batch["items"]),
+                        },
+                    )
+                    for did in plan.get("delete_ids", []):
+                        candidate_map.pop(did, None)
+        except Exception as e:
+            logger.warning(f"[reconciler] candidate dedup failed: {e}")
+
+        return candidate_map, per_memory_candidates, new_memory_embeddings
+
     async def reconcile(
         self,
         new_memories: List[str],
@@ -423,14 +793,18 @@ class MemoryReconciler:
         if not new_memories:
             return ReconcileResult(ops=[], success=True)
 
-        from ..models.memory import MemoryLayer, MemoryStatus, MemoryNode
-        import asyncio
+        from ..models.memory import MemoryLayer
 
         if layers is None:
             layers = [MemoryLayer.L2_FACT, MemoryLayer.L4_IDENTITY]
 
         try:
             import time as _time
+            self.config.recall.validate_reconcile_retriever()
+            native_reconcile = self.config.recall.reconcile_retriever == "native"
+            if native_reconcile and len(new_memories) > 16:
+                from ..retrieval import NativeRetrievalError
+                raise NativeRetrievalError("budget", "native reconcile supports at most 16 memories")
 
             # ── Step 1: Search Query 生成（可消融）──
             search_queries: List[str] = []
@@ -476,362 +850,21 @@ class MemoryReconciler:
                 except Exception as e:
                     logger.warning(f"[reconciler] store SEARCH_QUERY log failed: {e}")
 
-            # ── Step 2: 候选搜索，合并候选池 ──
-            candidate_map: Dict[str, MemoryNode] = {}
-            candidate_scores: Dict[str, float] = {}
-
-            supplied_embeddings = dict(new_memory_embeddings or {})
-            mem_embeddings: List[Optional[List[float]]] = [
-                supplied_embeddings.get(text) for text in new_memories
-            ]
-            missing_mem_indices = [
-                i for i, emb in enumerate(mem_embeddings) if not emb
-            ]
-            texts_to_embed = [new_memories[i] for i in missing_mem_indices]
-            texts_to_embed.extend(search_queries)
-            computed_embeddings = (
-                await embed_service.embed_batch(texts_to_embed)
-                if texts_to_embed else []
-            )
-            for i, emb in zip(
-                missing_mem_indices,
-                computed_embeddings[: len(missing_mem_indices)],
-            ):
-                mem_embeddings[i] = emb
-            query_embeddings = computed_embeddings[len(missing_mem_indices):]
-
-            def _merge_hits(hits: List[Dict[str, Any]], source: str) -> None:
-                logger.debug(f"[reconciler] search {source}: {len(hits)} results")
-                for r in hits:
-                    node = r.get("node")
-                    score = float(r.get("score", 0))
-                    if not node:
-                        continue
-                    # Canonical states are materialized and versioned by nightly
-                    # evoling using an exact state_key.  Letting the free-form S1
-                    # reconciler mutate them turns a stable state back into an
-                    # event summary and breaks deterministic lifecycle handling.
-                    if is_canonical_state_node(node):
-                        continue
-                    nid = node.node_id
-                    if nid not in candidate_map:
-                        candidate_map[nid] = node
-                        candidate_scores[nid] = score
-                    else:
-                        candidate_scores[nid] = max(candidate_scores[nid], score)
-
-            from ..pipelines._retrieval.reconcile_retrieval import (
-                ReconcileHybridRetriever,
-                ReconcileRetrievalConfig,
-            )
-
-            hybrid = ReconcileHybridRetriever(
-                ReconcileRetrievalConfig.from_env(
-                    limit=self.SEARCH_TOPK,
-                    vec_pool_multiplier=self.VEC_POOL_MULTIPLIER,
-                    min_score=self.HYBRID_MIN_SCORE,
+            if native_reconcile:
+                from ..pipelines._retrieval.reconcile_retrieval import prepare_native_candidates
+                candidate_map, per_memory_candidates, new_memory_embeddings = await prepare_native_candidates(
+                    new_memories=new_memories, search_queries=search_queries,
+                    supplied_embeddings=new_memory_embeddings, embed_service=embed_service,
+                    vector_store=vector_store, user_id=user_id, layers=layers, source=source,
                 )
-            )
-
-            new_memory_embeddings = {
-                text: emb
-                for text, emb in zip(new_memories, mem_embeddings)
-                if text and emb
-            }
-
-            hybrid_indices = [
-                i for i in range(len(new_memories))
-                if i < len(mem_embeddings) and mem_embeddings[i]
-            ]
-
-            query_indices = []
-            if self._enable_search_query and search_queries:
-                query_indices = [
-                    i for i in range(len(search_queries))
-                    if i < len(query_embeddings)
-                ]
-
-            _t_candidate_search = _time.perf_counter()
-            hybrid_result = []
-            query_result = []
-            tasks = []
-            if hybrid_indices:
-                tasks.append(hybrid.search_candidates_batch(
-                    [new_memories[i] for i in hybrid_indices],
-                    [mem_embeddings[i] for i in hybrid_indices],
-                    vector_store=vector_store,
-                    user_id=user_id,
-                    agent_id=agent_id,
-                    layers=layers,
-                    embed_service=embed_service,
-                    graph_store=graph_store,
-                    include_sources=[source],
-                ))
-            if query_indices:
-                tasks.append(vector_store.search_batch([
-                    {
-                        "query_embedding": query_embeddings[i],
-                        "user_id": user_id,
-                        "agent_ids": None,
-                        "layers": layers,
-                        "limit": self.QUERY_SEARCH_TOPK,
-                        "score_threshold": self.SEARCH_THRESHOLD,
-                        "status_filter": [
-                            MemoryStatus.ACTIVE, MemoryStatus.SUPERSEDED,
-                        ],
-                        "only_latest": False,
-                        "include_sources": [source],
-                    }
-                    for i in query_indices
-                ]))
-            if tasks:
-                task_results = await asyncio.gather(*tasks, return_exceptions=True)
-                cursor = 0
-                if hybrid_indices:
-                    hybrid_result = task_results[cursor]
-                    cursor += 1
-                if query_indices:
-                    query_result = task_results[cursor]
-            _candidate_search_ms = round(
-                (_time.perf_counter() - _t_candidate_search) * 1000, 2,
-            )
-            # 关系图用：记下"每条新记忆的 hybrid 候选及其分数"。
-            # 这些分数本来算完就丢，写侧拿它建 semantic_neighbor 边是零额外计算的。
-            # 用 content 作 key —— 新记忆此刻还没入库，没有 node_id。
-            per_memory_candidates: Dict[str, List[Tuple[str, float]]] = {}
-
-            if isinstance(hybrid_result, Exception):
-                logger.warning("[reconciler] hybrid batch failed: %s", hybrid_result)
-                hybrid_result = []
-            if isinstance(query_result, Exception):
-                logger.warning("[reconciler] query batch failed: %s", query_result)
-                query_result = []
-
-            for source_index, result in zip(hybrid_indices, hybrid_result):
-                _merge_hits(result, f"memory_hybrid[{source_index}]")
-                per_memory_candidates[new_memories[source_index]] = [
-                            (r["node"].node_id, float(r.get("score", 0.0)))
-                            for r in (result or [])
-                            if r.get("node") is not None
-                            and not is_canonical_state_node(r["node"])
-                ]
-            for source_index, result in zip(query_indices, query_result):
-                _merge_hits(
-                    [
-                        {"node": r.get("node"), "score": r.get("score", 0)}
-                        for r in result
-                    ],
-                    f"query[{source_index}]",
+            else:
+                candidate_map, per_memory_candidates, new_memory_embeddings = await self._prepare_legacy_candidates(
+                    new_memories=new_memories, search_queries=search_queries,
+                    new_memory_embeddings=new_memory_embeddings, embed_service=embed_service,
+                    vector_store=vector_store, user_id=user_id, agent_id=agent_id,
+                    layers=layers, source=source, graph_store=graph_store, cache=cache,
+                    request_id=request_id, session_id=session_id,
                 )
-
-            logger.debug(
-                f"[reconciler] search: {len(new_memories)} memories (hybrid) + "
-                f"{len(search_queries)} queries → {len(candidate_map)} raw candidates"
-            )
-
-            # ── Step 2.5: 按演化链合并（复用 reader 侧 _trace_full_chain）──
-            # 召回池可能含 SUPERSEDED 旧节点（链身）。对每个候选节点双向追溯
-            # （supersedes / superseded_by）补全整条链，以链头（is_latest）为代表
-            # 去重：同一条链的多个命中（链头+链身）合并为一个候选，链头作代表，
-            # 链头分数取该链所有命中的最高分。
-            # 注：祖先节点仅用于去重/避免重复候选，**不进 prompt**（见 Step 4，
-            # supersede 时只暴露 head 的 id+content，history 不提供，防止 LLM 误操作）。
-            from ..pipelines._retrieval.evolution import trace_full_chains
-
-            chain_head_node: Dict[str, MemoryNode] = {}   # head_id → head node
-            chain_best_score: Dict[str, float] = {}       # head_id → 链上最高命中分
-            node_to_head: Dict[str, str] = {}             # 任一命中 node_id → 其链头 id
-            chain_members: Dict[str, List[str]] = {}      # head_id → 整条链 node_id（head+bodies）
-
-            _t_chain_expand = _time.perf_counter()
-            try:
-                traced_chains = await trace_full_chains(
-                    vector_store, list(candidate_map.values()),
-                )
-            except Exception as e:
-                logger.warning("[reconciler] batch chain trace failed: %s", e)
-                traced_chains = {}
-            for nid, node in candidate_map.items():
-                if nid in node_to_head:
-                    continue  # 已被某条已展开的链覆盖
-                chain = traced_chains.get(nid) or [node]
-                head = chain[0]  # _trace_full_chain 保证 [0] 为链头（is_latest 优先）
-                head_id = head.node_id
-                chain_head_node.setdefault(head_id, head)
-                chain_members[head_id] = [cn.node_id for cn in chain]
-                # 该链上所有“恰好被召回”的节点，分数并入链头候选分
-                for cn in chain:
-                    node_to_head[cn.node_id] = head_id
-                    if cn.node_id in candidate_scores:
-                        chain_best_score[head_id] = max(
-                            chain_best_score.get(head_id, 0.0),
-                            candidate_scores[cn.node_id],
-                        )
-
-            # 按链头候选分排序，取 top（留足余量）
-            sorted_chains = sorted(
-                chain_head_node.keys(),
-                key=lambda hid: chain_best_score.get(hid, 0.0),
-                reverse=True,
-            )[: self.FINAL_TOPK * 2]
-
-            # 最终候选：以链头为代表（prompt 只展示 head）
-            final_candidates: Dict[str, MemoryNode] = {}
-            for head_id in sorted_chains:
-                final_candidates[head_id] = chain_head_node[head_id]
-                candidate_scores[head_id] = chain_best_score.get(head_id, 0.0)
-
-            candidate_map = final_candidates
-            _chain_expand_ms = round(
-                (_time.perf_counter() - _t_chain_expand) * 1000, 2,
-            )
-            logger.debug(
-                f"[reconciler] after chain merge: {len(candidate_map)} chain groups "
-                f"(traced from {len(node_to_head)} recalled chain nodes)"
-            )
-
-            # ── Step 2.7: 候选构成埋点 ──
-            # 候选检索已放宽到 user 维度（不再按 agent 收窄），候选池里会混入其他
-            # agent 的记忆。在 topk 不变的前提下，多 agent 用户的本 agent 候选
-            # 可能被挤出去（"稀释"）。这里把构成落进 pipeline log，上线后可直接
-            # 从日志确认稀释是否真的发生，而不必等业务反馈。
-            #
-            # 单 agent 用户 cross_agent_count 恒为 0 —— 放宽前后捞回的是同一批。
-            try:
-                _cand_own_agent = 0
-                _cand_cross_agent = 0
-                _cand_owner_user = 0
-                _cand_owner_agent = 0
-                _cross_agent_ids: set = set()
-                for _n in candidate_map.values():
-                    _naid = getattr(_n, "agent_id", "") or ""
-                    if _naid and _naid != agent_id:
-                        _cand_cross_agent += 1
-                        _cross_agent_ids.add(_naid)
-                    else:
-                        _cand_own_agent += 1
-                    if (getattr(_n, "owner", None) or "user") == "agent":
-                        _cand_owner_agent += 1
-                    else:
-                        _cand_owner_user += 1
-
-                _cand_parsed = {
-                    "candidate_count": len(candidate_map),
-                    "own_agent_count": _cand_own_agent,
-                    "cross_agent_count": _cand_cross_agent,
-                    "cross_agent_ids": sorted(_cross_agent_ids)[:20],
-                    "owner_user_count": _cand_owner_user,
-                    "owner_agent_count": _cand_owner_agent,
-                    "recalled_chain_nodes": len(node_to_head),
-                    "final_topk": self.FINAL_TOPK * 2,
-                    # 候选池打满时才可能发生稀释；未打满说明没有竞争
-                    "topk_saturated": len(candidate_map) >= self.FINAL_TOPK * 2,
-                    "scope": "user",
-                    "new_memory_count": len(new_memories),
-                    "hybrid_query_count": len(hybrid_indices),
-                    "query_query_count": len(query_indices),
-                    "dense_batch_count": int(bool(hybrid_indices))
-                    + int(bool(query_indices)),
-                    "keyword_batch_count": int(bool(hybrid_indices)),
-                    "candidate_search_ms": _candidate_search_ms,
-                    "chain_expand_ms": _chain_expand_ms,
-                    "vector_store_local": bool(
-                        getattr(vector_store, "_is_local", False)
-                    ),
-                }
-                logger.info(
-                    f"[reconciler] candidates={len(candidate_map)} "
-                    f"own_agent={_cand_own_agent} cross_agent={_cand_cross_agent} "
-                    f"owner_user={_cand_owner_user} owner_agent={_cand_owner_agent} "
-                    f"saturated={_cand_parsed['topk_saturated']}"
-                )
-                if cache:
-                    await cache.store_pipeline_log(
-                        request_id=request_id,
-                        user_id=user_id,
-                        agent_id=agent_id,
-                        session_id=session_id,
-                        step="RECONCILE_CANDIDATES",
-                        prompt="",
-                        response="",
-                        parsed=json.dumps(_cand_parsed, ensure_ascii=False),
-                    )
-            except Exception as e:
-                logger.debug(f"[reconciler] store RECONCILE_CANDIDATES log failed: {e}")
-
-            # ── Step 2.6: 候选去重（pre-search）──
-            # 候选都是链头（is_latest）。只对 L2_FACT + L4_IDENTITY（重复重灾区）
-            # 判重，其他层不参与（与 search 链路一致）。命中即置 SHADOW（逻辑删除，
-            # 被判重的链头连带其历史链），并从 candidate_map 移除，避免 LLM 看到
-            # 重复候选。
-            #
-            # 分批维度由 owner 决定（group_items_by_owner）：owner=user 的记忆属于
-            # 用户这一侧，跨 agent 合并判重；owner=agent 的按 agent 隔离。
-            try:
-                import time as _time
-                from ..pipelines._retrieval.dedup import (
-                    DedupItem, execute_dedup, group_items_by_owner,
-                )
-
-                _DEDUP_LAYERS = {MemoryLayer.L2_FACT, MemoryLayer.L4_IDENTITY}
-                head_ids = [
-                    hid for hid, node in candidate_map.items()
-                    if node.layer in _DEDUP_LAYERS
-                ]
-                _t_emb = _time.perf_counter()
-                head_embs = await vector_store.get_embeddings(head_ids)
-                _get_emb_ms = round((_time.perf_counter() - _t_emb) * 1000, 2)
-                dedup_items = []
-                for hid in head_ids:
-                    node = candidate_map[hid]
-                    emb = head_embs.get(hid)
-                    if not emb:
-                        continue
-                    dedup_items.append(DedupItem(
-                        node_id=hid,
-                        embedding=emb,
-                        content=node.content or "",
-                        is_latest=True,
-                        is_chain_head=True,
-                        gmt_created=(node.gmt_created.timestamp() if node.gmt_created else None),
-                        chain_node_ids=chain_members.get(hid, [hid]),
-                        # 分批维度：owner 决定跨不跨 agent
-                        owner=getattr(node, "owner", None),
-                        user_id=getattr(node, "user_id", "") or user_id,
-                        agent_id=getattr(node, "agent_id", "") or agent_id,
-                        source=getattr(node, "source", "default") or "default",
-                    ))
-
-                if len(dedup_items) >= 2:
-                    # 每批传各自准确的 user_id/agent_id，DEDUP log 归属才正确
-                    for _batch in group_items_by_owner(
-                        dedup_items,
-                        default_user_id=user_id,
-                        default_agent_id=agent_id,
-                    ):
-                        plan = await execute_dedup(
-                            _batch["items"],
-                            vector_store=vector_store,
-                            cache=cache,
-                            trigger="reconcile",
-                            request_id=request_id,
-                            user_id=_batch["user_id"],
-                            agent_id=_batch["agent_id"],
-                            delete_from_store=True,
-                            extra_parsed={
-                                "embedding_source": "vdb_get_embeddings",
-                                "get_embeddings_ms": _get_emb_ms,
-                                "embed_count": len(head_ids),
-                                "embed_ok_count": len(dedup_items),
-                                "owner_bucket": _batch["owner"],
-                                "source_bucket": _batch["source"],
-                                "batch_size": len(_batch["items"]),
-                            },
-                        )
-                        for did in plan.get("delete_ids", []):
-                            candidate_map.pop(did, None)
-            except Exception as e:
-                logger.warning(f"[reconciler] candidate dedup failed: {e}")
 
             # ── Step 3: 如果没有任何候选，全部 ADD（supersedes=[]）──
             if not candidate_map:
@@ -963,7 +996,8 @@ class MemoryReconciler:
                 t = n.memory_at or n.gmt_created
                 return t.isoformat() if t else ""
 
-            sorted_candidates = sorted(candidate_map.values(), key=_sort_key)
+            sorted_candidates = (list(candidate_map.values()) if native_reconcile
+                                 else sorted(candidate_map.values(), key=_sort_key))
 
             existing_mem_list = []
             for node in sorted_candidates:

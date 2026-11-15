@@ -2,6 +2,7 @@
 
 import asyncio
 from pathlib import Path
+from threading import Event
 from types import SimpleNamespace
 
 import pytest
@@ -139,6 +140,7 @@ class _Recorder:
         self.data_dir = data_dir
         self.opened: list[tuple[str, int | None, str | None]] = []
         self.closed: list[str] = []
+        self.closed_event = Event()
 
     def __call__(
         self,
@@ -156,9 +158,14 @@ class _Recorder:
         config = build_sdk_config(profile, space, mode, api_key=api_key, data_dir=data_dir)
         name = config.vector_store.collection_name
         self.opened.append((name, config.vector_store.embedding_dims, api_key))
+
+        def close() -> None:
+            self.closed.append(name)
+            self.closed_event.set()
+
         return SimpleNamespace(
             client=SimpleNamespace(collection=name),
-            close=lambda: self.closed.append(name),
+            close=close,
         )
 
 
@@ -277,8 +284,8 @@ async def test_a_committed_switch_rebuilds_reads_without_closing_one_in_flight(
 
     finish.set()
     assert await in_flight == old
-    for _ in range(5):
-        await asyncio.sleep(0)
+    # Closing runs in a worker thread; loop turns do not establish completion.
+    assert await asyncio.to_thread(recorder.closed_event.wait, 5.0)
     assert recorder.closed == [old]
     await handle.close()
     assert recorder.closed == [old, new]

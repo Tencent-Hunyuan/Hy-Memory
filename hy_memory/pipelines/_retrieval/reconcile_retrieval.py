@@ -37,6 +37,77 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
+async def prepare_native_candidates(
+    *,
+    new_memories: List[str],
+    search_queries: List[str],
+    vector_store: "VectorStoreBase",
+    embed_service: Any,
+    user_id: str,
+    layers: List[MemoryLayer],
+    source: str,
+    supplied_embeddings: Optional[Dict[str, List[float]]] = None,
+) -> Tuple[
+    Dict[str, MemoryNode], Dict[str, List[Tuple[str, float]]], Dict[str, List[float]]
+]:
+    """One backend-ranked plan, strict representatives, optional cosine evidence."""
+    from ...data.vector_store_base import NativeQuery
+    from ...retrieval import NativeRetrievalError
+    from .evolution import resolve_native_hits
+
+    if not 1 <= len(new_memories) <= 16:
+        raise NativeRetrievalError(
+            "budget", "native reconcile supports at most 16 memories"
+        )
+    texts = list(new_memories) + list(search_queries[:4])
+    supplied = supplied_embeddings or {}
+    missing = [i for i, text in enumerate(texts) if not supplied.get(text)]
+    computed = (
+        await embed_service.embed_batch([texts[i] for i in missing]) if missing else []
+    )
+    if len(computed) != len(missing):
+        raise NativeRetrievalError("integrity", "reconcile embedding count mismatch")
+    embeddings = [supplied.get(text) for text in texts]
+    for i, embedding in zip(missing, computed):
+        embeddings[i] = embedding
+    plan = NativeQuery(
+        texts=texts,
+        embeddings=embeddings,
+        user_ids=[user_id],
+        layers=layers,
+        limit=60,
+        include_sources=[source],
+    )
+    hits = await vector_store.native_query(plan)
+    resolved = await resolve_native_hits(vector_store, hits, plan)
+    # Canonical state projections retain their exact-key owner.
+    resolved = [
+        hit
+        for hit in resolved
+        if (hit["node"].custom or {}).get("memory_kind") != "canonical_state"
+    ][:20]
+    candidates = {hit["node_id"]: hit["node"] for hit in resolved}
+    per_memory = {}
+    for text, embedding in zip(new_memories, embeddings[: len(new_memories)]):
+        try:
+            evidence = await vector_store.native_cosine(
+                embedding, list(candidates), plan
+            )
+            per_memory[text] = [(hit["node_id"], hit["score"]) for hit in evidence]
+        except Exception as exc:
+            # Only this optional graph evidence is allowed to fail open.
+            logger.warning(
+                "[reconciler] native cosine evidence unavailable: %s",
+                type(exc).__name__,
+            )
+            per_memory[text] = []
+    return (
+        candidates,
+        per_memory,
+        dict(zip(new_memories, embeddings[: len(new_memories)])),
+    )
+
+
 def _float_env(name: str, default: float) -> float:
     raw = os.getenv(name)
     if raw is None or not str(raw).strip():

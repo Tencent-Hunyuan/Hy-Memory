@@ -451,6 +451,14 @@ class RecallConfig:
     # 最小分数阈值
     min_score_threshold: float = 0.0
 
+    # Append new options to preserve the legacy positional constructor.
+    reconcile_retriever: str = "default"
+
+    def validate_reconcile_retriever(self) -> None:
+        """Reject unknown retrieval strategies, including mutated configurations."""
+        if self.reconcile_retriever not in ("default", "native"):
+            raise ValueError("recall.reconcile_retriever must be 'default' or 'native'")
+
     def __post_init__(self):
         self.default_limit = _get_env_int("MEMORY_RECALL_DEFAULT_LIMIT", 10)
         self.max_limit = _get_env_int("MEMORY_RECALL_MAX_LIMIT", 100)
@@ -1386,6 +1394,7 @@ class MemoryConfig:
                         setattr(sub, key, value)
 
         config.business_store.validate()
+        config.recall.validate_reconcile_retriever()
 
         # basic_profile: fields 是 Dict[str, str]，整体替换（非空时）
         if "basic_profile" in config_dict:
@@ -1449,6 +1458,7 @@ class MemoryConfig:
                 "embedding_dims": self.embedder.embedding_dims,
             },
             "recall": {
+                "reconcile_retriever": self.recall.reconcile_retriever,
                 "default_limit": self.recall.default_limit,
                 "semantic_weight": self.recall.semantic_weight,
                 "recency_weight": self.recall.recency_weight,

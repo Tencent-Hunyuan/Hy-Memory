@@ -154,7 +154,7 @@ Catalog 和 supplement 只由 `user_id` 确定，不作为普通 L6 出现在 Se
 
 | 变量 | 默认值 | 说明 |
 |---|---|---|
-| `HY_MEMORY_READER` | `legacy` | `legacy`（向量）/ `hybrid`（向量 + 后端关键词候选） |
+| `HY_MEMORY_READER` | `legacy` | `legacy`（向量）/ `hybrid`（向量 + 后端关键词候选）/ `native`（仅 Qdrant Server 1.20.0，显式准备） |
 | `MEMORY_HYBRID_V2_VDB_WEIGHT_BM25` | `0.35` | Hybrid BM25 加成权重；当前仍保留旧前缀 |
 | `MEMORY_LOCAL_RERANK_ENABLED` | `false` | 两个 Reader 共用的本地 cross-encoder Rerank |
 | `MEMORY_LOCAL_RERANK_MODEL` | `nreimers/mmarco-mMiniLMv2-L6-H384-v1` | 小型多语言 Hugging Face 模型名或本地路径 |
@@ -244,3 +244,5 @@ client = HyMemoryClient.from_config({
 
 历史配置不会生效；当前支持项以本页表格和 `.env.example` 为准。Cache backend 当前仅支持
 `sqlite` 和 `mysql`。
+
+Native reader 的 rerank、schema/intention 扩展与旧评分配置不适用；写侧独立设置 recall.reconcile_retriever。安装、版本、准备、typed threshold 与失败合同见 [Qdrant native retrieval](native_retrieval.md)。
