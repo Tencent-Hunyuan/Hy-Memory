@@ -755,7 +755,18 @@ def _remote_qdrant_config(collection_name, url):
             }
         }
     )
-    return url, config
+    return config
+
+
+def test_remote_qdrant_config_uses_the_supplied_endpoint():
+    config = _remote_qdrant_config(
+        "remote_gate",
+        "http://127.0.0.1:16333",
+    )
+
+    assert config.vector_store.host == "127.0.0.1"
+    assert config.vector_store.port == 16333
+    assert config.vector_store.collection_name == "remote_gate"
 
 
 @pytest.mark.asyncio
