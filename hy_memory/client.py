@@ -2291,6 +2291,32 @@ class HyMemoryClient:
             )
         )
 
+    def plan_qdrant_bm25_upgrade(self) -> Dict[str, Any]:
+        """Inspect whether the configured Qdrant collection needs BM25 repair.
+
+        This call is read-only. Non-Qdrant backends return ``not_applicable``.
+        """
+        return self._loop_thread.run(self.async_plan_qdrant_bm25_upgrade())
+
+    def upgrade_qdrant_bm25(
+        self,
+        *,
+        writers_stopped: bool,
+        batch_size: int = 256,
+    ) -> Dict[str, Any]:
+        """Backfill native Qdrant BM25 sparse vectors during maintenance.
+
+        The caller must stop every process that can write to this memory space
+        and pass ``writers_stopped=True``. Dense vectors and payloads are never
+        rewritten.
+        """
+        return self._loop_thread.run(
+            self.async_upgrade_qdrant_bm25(
+                writers_stopped=writers_stopped,
+                batch_size=batch_size,
+            )
+        )
+
     def export_user_memories(
         self,
         user_id: str,
@@ -7092,6 +7118,46 @@ class HyMemoryClient:
             "graph": graph_snapshot,
             "retrieval_clauses": clause_snapshot,
         }
+
+    @_ensure_internal_loop
+    async def async_plan_qdrant_bm25_upgrade(self) -> Dict[str, Any]:
+        """Read-only form of :meth:`plan_qdrant_bm25_upgrade`."""
+        plan = getattr(self._vector_store, "plan_bm25_upgrade", None)
+        if not callable(plan):
+            return {
+                "schema_version": 1,
+                "product": "hy-memory-qdrant-bm25-upgrade",
+                "provider": self._config.vector_store.provider,
+                "state": "not_applicable",
+                "reason": "vector_store_is_not_qdrant",
+                "can_upgrade": False,
+            }
+        return await plan()
+
+    @_ensure_internal_loop
+    async def async_upgrade_qdrant_bm25(
+        self,
+        *,
+        writers_stopped: bool,
+        batch_size: int = 256,
+    ) -> Dict[str, Any]:
+        """Async form of :meth:`upgrade_qdrant_bm25`."""
+        upgrade = getattr(self._vector_store, "upgrade_bm25", None)
+        if not callable(upgrade):
+            return {
+                "schema_version": 1,
+                "product": "hy-memory-qdrant-bm25-upgrade",
+                "provider": self._config.vector_store.provider,
+                "state": "not_applicable",
+                "reason": "vector_store_is_not_qdrant",
+                "success": False,
+                "changed": False,
+                "can_upgrade": False,
+            }
+        return await upgrade(
+            writers_stopped=writers_stopped,
+            batch_size=batch_size,
+        )
 
     async def _acquire_clone_source_snapshot(
         self,

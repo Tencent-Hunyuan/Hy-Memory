@@ -3,21 +3,23 @@
 Qdrant BM25 稀疏向量编码器（fastembed Qdrant/bm25）单例封装。
 
 Qdrant 原生 BM25 走 sparse vector：
-  - 写入：文档文本 → fastembed .embed() → sparse(indices, values)，含 IDF/TF 权重
+  - 写入：文档文本 → fastembed .embed() → sparse(indices, values)，含 TF 权重
   - 检索：query → .query_embed() → sparse，query_points(using="bm25")
+  - IDF：由 Qdrant sparse vector 的 ``modifier=IDF`` 根据 collection 统计计算
 
-BM25 是非对称的：文档侧用 embed()（带 IDF×TF 权重），查询侧用 query_embed()
+BM25 是非对称的：文档侧用 embed()（TF 权重），查询侧用 query_embed()
 （权重为 1）。两者不可混用。
 
-SparseTextEmbedding('Qdrant/bm25') 首次会下载 ONNX 模型（数百 MB）并加载
-~4.4s，必须进程内单例缓存。fastembed 缺失时优雅降级：返回 None，调用方据此
-关闭 qdrant sparse 能力。
+SparseTextEmbedding('Qdrant/bm25') 首次会下载约 10 MB 的 tokenizer /
+stop-word 资源，必须进程内单例缓存。fastembed 缺失时优雅降级：返回 None，
+调用方据此关闭 qdrant sparse 能力。
 """
 
 from __future__ import annotations
 
 import logging
 import threading
+from importlib.util import find_spec
 from typing import List, Optional, Tuple
 
 logger = logging.getLogger(__name__)
@@ -29,6 +31,11 @@ _encoder = None            # SparseTextEmbedding | None | False(=不可用)
 _lock = threading.Lock()
 
 _MODEL_NAME = "Qdrant/bm25"
+
+
+def package_available() -> bool:
+    """Return whether FastEmbed is installed without loading/downloading a model."""
+    return find_spec("fastembed") is not None
 
 
 def _get_encoder():
@@ -73,23 +80,30 @@ def _to_tuple(sparse_embedding) -> Optional[SparseTuple]:
 
 
 def encode_doc(text: str) -> Optional[SparseTuple]:
-    """文档侧编码（含 IDF×TF 权重）；不可用或空文本返回 None。"""
-    enc = _get_encoder()
-    if not enc or not text:
+    """Encode one document; only a successful zero-token result is ``None``."""
+    if not text:
         return None
+    enc = _get_encoder()
+    if not enc:
+        raise RuntimeError("BM25 encoder is unavailable")
     try:
         out = list(enc.embed([text]))
         return _to_tuple(out[0]) if out else None
     except Exception as e:
-        logger.debug(f"[bm25-fastembed] encode_doc failed: {e}")
-        return None
+        logger.warning(f"[bm25-fastembed] encode_doc failed: {e}")
+        raise RuntimeError("BM25 document encoding failed") from e
 
 
 def encode_docs(texts: List[str]) -> List[Optional[SparseTuple]]:
-    """批量文档编码；与输入等长，空文本对应 None。"""
+    """Batch encode documents; model/runtime failures are retryable errors.
+
+    A successfully encoded zero-token document is represented by ``None``.
+    Exceptions from FastEmbed must propagate so maintenance callers do not
+    persist an empty sparse marker for a transient encoder failure.
+    """
     enc = _get_encoder()
     if not enc:
-        return [None] * len(texts)
+        raise RuntimeError("BM25 encoder is unavailable")
     idxs = [i for i, t in enumerate(texts) if t]
     result: List[Optional[SparseTuple]] = [None] * len(texts)
     if not idxs:
@@ -100,7 +114,8 @@ def encode_docs(texts: List[str]) -> List[Optional[SparseTuple]]:
             if j < len(encoded):
                 result[i] = _to_tuple(encoded[j])
     except Exception as e:
-        logger.debug(f"[bm25-fastembed] encode_docs failed: {e}")
+        logger.warning(f"[bm25-fastembed] encode_docs failed: {e}")
+        raise RuntimeError("BM25 batch encoding failed") from e
     return result
 
 

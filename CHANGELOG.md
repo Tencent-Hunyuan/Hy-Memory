@@ -4,6 +4,26 @@ Hy Memory and MemHub are versioned and released independently.
 
 ## Unreleased
 
+## Hy Memory 2.0.17 — 2026-11-14
+
+- Qdrant BM25 maintenance is explicit and safe for existing collections.
+  `HyMemoryClient.plan_qdrant_bm25_upgrade()` reports whether the configured
+  collection is dense-only, missing sparse vectors, or uses an incompatible
+  sparse modifier. `upgrade_qdrant_bm25(writers_stopped=True)` uses Qdrant's
+  native named-vector schema API, backfills only the derived `bm25` vector in
+  bounded batches, skips raw conversation rows, and preserves every dense
+  vector and user payload field. Repeating the operation is idempotent; unsupported
+  clients and missing FastEmbed return structured blocked states.
+  Empty or zero-token documents use a private Qdrant payload state so coverage
+  is explicit without adding searchable sentinel terms or sidecar state.
+- New Qdrant collections declare the IDF sparse modifier required by
+  FastEmbed's `Qdrant/bm25` model. Startup keeps the keyword channel disabled
+  when the BM25 schema or point coverage is incomplete instead of treating a
+  partially migrated collection as ready.
+- This is an SDK-only maintenance API. Normal startup and MemHub Runtime/CLI
+  do not run it automatically; product packaging and maintenance entry points
+  remain separate follow-up work.
+
 ## MemHub 1.0.7 — 2026-11-12
 
 Build 48, on `hy-memory==2.0.16`. Linux x64/arm64 Runtime and macOS arm64
