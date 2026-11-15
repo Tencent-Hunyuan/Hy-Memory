@@ -328,3 +328,56 @@ Final checks on the B1/B2 working tree:
 The original red tests provide the targeted regression-injection evidence.
 No MemHub production code, dependency, retrieval index or score behavior
 changed. Previous CI results remain historical until the new head is checked.
+
+## 2026-11-15 follow-up: deleted chain heads and RecallConfig positional compatibility
+
+Based on the exact PR #447 head `b591b40`. The local branch of the same name
+also contained an unrelated consolidation commit; the repair branch starts at
+the remote PR head and excludes that commit. Existing untracked handoff
+materials remain untouched.
+
+The reported failures were reproduced before changing production code:
+
+```powershell
+$env:HY_MEMORY_TEST_QDRANT_URL='http://127.0.0.1:16333'
+.venv\Scripts\python.exe -m pytest tests/native_retrieval/test_errors.py tests/native_retrieval/test_reconcile.py -k 'recall_positional or deleted_native_head or writer_deleted_chain' -o addopts= -q -o log_cli=false
+.venv\Scripts\python.exe -m pytest tests/native_retrieval/test_reconcile.py -k writer_deleted_chain -o addopts= -q -o log_cli=false --tb=short
+```
+
+The positional assertion returned `default_limit_per_layer=5` and
+`reconcile_retriever=10`. Deleted-chain resolution raised `integrity` / "no
+unique confirmed head". Both real-Server writer-delete scenarios (with and
+without a healthy unrelated result) failed at public native search with that
+same error. The initial integration attempt used client 1.19.1 and failed
+fixture version validation; it was rerun with client 1.20.0 before confirming
+the actual deletion failure.
+
+The resolver now validates the complete graph and unique terminal first. A
+SHADOW terminal can have `is_latest=False`, as produced by the writer's
+legacy DELETE mapping; the entire component is then omitted, without
+returning ancestors. Other unconfirmed heads remain invalid. Missing nodes,
+cycles, ambiguous terminals, scope crossings and traversal budgets still fail
+closed, including for all-SHADOW components.
+
+`reconcile_retriever` is appended after all original RecallConfig fields.
+Comparison with the base `a2a1858` confirms all **91** old field indexes are
+unchanged. The regression also executes the default legacy candidate search
+and ADD path using `RecallConfig(10, 100, 7)`.
+
+Final Windows/Python 3.12.10 checks, Qdrant Server/client 1.20.0:
+
+- `pytest tests/native_retrieval -o addopts= -q -o log_cli=false --tb=short`:
+  **85 passed**, no skips, in 187.09 seconds (57 contracts and 28 real-Server
+  integration tests). The added writer scenario builds two SUPERSEDE versions,
+  deletes the head, checks that ancestors remain backend candidates, then
+  verifies public search and a successful subsequent write. Deleted IDs/content
+  are absent from the subsequent reconcile prompt; healthy candidates survive.
+- The focused regression command listed earlier in this record plus
+  `tests/test_list_evolution_chain.py`: **229 passed, 4 skipped** in 28.88
+  seconds. All skips are unconfigured Neo4j cases.
+- Ruff on both production and both test modules, compileall on both production
+  modules and `git diff --check`: passed.
+
+These are local results. CI for earlier commits does not certify this follow-up.
+No MemHub production code, dependency lock, writer behavior or index changes
+are included.

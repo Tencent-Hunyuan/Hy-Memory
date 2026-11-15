@@ -1,12 +1,13 @@
 import asyncio
 import os
+from dataclasses import fields
 from datetime import datetime
 from types import SimpleNamespace
 
 import pytest
 
 from hy_memory.agent.reconciler import MemoryReconciler
-from hy_memory.config import MemoryConfig
+from hy_memory.config import MemoryConfig, RecallConfig
 from hy_memory.data.qdrant_native import check_version
 from hy_memory.retrieval import NATIVE_CONFIG_ID as CONFIG_ID
 from hy_memory.retrieval import validate_native_threshold as validate_threshold
@@ -172,6 +173,32 @@ async def test_T17_illegal_reconcile_configuration():
     assert not result.success and result.ops == [] and not llm.prompts
 
 
+async def test_recall_positional_arguments_preserve_legacy_reconcile():
+    config = MemoryConfig()
+    config.recall = RecallConfig(10, 100, 7)
+    assert config.recall.default_limit_per_layer == 7
+    assert config.recall.reconcile_retriever == "default"
+    assert [field.name for field in fields(RecallConfig)][-2:] == [
+        "min_score_threshold", "reconcile_retriever",
+    ]
+    config.recall.validate_reconcile_retriever()
+
+    class LegacyStore:
+        calls = 0
+
+        async def search_batch(self, queries):
+            self.calls += 1
+            return [[] for _ in queries]
+
+    store, llm = LegacyStore(), CaptureLLM()
+    rec = MemoryReconciler(config, llm)
+    rec._enable_search_query = False
+    result = await rec.reconcile(["new fact"], "alice", "a", store, FixedEmbed())
+    assert result.success and store.calls == 1
+    assert [op.op for op in result.ops] == ["ADD"]
+    assert not llm.prompts
+
+
 @pytest.mark.parametrize("query,limit", [("   ", 10), ("query", 0), ("", 10)])
 async def test_skipped_before_reader_embedding_or_scene_llm(query, limit, monkeypatch):
     client = public_client(SimpleNamespace(config=MemoryConfig()))
@@ -213,6 +240,32 @@ async def test_T07_reciprocal_and_multi_ancestor_are_not_cycles():
     assert result[0]["score"] == 0.123456789 and result[0]["matched_id"] == a.node_id
 
 
+async def test_deleted_native_head_drops_whole_component_keeps_healthy_hit():
+    head = node(status=MemoryStatus.SHADOW, is_latest=False)
+    old = node(
+        status=MemoryStatus.SUPERSEDED,
+        is_latest=False,
+        superseded_by=[head.node_id],
+    )
+    head.supersedes = [old.node_id]
+    healthy = node()
+    result = await resolve_native_hits(
+        StrictStore([old, head, healthy]),
+        [hit(old), hit(healthy), hit(head)],
+        plan(),
+    )
+    assert [item["node_id"] for item in result] == [healthy.node_id]
+    assert result[0]["score"] == hit(healthy)["score"]
+
+
+@pytest.mark.parametrize("status", [s for s in MemoryStatus if s != MemoryStatus.SHADOW])
+async def test_non_deleted_native_head_still_requires_latest(status):
+    head = node(status=status, is_latest=False)
+    with pytest.raises(NativeRetrievalError) as failure:
+        await resolve_native_hits(StrictStore([head]), [hit(head)], plan())
+    assert failure.value.reason == "integrity"
+
+
 @pytest.mark.parametrize("time_field", ["memory_at", "gmt_created", "mixed"])
 async def test_public_native_evolution_chain_orders_history_by_time(time_field):
     oldest, middle, head = [
@@ -252,8 +305,9 @@ async def test_public_native_evolution_chain_orders_history_by_time(time_field):
 @pytest.mark.parametrize(
     "case", ["missing", "cycle", "scope", "ambiguous", "hops", "nodes"]
 )
-async def test_T07_integrity_and_budgets(case):
-    seed = node()
+@pytest.mark.parametrize("shadow", [False, True])
+async def test_T07_integrity_and_budgets(case, shadow):
+    seed = node(status=MemoryStatus.SHADOW if shadow else MemoryStatus.ACTIVE)
     nodes = [seed]
     if case == "missing":
         seed.superseded_by = ["missing"]
@@ -277,6 +331,10 @@ async def test_T07_integrity_and_budgets(case):
     else:
         nodes += [node() for _ in range(1024)]
         seed.superseded_by = [n.node_id for n in nodes[1:]]
+    if shadow:
+        for n in nodes:
+            n.status = MemoryStatus.SHADOW
+            n.is_latest = False
     with pytest.raises(NativeRetrievalError):
         await resolve_native_hits(StrictStore(nodes), [hit(seed)], plan())
 

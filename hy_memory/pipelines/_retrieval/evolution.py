@@ -136,11 +136,19 @@ async def resolve_native_hits(
             members.add(current)
             stack.extend(adjacency[current] - members)
         sinks = [known[mid] for mid in members if not outgoing[mid]]
-        if len(sinks) != 1 or not sinks[0].is_latest:
+        if len(sinks) != 1:
             raise NativeRetrievalError(
                 "integrity", "evolution has no unique confirmed head"
             )
         head = sinks[0]
+        # A writer shadow-only UPDATE (legacy DELETE) clears is_latest while
+        # preserving the links. Its unique sink tombstones the whole component;
+        # the output filter below must not fall back to a recalled ancestor.
+        # Validate the complete graph first, even when its sink is deleted.
+        if not head.is_latest and head.status != MemoryStatus.SHADOW:
+            raise NativeRetrievalError(
+                "integrity", "evolution has no unique confirmed head"
+            )
         for mid in members:
             components[mid] = (head, members)
 

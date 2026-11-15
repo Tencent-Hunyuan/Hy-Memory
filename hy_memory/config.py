@@ -330,13 +330,6 @@ class EmbedderConfig:
 class RecallConfig:
     """召回配置"""
 
-    reconcile_retriever: str = "default"
-
-    def validate_reconcile_retriever(self) -> None:
-        """Reject unknown retrieval strategies, including mutated configurations."""
-        if self.reconcile_retriever not in ("default", "native"):
-            raise ValueError("recall.reconcile_retriever must be 'default' or 'native'")
-
     # 默认召回数量
     default_limit: int = 10
     max_limit: int = 100
@@ -457,6 +450,14 @@ class RecallConfig:
 
     # 最小分数阈值
     min_score_threshold: float = 0.0
+
+    # Append new options to preserve the legacy positional constructor.
+    reconcile_retriever: str = "default"
+
+    def validate_reconcile_retriever(self) -> None:
+        """Reject unknown retrieval strategies, including mutated configurations."""
+        if self.reconcile_retriever not in ("default", "native"):
+            raise ValueError("recall.reconcile_retriever must be 'default' or 'native'")
 
     def __post_init__(self):
         self.default_limit = _get_env_int("MEMORY_RECALL_DEFAULT_LIMIT", 10)

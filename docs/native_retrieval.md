@@ -99,8 +99,11 @@ User scope intersects agent/session/isolation conditions before every branch's
 top-B. Source exclusion wins, including the existing mixed-source rule.
 Evolution may reach a newer head in another agent/session of the same user,
 but every node is checked for user/source/layer visibility. Complete components
-must have a unique confirmed head, no directed cycle, at most 32 hops and 1024
-unique nodes. Reciprocal references and multi-ancestor merges are supported.
+must have a unique terminal node, no directed cycle, at most 32 hops and 1024
+unique nodes. A live head must be confirmed by `is_latest=True`. A soft-deleted
+SHADOW terminal may have `is_latest=False`; its entire validated component is
+omitted from search and reconcile, including recalled ancestors. Reciprocal
+references and multi-ancestor merges are supported.
 Time filtering applies to the final representative. Missing required nodes,
 short batches and query failures fail closed; healthy no-hit queries succeed.
 Native public searches schedule no dedup, SHADOW or access-count writes.

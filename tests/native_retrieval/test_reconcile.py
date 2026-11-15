@@ -4,7 +4,7 @@ from datetime import datetime
 import pytest
 
 from hy_memory.agent.reconciler import MemoryReconciler
-from conftest import CaptureLLM, FixedEmbed, node
+from conftest import CaptureLLM, FixedEmbed, node, public_client
 
 pytestmark = pytest.mark.integration
 
@@ -12,6 +12,84 @@ pytestmark = pytest.mark.integration
 def reconciler(store, llm=None):
     store.config.recall.reconcile_retriever = "native"
     return MemoryReconciler(store.config, llm or CaptureLLM())
+
+
+@pytest.mark.parametrize("with_healthy", [False, True])
+async def test_writer_deleted_chain_allows_native_search_and_reconcile(
+    server_store, with_healthy
+):
+    from hy_memory.data.vector_store_base import NativeQuery
+    from hy_memory.models.memory import MemoryLayer, MemoryStatus
+    from hy_memory.pipelines.base import WriteRequest
+    from hy_memory.pipelines.writer import MemoryWriter
+
+    store = server_store
+    oldest = node("deletedchainmarker version 0")
+    healthy = node("healthychainmarker")
+    await store.upsert_batch([oldest] + ([healthy] if with_healthy else []))
+    llm = CaptureLLM()
+    writer = MemoryWriter(store.config, embed_service=FixedEmbed(), vector_store=store)
+    writer._vector_store, writer._vector_store_initialized = store, True
+    writer._reconciler = reconciler(store, llm)
+    writer._reconciler._enable_search_query = False
+
+    async def write(text, request_id):
+        request = WriteRequest(
+            user_id="alice", agent_id="a", session_id="s", content=text,
+            request_id=request_id,
+        )
+        return await writer._reconcile_and_store(
+            [text], [{"content": text, "layer": "l2_fact"}], request, store, request_id
+        )
+
+    # Build the evolution chain through the real writer before deleting its head.
+    ancestors, head = [oldest], oldest
+    for version in (1, 2):
+        text = f"deletedchainmarker version {version}"
+        llm.ops = [{
+            "op": "SUPERSEDE", "memory_id": head.node_id,
+            "content": text, "layer": "L2_FACT",
+        }]
+        stored, error, _, _ = await write(text, f"supersede-{version}")
+        assert error is None and len(stored) == 1
+        head = (await store.native_get_by_ids(stored))[0]
+        assert head.supersedes == [ancestors[-1].node_id]
+        assert head.status == MemoryStatus.ACTIVE and head.is_latest
+        if version == 1:
+            ancestors.append(head)
+    persisted = await store.native_get_by_ids([n.node_id for n in ancestors])
+    assert all(n.status == MemoryStatus.SUPERSEDED and not n.is_latest for n in persisted)
+
+    llm.prompts.clear()
+    llm.ops = [{"op": "DELETE", "memory_id": head.node_id}]
+    stored, error, _, _ = await write("deletedchainmarker", "delete-chain-head")
+    assert error is None and stored == []
+    assert len(llm.prompts) == 1 and head.node_id in llm.prompts[0]
+    deleted_head = (await store.native_get_by_ids([head.node_id]))[0]
+    assert deleted_head.status == MemoryStatus.SHADOW and not deleted_head.is_latest
+    # The backend still recalls ancestors; resolution must suppress the whole chain.
+    raw_hits = await store.native_query(NativeQuery(
+        texts=["deletedchainmarker"], embeddings=[[1.0, 0.0]],
+        user_ids=["alice"], layers=[MemoryLayer.L2_FACT], mode="dense",
+    ))
+    assert {n.node_id for n in ancestors} <= {h["node_id"] for h in raw_hits}
+    result = await public_client(store).async_search(
+        "deletedchainmarker", reader="native", native_mode="dense", user_ids=["alice"]
+    )
+    assert {m["memory_id"] for m in result["memories"]["normal"]} == (
+        {healthy.node_id} if with_healthy else set()
+    )
+
+    llm.prompts.clear()
+    llm.ops = [{"op": "ADD", "content": "fresh fact", "layer": "L2_FACT"}]
+    stored, error, _, _ = await write("fresh fact", "write-after-delete")
+    assert error is None and len(stored) == 1
+    assert (await store.native_get_by_ids(stored))[0].content == "fresh fact"
+    assert len(llm.prompts) == int(with_healthy)
+    if with_healthy:
+        assert healthy.node_id in llm.prompts[0]
+        assert "deletedchainmarker" not in llm.prompts[0]
+        assert all(n.node_id not in llm.prompts[0] for n in ancestors + [head])
 
 
 async def test_T01_T02_actual_reconcile_prompt_escapes_dense_pool(server_store):
