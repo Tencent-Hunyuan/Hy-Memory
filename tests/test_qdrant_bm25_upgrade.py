@@ -65,11 +65,37 @@ class _FakeQdrant:
             getattr(condition, "has_vector", None) == "bm25"
             for condition in (count_filter.must or [])
         )
+        state_values = {
+            getattr(getattr(condition, "match", None), "value", None)
+            for condition in (count_filter.must or [])
+            if getattr(condition, "key", None)
+            == QdrantVectorStore._BM25_STATE_FIELD
+        }
+        wants_empty = QdrantVectorStore._BM25_STATE_EMPTY in state_values
+        wants_indexed = QdrantVectorStore._BM25_STATE_INDEXED in state_values
+        excludes_sparse = any(
+            getattr(condition, "has_vector", None) == "bm25"
+            for condition in (count_filter.must_not or [])
+        )
         count = 0
         for record in self.records:
             if record.payload.get("layer") == MemoryLayer.L1_RAW.value:
                 continue
             if wants_sparse and not (
+                isinstance(record.vector, dict) and "bm25" in record.vector
+            ):
+                continue
+            if wants_empty and (
+                record.payload.get(QdrantVectorStore._BM25_STATE_FIELD)
+                != QdrantVectorStore._BM25_STATE_EMPTY
+            ):
+                continue
+            if wants_indexed and (
+                record.payload.get(QdrantVectorStore._BM25_STATE_FIELD)
+                != QdrantVectorStore._BM25_STATE_INDEXED
+            ):
+                continue
+            if excludes_sparse and (
                 isinstance(record.vector, dict) and "bm25" in record.vector
             ):
                 continue
@@ -127,6 +153,42 @@ class _FakeQdrant:
             )
             record.vector = {"": dense, **point.vector}
         self.update_calls += 1
+
+    def batch_update_points(
+        self,
+        *,
+        collection_name,
+        update_operations,
+        wait=True,
+    ):
+        by_id = {record.id: record for record in self.records}
+        for operation in update_operations:
+            update = getattr(operation, "update_vectors", None)
+            if update is not None:
+                self.update_vectors(
+                    collection_name=collection_name,
+                    points=update.points,
+                    wait=wait,
+                )
+                continue
+            delete = getattr(operation, "delete_vectors", None)
+            if delete is not None:
+                for point_id in delete.points or []:
+                    vector = by_id[str(point_id)].vector
+                    if isinstance(vector, dict):
+                        vector.pop("bm25", None)
+                continue
+            set_payload = getattr(operation, "set_payload", None)
+            if set_payload is not None:
+                for point_id in set_payload.points or []:
+                    by_id[str(point_id)].payload.update(set_payload.payload)
+                continue
+            delete_payload = getattr(operation, "delete_payload", None)
+            if delete_payload is not None:
+                for point_id in delete_payload.points or []:
+                    payload = by_id[str(point_id)].payload
+                    for key in delete_payload.keys:
+                        payload.pop(key, None)
 
 
 def _store(client, *, is_local=False):
@@ -298,23 +360,26 @@ def test_schema_ready_writer_populates_sparse_while_reader_is_disabled():
     assert vector["bm25"].indices == [1]
 
 
-def test_schema_ready_writer_marks_empty_text_with_empty_sparse():
+def test_schema_ready_writer_marks_empty_text_in_native_payload_state():
     store = _store(_FakeQdrant())
     store._bm25_schema_ready = True
     store._supports_fulltext = False
+    payload = {
+        "layer": MemoryLayer.L2_FACT.value,
+        "search_text": "   ",
+        "content": "",
+    }
 
     vector = store._build_vector_field(
-        {
-            "layer": MemoryLayer.L2_FACT.value,
-            "search_text": "   ",
-            "content": "",
-        },
+        payload,
         [1.0, 0.0],
     )
 
-    assert vector[""] == [1.0, 0.0]
-    assert vector["bm25"].indices == []
-    assert vector["bm25"].values == []
+    assert vector == [1.0, 0.0]
+    assert (
+        payload[QdrantVectorStore._BM25_STATE_FIELD]
+        == QdrantVectorStore._BM25_STATE_EMPTY
+    )
 
 
 @pytest.mark.asyncio
@@ -344,7 +409,7 @@ async def test_local_non_idf_sparse_schema_is_updated_in_place():
 
 
 @pytest.mark.asyncio
-async def test_zero_token_document_gets_empty_sparse_marker(monkeypatch):
+async def test_zero_token_document_gets_empty_payload_state(monkeypatch):
     client = _FakeQdrant()
     store = _store(client)
     monkeypatch.setattr(
@@ -357,8 +422,13 @@ async def test_zero_token_document_gets_empty_sparse_marker(monkeypatch):
     assert result["success"] is True
     assert result["reason"] == "ready"
     assert result["skipped_unencodable"] == 1
+    assert result["empty_points"] == 1
     assert store._supports_fulltext is True
-    assert client.records[0].vector["bm25"].indices == []
+    assert client.records[0].vector == [1.0, 0.0]
+    assert (
+        client.records[0].payload[QdrantVectorStore._BM25_STATE_FIELD]
+        == QdrantVectorStore._BM25_STATE_EMPTY
+    )
 
 
 @pytest.mark.asyncio
@@ -410,7 +480,7 @@ async def test_encoder_unavailable_blocks_before_schema_or_point_changes(
 
 
 @pytest.mark.asyncio
-async def test_empty_text_gets_empty_sparse_marker_and_reports_skip():
+async def test_empty_text_gets_empty_payload_state_and_reports_skip():
     client = _FakeQdrant()
     client.records[0].payload["content"] = ""
     client.records[0].payload["search_text"] = ""
@@ -420,9 +490,13 @@ async def test_empty_text_gets_empty_sparse_marker_and_reports_skip():
     assert result["success"] is True
     assert result["state"] == "ready"
     assert result["eligible_points"] == 1
-    assert result["sparse_points"] == 1
+    assert result["sparse_points"] == 0
+    assert result["empty_points"] == 1
     assert result["skipped_empty"] == 1
-    assert client.records[0].vector["bm25"].indices == []
+    assert (
+        client.records[0].payload[QdrantVectorStore._BM25_STATE_FIELD]
+        == QdrantVectorStore._BM25_STATE_EMPTY
+    )
 
 
 @pytest.mark.asyncio
@@ -464,17 +538,20 @@ async def test_unencodable_point_is_marked_and_does_not_block_later_batches(
     assert result["reason"] == "ready"
     assert result["processed_points"] == 2
     assert result["skipped_unencodable"] == 1
-    assert client.records[0].vector["bm25"].indices == []
+    assert (
+        client.records[0].payload[QdrantVectorStore._BM25_STATE_FIELD]
+        == QdrantVectorStore._BM25_STATE_EMPTY
+    )
     assert "bm25" in client.records[-1].vector
 
 
 @pytest.mark.asyncio
 async def test_failure_reports_points_committed_before_the_error():
     class FailingSecondBatch(_FakeQdrant):
-        def update_vectors(self, **kwargs):
+        def batch_update_points(self, **kwargs):
             if self.update_calls:
                 raise RuntimeError("remote write failed")
-            super().update_vectors(**kwargs)
+            super().batch_update_points(**kwargs)
 
     client = FailingSecondBatch()
     client.records.append(
@@ -501,7 +578,10 @@ async def test_failure_reports_points_committed_before_the_error():
 
 
 @pytest.mark.asyncio
-async def test_local_qdrant_dense_collection_is_upgraded_in_place(tmp_path):
+async def test_local_qdrant_dense_collection_is_upgraded_in_place(
+    tmp_path,
+    monkeypatch,
+):
     from qdrant_client import QdrantClient
     from qdrant_client.models import Distance, PointStruct, VectorParams
 
@@ -580,8 +660,18 @@ async def test_local_qdrant_dense_collection_is_upgraded_in_place(tmp_path):
         assert record.vector[""] == [1.0, 0.0]
         assert "bm25" in record.vector
         assert record.payload["content"] == "GAMMA-9955"
-        assert empty_record.vector[""] == [0.0, 1.0]
-        assert empty_record.vector["bm25"].indices == []
+        assert (
+            record.payload[QdrantVectorStore._BM25_STATE_FIELD]
+            == QdrantVectorStore._BM25_STATE_INDEXED
+        )
+        assert store._dense_of(empty_record.vector) == [0.0, 1.0]
+        assert not isinstance(empty_record.vector, dict) or (
+            "bm25" not in empty_record.vector
+        )
+        assert (
+            empty_record.payload[QdrantVectorStore._BM25_STATE_FIELD]
+            == QdrantVectorStore._BM25_STATE_EMPTY
+        )
         hits = await store.keyword_search(
             "GAMMA-9955",
             top_k=1,
@@ -596,10 +686,56 @@ async def test_local_qdrant_dense_collection_is_upgraded_in_place(tmp_path):
             with_payload=True,
             with_vectors=True,
         )[0]
-        assert updated.vector[""] == [1.0, 0.0]
-        assert updated.vector["bm25"].indices == []
+        assert store._dense_of(updated.vector) == [1.0, 0.0]
+        assert not isinstance(updated.vector, dict) or "bm25" not in updated.vector
         assert updated.payload["content"] == ""
         assert updated.payload["search_text"] == ""
+        assert (
+            updated.payload[QdrantVectorStore._BM25_STATE_FIELD]
+            == QdrantVectorStore._BM25_STATE_EMPTY
+        )
+
+        accepted = await store.update_payload_batch(
+            [(empty_point_id, {"content": "RESTORED-4411"})]
+        )
+        assert accepted == [empty_point_id]
+        restored = store._client.retrieve(
+            collection_name=collection,
+            ids=[empty_point_id],
+            with_payload=True,
+            with_vectors=True,
+        )[0]
+        assert store._dense_of(restored.vector) == [0.0, 1.0]
+        assert "bm25" in restored.vector
+        assert restored.payload["content"] == "RESTORED-4411"
+        assert (
+            restored.payload[QdrantVectorStore._BM25_STATE_FIELD]
+            == QdrantVectorStore._BM25_STATE_INDEXED
+        )
+
+        def fail_doc(_text):
+            raise RuntimeError("transient single-document encoder failure")
+
+        monkeypatch.setattr(
+            "hy_memory.pipelines._retrieval.bm25_fastembed.encode_doc",
+            fail_doc,
+        )
+        assert not await store.update_payload(
+            empty_point_id,
+            {"content": "MUST-NOT-COMMIT"},
+        )
+        unchanged = store._client.retrieve(
+            collection_name=collection,
+            ids=[empty_point_id],
+            with_payload=True,
+            with_vectors=True,
+        )[0]
+        assert unchanged.payload["content"] == "RESTORED-4411"
+        assert "bm25" in unchanged.vector
+        assert (
+            unchanged.payload[QdrantVectorStore._BM25_STATE_FIELD]
+            == QdrantVectorStore._BM25_STATE_INDEXED
+        )
 
         repeated = await store.upgrade_bm25(writers_stopped=True)
         assert repeated["success"] is True
@@ -775,7 +911,14 @@ async def test_remote_qdrant_dense_upgrade_and_partial_resume(
     remote_qdrant_url,
 ):
     from qdrant_client import QdrantClient
-    from qdrant_client.models import Distance, PointStruct, VectorParams
+    from qdrant_client.http.exceptions import UnexpectedResponse
+    from qdrant_client.models import (
+        Distance,
+        PointStruct,
+        PointVectors,
+        SparseVector,
+        VectorParams,
+    )
 
     collection = f"bm25_dense_{uuid4().hex}"
     monkeypatch.setattr(
@@ -839,7 +982,8 @@ async def test_remote_qdrant_dense_upgrade_and_partial_resume(
 
     try:
         await store.initialize()
-        original_update = store._client.update_vectors
+        original_batch_update = store._client.batch_update_points
+        original_vector_update = store._client.update_vectors
         calls = 0
 
         def fail_second_batch(**kwargs):
@@ -847,9 +991,9 @@ async def test_remote_qdrant_dense_upgrade_and_partial_resume(
             calls += 1
             if calls == 2:
                 raise RuntimeError("injected remote batch failure")
-            return original_update(**kwargs)
+            return original_batch_update(**kwargs)
 
-        store._client.update_vectors = fail_second_batch
+        store._client.batch_update_points = fail_second_batch
         failed = await store.upgrade_bm25(
             writers_stopped=True,
             batch_size=1,
@@ -860,14 +1004,29 @@ async def test_remote_qdrant_dense_upgrade_and_partial_resume(
         assert failed["reader_enabled"] is False
         assert failed["resumable"] is True
 
-        store._client.update_vectors = original_update
+        with pytest.raises(UnexpectedResponse, match="422"):
+            original_vector_update(
+                collection_name=physical_collection,
+                points=[
+                    PointVectors(
+                        id=ids[2],
+                        vector={
+                            "bm25": SparseVector(indices=[], values=[]),
+                        },
+                    )
+                ],
+                wait=True,
+            )
+
+        store._client.batch_update_points = original_batch_update
         resumed = await store.upgrade_bm25(
             writers_stopped=True,
             batch_size=1,
         )
         assert resumed["success"] is True
         assert resumed["state"] == "ready"
-        assert resumed["sparse_points"] == 3
+        assert resumed["sparse_points"] == 2
+        assert resumed["empty_points"] == 1
 
         rows = store._client.retrieve(
             collection_name=physical_collection,
@@ -878,7 +1037,15 @@ async def test_remote_qdrant_dense_upgrade_and_partial_resume(
         by_id = {str(row.id): row for row in rows}
         assert by_id[ids[0]].vector[""] == [1.0, 0.0]
         assert by_id[ids[0]].payload["content"] == "REMOTE-7788"
-        assert by_id[ids[2]].vector["bm25"].indices == []
+        assert (
+            by_id[ids[0]].payload[QdrantVectorStore._BM25_STATE_FIELD]
+            == QdrantVectorStore._BM25_STATE_INDEXED
+        )
+        assert "bm25" not in by_id[ids[2]].vector
+        assert (
+            by_id[ids[2]].payload[QdrantVectorStore._BM25_STATE_FIELD]
+            == QdrantVectorStore._BM25_STATE_EMPTY
+        )
         hits = await store.keyword_search(
             "REMOTE-7788",
             top_k=1,

@@ -12,10 +12,10 @@ Hy Memory and MemHub are versioned and released independently.
   sparse modifier. `upgrade_qdrant_bm25(writers_stopped=True)` uses Qdrant's
   native named-vector schema API, backfills only the derived `bm25` vector in
   bounded batches, skips raw conversation rows, and preserves every dense
-  vector and payload. Repeating the operation is idempotent; unsupported
+  vector and user payload field. Repeating the operation is idempotent; unsupported
   clients and missing FastEmbed return structured blocked states.
-  Empty or zero-token documents receive a native empty sparse vector so
-  coverage is explicit without adding searchable terms or sidecar state.
+  Empty or zero-token documents use a private Qdrant payload state so coverage
+  is explicit without adding searchable sentinel terms or sidecar state.
 - New Qdrant collections declare the IDF sparse modifier required by
   FastEmbed's `Qdrant/bm25` model. Startup keeps the keyword channel disabled
   when the BM25 schema or point coverage is incomplete instead of treating a

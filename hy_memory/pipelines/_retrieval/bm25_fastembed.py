@@ -80,16 +80,18 @@ def _to_tuple(sparse_embedding) -> Optional[SparseTuple]:
 
 
 def encode_doc(text: str) -> Optional[SparseTuple]:
-    """文档侧编码（含 IDF×TF 权重）；不可用或空文本返回 None。"""
-    enc = _get_encoder()
-    if not enc or not text:
+    """Encode one document; only a successful zero-token result is ``None``."""
+    if not text:
         return None
+    enc = _get_encoder()
+    if not enc:
+        raise RuntimeError("BM25 encoder is unavailable")
     try:
         out = list(enc.embed([text]))
         return _to_tuple(out[0]) if out else None
     except Exception as e:
-        logger.debug(f"[bm25-fastembed] encode_doc failed: {e}")
-        return None
+        logger.warning(f"[bm25-fastembed] encode_doc failed: {e}")
+        raise RuntimeError("BM25 document encoding failed") from e
 
 
 def encode_docs(texts: List[str]) -> List[Optional[SparseTuple]]:

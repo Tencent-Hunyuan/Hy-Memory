@@ -386,10 +386,11 @@ if plan["state"] == "upgrade_required":
 ```
 
 升级使用 Qdrant 1.18+ 原生 named sparse vector 与 IDF modifier，只回填派生的
-`bm25` vector；不会改 dense vector、payload 或 point id。Qdrant 服务端过旧、
+`bm25` vector；不会改 dense vector、用户 payload 字段或 point id。Qdrant 服务端过旧、
 FastEmbed 不可用或覆盖校验失败时返回结构化 `blocked`/失败状态，不删除 collection。
-空文本或零 token 文档会写入无可搜索词项的原生空 sparse vector，用于明确记录
-coverage，不会引入旁路索引。返回值中的 `schema_ready`、`reader_enabled` 和
+空文本或零 token 文档不写 sparse，而是在同一 Qdrant point 中写 SDK 私有派生
+payload 状态 `_hy_memory_bm25_state=empty`，用于明确记录 coverage；不会引入
+可搜索 sentinel、外部索引或旁路状态。返回值中的 `schema_ready`、`reader_enabled` 和
 `resumable` 分别说明 schema、读取开关和可重跑状态。
 
 实例内锁只防止同一 `HyMemoryClient` 重复执行升级，不是跨进程停写锁；

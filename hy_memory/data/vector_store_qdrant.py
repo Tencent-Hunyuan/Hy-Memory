@@ -147,6 +147,9 @@ class QdrantVectorStore(VectorStoreBase):
 
     _supports_retrieval_clauses = True
     _supports_narrow_episode_queries = True
+    _BM25_STATE_FIELD = "_hy_memory_bm25_state"
+    _BM25_STATE_INDEXED = "indexed"
+    _BM25_STATE_EMPTY = "empty"
 
     def __init__(self, config: MemoryConfig):
         super().__init__(config)
@@ -391,13 +394,38 @@ class QdrantVectorStore(VectorStoreBase):
             ).count
         )
         sparse_points = 0
+        empty_points = 0
         if has_schema:
             sparse_points = int(
                 self._client.count(
                     collection_name=self._collection_name,
                     count_filter=Filter(
-                        must=[HasVectorCondition(has_vector=self._sparse_name)],
+                        must=[
+                            HasVectorCondition(has_vector=self._sparse_name),
+                            FieldCondition(
+                                key=self._BM25_STATE_FIELD,
+                                match=MatchValue(value=self._BM25_STATE_INDEXED),
+                            ),
+                        ],
                         must_not=non_raw,
+                    ),
+                    exact=True,
+                ).count
+            )
+            empty_points = int(
+                self._client.count(
+                    collection_name=self._collection_name,
+                    count_filter=Filter(
+                        must=[
+                            FieldCondition(
+                                key=self._BM25_STATE_FIELD,
+                                match=MatchValue(value=self._BM25_STATE_EMPTY),
+                            )
+                        ],
+                        must_not=[
+                            *non_raw,
+                            HasVectorCondition(has_vector=self._sparse_name),
+                        ],
                     ),
                     exact=True,
                 ).count
@@ -407,7 +435,7 @@ class QdrantVectorStore(VectorStoreBase):
             reason = "sparse_schema_missing"
         elif modifier != "idf":
             reason = "sparse_modifier_not_idf"
-        elif sparse_points != eligible:
+        elif sparse_points + empty_points != eligible:
             reason = "sparse_vectors_missing"
         else:
             reason = "ready"
@@ -422,7 +450,12 @@ class QdrantVectorStore(VectorStoreBase):
             "schema_modifier": modifier,
             "eligible_points": eligible,
             "sparse_points": sparse_points,
-            "missing_points": max(0, eligible - sparse_points),
+            "empty_points": empty_points,
+            "covered_points": sparse_points + empty_points,
+            "missing_points": max(
+                0,
+                eligible - sparse_points - empty_points,
+            ),
             "server_version": server_version,
             "can_upgrade": (
                 hasattr(self._client, "update_vectors")
@@ -490,12 +523,18 @@ class QdrantVectorStore(VectorStoreBase):
 
         from ..pipelines._retrieval import bm25_fastembed
         from qdrant_client.models import (
+            DeleteVectors,
+            DeleteVectorsOperation,
             Modifier,
             PointVectors,
+            SetPayload,
+            SetPayloadOperation,
             SparseVector,
             SparseVectorConfig,
             SparseVectorNameConfig,
             SparseVectorParams,
+            UpdateVectors,
+            UpdateVectorsOperation,
         )
 
         plan = await self.plan_bm25_upgrade()
@@ -654,7 +693,7 @@ class QdrantVectorStore(VectorStoreBase):
                 zero_token_points += len(encoded) - len(encodable)
                 encoded_count += len(encodable)
 
-                updates = [
+                vector_updates = [
                     PointVectors(
                         id=record.id,
                         vector={
@@ -666,33 +705,68 @@ class QdrantVectorStore(VectorStoreBase):
                     )
                     for record, item in encodable
                 ]
-                empty_sparse = SparseVector(indices=[], values=[])
-                updates.extend(
-                    PointVectors(
-                        id=record.id,
-                        vector={self._sparse_name: empty_sparse},
-                    )
-                    for record in empty_records
-                )
-                updates.extend(
-                    PointVectors(
-                        id=record.id,
-                        vector={self._sparse_name: empty_sparse},
-                    )
+                indexed_ids = [record.id for record, _item in encodable]
+                empty_ids = [record.id for record in empty_records]
+                empty_ids.extend(
+                    record.id
                     for record, item in zip(eligible_records, encoded)
                     if item is None
                 )
-                if updates:
+                operations = []
+                if vector_updates:
+                    operations.append(
+                        UpdateVectorsOperation(
+                            update_vectors=UpdateVectors(
+                                points=vector_updates,
+                            )
+                        )
+                    )
+                if empty_ids:
+                    operations.append(
+                        DeleteVectorsOperation(
+                            delete_vectors=DeleteVectors(
+                                points=empty_ids,
+                                vector=[self._sparse_name],
+                            )
+                        )
+                    )
+                if indexed_ids:
+                    operations.append(
+                        SetPayloadOperation(
+                            set_payload=SetPayload(
+                                payload={
+                                    self._BM25_STATE_FIELD: (
+                                        self._BM25_STATE_INDEXED
+                                    )
+                                },
+                                points=indexed_ids,
+                            )
+                        )
+                    )
+                if empty_ids:
+                    operations.append(
+                        SetPayloadOperation(
+                            set_payload=SetPayload(
+                                payload={
+                                    self._BM25_STATE_FIELD: (
+                                        self._BM25_STATE_EMPTY
+                                    )
+                                },
+                                points=empty_ids,
+                            )
+                        )
+                    )
+                if operations:
 
                     def _update() -> None:
-                        self._client.update_vectors(
+                        self._client.batch_update_points(
                             collection_name=self._collection_name,
-                            points=updates,
+                            update_operations=operations,
                             wait=True,
                         )
 
                     await _run_in_vdb_pool(_update)
-                    processed += len(updates)
+                    processed += len(indexed_ids) + len(empty_ids)
 
                 if next_offset is None:
                     break
@@ -807,10 +881,9 @@ class QdrantVectorStore(VectorStoreBase):
         text = self._bm25_text(payload)
         sp = bm25_fastembed.encode_doc(text) if text else None
         if not sp:
-            return {
-                "": embedding,
-                self._sparse_name: SparseVector(indices=[], values=[]),
-            }
+            payload[self._BM25_STATE_FIELD] = self._BM25_STATE_EMPTY
+            return embedding
+        payload[self._BM25_STATE_FIELD] = self._BM25_STATE_INDEXED
         indices, values = sp
         return {"": embedding, self._sparse_name: SparseVector(indices=indices, values=values)}
 
@@ -896,6 +969,8 @@ class QdrantVectorStore(VectorStoreBase):
         if not updates:
             return True
         from qdrant_client.models import (
+            DeleteVectors,
+            DeleteVectorsOperation,
             PointVectors,
             SetPayload,
             SetPayloadOperation,
@@ -926,6 +1001,7 @@ class QdrantVectorStore(VectorStoreBase):
                 )
 
             sparse_vector = None
+            empty_lexical = False
             if lexical_changed and self._bm25_schema_ready:
                 from ..pipelines._retrieval import bm25_fastembed
                 encoded = bm25_fastembed.encode_doc(updates["search_text"])
@@ -933,10 +1009,12 @@ class QdrantVectorStore(VectorStoreBase):
                     sparse_vector = SparseVector(
                         indices=encoded[0], values=encoded[1],
                     )
+                    updates[self._BM25_STATE_FIELD] = (
+                        self._BM25_STATE_INDEXED
+                    )
                 else:
-                    # An empty native sparse vector records that this point was
-                    # processed without introducing searchable lexical terms.
-                    sparse_vector = SparseVector(indices=[], values=[])
+                    updates[self._BM25_STATE_FIELD] = self._BM25_STATE_EMPTY
+                    empty_lexical = True
 
             def _update():
                 # Payload + vector changes belong to one logical memory update.
@@ -964,6 +1042,10 @@ class QdrantVectorStore(VectorStoreBase):
                     operations.append(UpdateVectorsOperation(update_vectors=UpdateVectors(
                         points=[PointVectors(id=point_id, vector=vector_update)],
                     )))
+                if empty_lexical:
+                    operations.append(DeleteVectorsOperation(delete_vectors=DeleteVectors(
+                        points=[point_id], vector=[self._sparse_name],
+                    )))
                 if len(operations) > 1 and hasattr(
                     self._client, "batch_update_points"
                 ):
@@ -983,6 +1065,12 @@ class QdrantVectorStore(VectorStoreBase):
                         collection_name=self._collection_name,
                         points=[PointVectors(id=point_id, vector=vector_update)],
                     )
+                if empty_lexical:
+                    self._client.delete_vectors(
+                        collection_name=self._collection_name,
+                        points=[point_id],
+                        vectors=[self._sparse_name],
+                    )
             await _run_in_vdb_pool(_update)
             logger.debug(
                 f"[vector-store] update_payload: id={node_id} updates={list(updates.keys())} "
@@ -1000,6 +1088,8 @@ class QdrantVectorStore(VectorStoreBase):
         if not updates_by_id:
             return []
         from qdrant_client.models import (
+            DeleteVectors,
+            DeleteVectorsOperation,
             PointVectors,
             SetPayload,
             SetPayloadOperation,
@@ -1047,10 +1137,6 @@ class QdrantVectorStore(VectorStoreBase):
                     updates.get("content", current.get("content", "")),
                     updates.get("tags", current.get("tags", [])),
                 )
-            if updates:
-                operations.append(SetPayloadOperation(set_payload=SetPayload(
-                    payload=updates, points=[point_id],
-                )))
             vector_update: Any = None
             named_vectors: Dict[str, Any] = {}
             if self._bm25_schema_ready and new_embedding is not None:
@@ -1064,10 +1150,18 @@ class QdrantVectorStore(VectorStoreBase):
                     named_vectors[self._sparse_name] = SparseVector(
                         indices=encoded[0], values=encoded[1],
                     )
-                else:
-                    named_vectors[self._sparse_name] = SparseVector(
-                        indices=[], values=[],
+                    updates[self._BM25_STATE_FIELD] = (
+                        self._BM25_STATE_INDEXED
                     )
+                else:
+                    updates[self._BM25_STATE_FIELD] = self._BM25_STATE_EMPTY
+                    operations.append(DeleteVectorsOperation(delete_vectors=DeleteVectors(
+                        points=[point_id], vector=[self._sparse_name],
+                    )))
+            if updates:
+                operations.append(SetPayloadOperation(set_payload=SetPayload(
+                    payload=updates, points=[point_id],
+                )))
             if named_vectors:
                 vector_update = named_vectors
             if vector_update:
