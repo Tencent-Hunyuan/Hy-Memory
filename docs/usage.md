@@ -388,6 +388,14 @@ if plan["state"] == "upgrade_required":
 升级使用 Qdrant 1.18+ 原生 named sparse vector 与 IDF modifier，只回填派生的
 `bm25` vector；不会改 dense vector、payload 或 point id。Qdrant 服务端过旧、
 FastEmbed 不可用或覆盖校验失败时返回结构化 `blocked`/失败状态，不删除 collection。
+空文本或零 token 文档会写入无可搜索词项的原生空 sparse vector，用于明确记录
+coverage，不会引入旁路索引。返回值中的 `schema_ready`、`reader_enabled` 和
+`resumable` 分别说明 schema、读取开关和可重跑状态。
+
+实例内锁只防止同一 `HyMemoryClient` 重复执行升级，不是跨进程停写锁；
+`writers_stopped=True` 是调用方对整个部署维护窗口的承诺。此 API 仅属于
+Hy Memory SDK 2.0.17；普通启动和 MemHub 桌面 Runtime/CLI 都不会自动执行，
+MemHub 的 SDK pin、离线 FastEmbed 资源和维护入口将在后续独立接入。
 对应异步方法为 `async_plan_qdrant_bm25_upgrade()` 和
 `async_upgrade_qdrant_bm25()`。
 

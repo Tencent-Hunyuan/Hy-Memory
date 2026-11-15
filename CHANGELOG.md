@@ -14,10 +14,15 @@ Hy Memory and MemHub are versioned and released independently.
   bounded batches, skips raw conversation rows, and preserves every dense
   vector and payload. Repeating the operation is idempotent; unsupported
   clients and missing FastEmbed return structured blocked states.
+  Empty or zero-token documents receive a native empty sparse vector so
+  coverage is explicit without adding searchable terms or sidecar state.
 - New Qdrant collections declare the IDF sparse modifier required by
   FastEmbed's `Qdrant/bm25` model. Startup keeps the keyword channel disabled
   when the BM25 schema or point coverage is incomplete instead of treating a
   partially migrated collection as ready.
+- This is an SDK-only maintenance API. Normal startup and MemHub Runtime/CLI
+  do not run it automatically; product packaging and maintenance entry points
+  remain separate follow-up work.
 
 ## MemHub 1.0.7 — 2026-11-12
 

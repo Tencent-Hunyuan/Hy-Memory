@@ -1,4 +1,12 @@
+import asyncio
+import os
+import shutil
+import subprocess
+import time
 from types import SimpleNamespace
+from urllib.error import URLError
+from urllib.parse import urlparse
+from urllib.request import urlopen
 from uuid import uuid4
 
 import pytest
@@ -128,6 +136,7 @@ def _store(client, *, is_local=False):
     store._sparse_name = "bm25"
     store._supports_fulltext = False
     store._bm25_schema_ready = False
+    store._bm25_upgrade_lock = asyncio.Lock()
     store._is_local = is_local
     return store
 
@@ -151,7 +160,7 @@ def _direct_executor(monkeypatch):
     )
     monkeypatch.setattr(
         "hy_memory.pipelines._retrieval.bm25_fastembed.encode_doc",
-        lambda _text: ([1], [1.0]),
+        lambda text: ([1], [1.0]) if text else None,
     )
     monkeypatch.setattr(
         "hy_memory.pipelines._retrieval.bm25_fastembed.encode_query",
@@ -211,6 +220,17 @@ async def test_prerelease_qdrant_server_is_blocked_before_schema_changes():
 
 
 @pytest.mark.asyncio
+async def test_unparseable_qdrant_server_is_blocked_before_schema_changes():
+    client = _FakeQdrant(server_version="unknown")
+
+    result = await _store(client).upgrade_bm25(writers_stopped=True)
+
+    assert result["success"] is False
+    assert result["reason"] == "qdrant_vector_schema_api_unavailable"
+    assert client.created == 0
+
+
+@pytest.mark.asyncio
 async def test_upgrade_requires_an_explicit_stopped_writer_boundary():
     with pytest.raises(ValueError, match="writers_stopped"):
         await _store(_FakeQdrant()).upgrade_bm25(writers_stopped=False)
@@ -241,6 +261,23 @@ async def test_upgrade_adds_idf_schema_and_backfills_without_touching_raw():
     assert repeated["success"] is True
     assert repeated["changed"] is False
     assert repeated["processed_points"] == 0
+    assert client.update_calls == 1
+
+
+@pytest.mark.asyncio
+async def test_concurrent_upgrades_share_one_store_lock():
+    client = _FakeQdrant()
+    store = _store(client)
+
+    first, second = await asyncio.gather(
+        store.upgrade_bm25(writers_stopped=True),
+        store.upgrade_bm25(writers_stopped=True),
+    )
+
+    assert first["success"] is True
+    assert second["success"] is True
+    assert sorted([first["changed"], second["changed"]]) == [False, True]
+    assert client.created == 1
     assert client.update_calls == 1
 
 
@@ -345,6 +382,30 @@ async def test_encoder_exception_is_retryable_and_does_not_mark_coverage(
     assert result["reason"] == "bm25_upgrade_failed"
     assert result["error_type"] == "RuntimeError"
     assert store._supports_fulltext is False
+    assert client.records[0].vector == [1.0, 0.0]
+
+
+@pytest.mark.asyncio
+async def test_encoder_unavailable_blocks_before_schema_or_point_changes(
+    monkeypatch,
+):
+    client = _FakeQdrant()
+    store = _store(client)
+    monkeypatch.setattr(
+        "hy_memory.pipelines._retrieval.bm25_fastembed.is_available",
+        lambda: False,
+    )
+
+    result = await store.upgrade_bm25(writers_stopped=True)
+
+    assert result["success"] is False
+    assert result["changed"] is False
+    assert result["reason"] == "bm25_model_unavailable"
+    assert result["schema_ready"] is False
+    assert result["reader_enabled"] is False
+    assert result["resumable"] is True
+    assert client.created == 0
+    assert client.update_calls == 0
     assert client.records[0].vector == [1.0, 0.0]
 
 
@@ -528,6 +589,18 @@ async def test_local_qdrant_dense_collection_is_upgraded_in_place(tmp_path):
         )
         assert [hit["node_id"] for hit in hits] == [point_id]
 
+        assert await store.update_payload(point_id, {"content": ""})
+        updated = store._client.retrieve(
+            collection_name=collection,
+            ids=[point_id],
+            with_payload=True,
+            with_vectors=True,
+        )[0]
+        assert updated.vector[""] == [1.0, 0.0]
+        assert updated.vector["bm25"].indices == []
+        assert updated.payload["content"] == ""
+        assert updated.payload["search_text"] == ""
+
         repeated = await store.upgrade_bm25(writers_stopped=True)
         assert repeated["success"] is True
         assert repeated["changed"] is False
@@ -607,6 +680,261 @@ async def test_local_qdrant_non_idf_schema_is_upgraded_in_place(tmp_path):
         assert record.payload["content"] == "DELTA-7788"
     finally:
         await store.close()
+
+
+@pytest.fixture(scope="module")
+def remote_qdrant_url():
+    configured = os.getenv("HY_MEMORY_TEST_QDRANT_URL")
+    if configured:
+        yield configured
+        return
+    if not os.getenv("CI"):
+        pytest.skip("real Qdrant Server gate runs in CI or with a configured URL")
+    docker = shutil.which("docker")
+    if not docker:
+        pytest.fail("CI must provide Docker for the Qdrant Server 1.18 gate")
+
+    name = f"hy-memory-qdrant-118-{uuid4().hex}"
+    try:
+        subprocess.run(
+            [
+                docker,
+                "run",
+                "--detach",
+                "--rm",
+                "--name",
+                name,
+                "--publish",
+                "127.0.0.1::6333",
+                "qdrant/qdrant:v1.18.0",
+            ],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        port_result = subprocess.run(
+            [docker, "port", name, "6333/tcp"],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        host_port = port_result.stdout.strip().rsplit(":", 1)[-1]
+        port = int(host_port)
+        for attempt in range(30):
+            try:
+                with urlopen(
+                    f"http://127.0.0.1:{port}/readyz",
+                    timeout=1,
+                ) as response:
+                    if response.status == 200:
+                        break
+            except (OSError, URLError):
+                if attempt == 29:
+                    raise
+                time.sleep(1)
+        yield f"http://127.0.0.1:{port}"
+    finally:
+        subprocess.run(
+            [docker, "rm", "--force", name],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+
+
+def _remote_qdrant_config(collection_name, url):
+    parsed = urlparse(url)
+    config = MemoryConfig.from_dict(
+        {
+            "vector_store": {
+                "provider": "qdrant",
+                "collection_name": collection_name,
+                "host": parsed.hostname,
+                "port": parsed.port or 6333,
+                "embedding_dims": 2,
+            }
+        }
+    )
+    return url, config
+
+
+@pytest.mark.asyncio
+async def test_remote_qdrant_dense_upgrade_and_partial_resume(
+    monkeypatch,
+    remote_qdrant_url,
+):
+    from qdrant_client import QdrantClient
+    from qdrant_client.models import Distance, PointStruct, VectorParams
+
+    collection = f"bm25_dense_{uuid4().hex}"
+    monkeypatch.setattr(
+        "hy_memory.pipelines._retrieval.bm25_fastembed.encode_docs",
+        lambda texts: [
+            ([1], [1.0]) if "REMOTE-7788" in text else ([2], [1.0])
+            for text in texts
+        ],
+    )
+    url = remote_qdrant_url
+    config = _remote_qdrant_config(collection, url)
+    store = QdrantVectorStore(config)
+    physical_collection = store._collection_name
+    admin = QdrantClient(url=url)
+    admin.create_collection(
+        collection_name=physical_collection,
+        vectors_config=VectorParams(size=2, distance=Distance.COSINE),
+    )
+    ids = [str(uuid4()), str(uuid4()), str(uuid4())]
+    admin.upsert(
+        collection_name=physical_collection,
+        points=[
+            PointStruct(
+                id=ids[0],
+                vector=[1.0, 0.0],
+                payload={
+                    "node_id": ids[0],
+                    "layer": MemoryLayer.L2_FACT.value,
+                    "content": "REMOTE-7788",
+                    "search_text": "REMOTE-7788",
+                    "status": "active",
+                    "is_latest": True,
+                },
+            ),
+            PointStruct(
+                id=ids[1],
+                vector=[0.5, 0.5],
+                payload={
+                    "node_id": ids[1],
+                    "layer": MemoryLayer.L2_FACT.value,
+                    "content": "second remote fact",
+                    "search_text": "second remote fact",
+                    "status": "active",
+                    "is_latest": True,
+                },
+            ),
+            PointStruct(
+                id=ids[2],
+                vector=[0.0, 1.0],
+                payload={
+                    "node_id": ids[2],
+                    "layer": MemoryLayer.L2_FACT.value,
+                    "content": "",
+                    "search_text": "",
+                    "status": "active",
+                    "is_latest": True,
+                },
+            ),
+        ],
+    )
+
+    try:
+        await store.initialize()
+        original_update = store._client.update_vectors
+        calls = 0
+
+        def fail_second_batch(**kwargs):
+            nonlocal calls
+            calls += 1
+            if calls == 2:
+                raise RuntimeError("injected remote batch failure")
+            return original_update(**kwargs)
+
+        store._client.update_vectors = fail_second_batch
+        failed = await store.upgrade_bm25(
+            writers_stopped=True,
+            batch_size=1,
+        )
+        assert failed["success"] is False
+        assert failed["reason"] == "bm25_upgrade_failed"
+        assert failed["processed_points"] == 1
+        assert failed["reader_enabled"] is False
+        assert failed["resumable"] is True
+
+        store._client.update_vectors = original_update
+        resumed = await store.upgrade_bm25(
+            writers_stopped=True,
+            batch_size=1,
+        )
+        assert resumed["success"] is True
+        assert resumed["state"] == "ready"
+        assert resumed["sparse_points"] == 3
+
+        rows = store._client.retrieve(
+            collection_name=physical_collection,
+            ids=ids,
+            with_payload=True,
+            with_vectors=True,
+        )
+        by_id = {str(row.id): row for row in rows}
+        assert by_id[ids[0]].vector[""] == [1.0, 0.0]
+        assert by_id[ids[0]].payload["content"] == "REMOTE-7788"
+        assert by_id[ids[2]].vector["bm25"].indices == []
+        hits = await store.keyword_search(
+            "REMOTE-7788",
+            top_k=1,
+            only_latest=False,
+        )
+        assert [hit["node_id"] for hit in hits] == [ids[0]]
+    finally:
+        await store.close()
+        admin.delete_collection(physical_collection)
+        admin.close()
+
+
+@pytest.mark.asyncio
+async def test_remote_qdrant_non_idf_schema_is_rebuilt(remote_qdrant_url):
+    from qdrant_client import QdrantClient
+    from qdrant_client.models import (
+        Distance,
+        Modifier,
+        PointStruct,
+        SparseVectorParams,
+        VectorParams,
+    )
+
+    collection = f"bm25_non_idf_{uuid4().hex}"
+    url = remote_qdrant_url
+    config = _remote_qdrant_config(collection, url)
+    store = QdrantVectorStore(config)
+    physical_collection = store._collection_name
+    admin = QdrantClient(url=url)
+    admin.create_collection(
+        collection_name=physical_collection,
+        vectors_config=VectorParams(size=2, distance=Distance.COSINE),
+        sparse_vectors_config={"bm25": SparseVectorParams()},
+    )
+    point_id = str(uuid4())
+    admin.upsert(
+        collection_name=physical_collection,
+        points=[
+            PointStruct(
+                id=point_id,
+                vector=[1.0, 0.0],
+                payload={
+                    "node_id": point_id,
+                    "layer": MemoryLayer.L2_FACT.value,
+                    "content": "REMOTE-NON-IDF",
+                    "search_text": "REMOTE-NON-IDF",
+                    "status": "active",
+                    "is_latest": True,
+                },
+            )
+        ],
+    )
+
+    try:
+        await store.initialize()
+        result = await store.upgrade_bm25(writers_stopped=True)
+        assert result["success"] is True
+        assert result["state"] == "ready"
+        info = store._client.get_collection(physical_collection)
+        assert (
+            info.config.params.sparse_vectors["bm25"].modifier
+            == Modifier.IDF
+        )
+    finally:
+        await store.close()
+        admin.delete_collection(physical_collection)
+        admin.close()
 
 
 @pytest.mark.asyncio

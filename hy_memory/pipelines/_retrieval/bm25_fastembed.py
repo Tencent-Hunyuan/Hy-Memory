@@ -101,7 +101,7 @@ def encode_docs(texts: List[str]) -> List[Optional[SparseTuple]]:
     """
     enc = _get_encoder()
     if not enc:
-        return [None] * len(texts)
+        raise RuntimeError("BM25 encoder is unavailable")
     idxs = [i for i, t in enumerate(texts) if t]
     result: List[Optional[SparseTuple]] = [None] * len(texts)
     if not idxs:

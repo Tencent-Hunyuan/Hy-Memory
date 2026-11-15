@@ -16,6 +16,7 @@ Agent Memory V2 - VectorStore (Qdrant)
 - 简化运维，后续可按需拆分
 """
 
+import asyncio
 import concurrent.futures
 import os
 import re
@@ -161,6 +162,10 @@ class QdrantVectorStore(VectorStoreBase):
         # backfill readers remain fail-closed, while any accidental same-process
         # write must still populate the sparse vector once the IDF schema exists.
         self._bm25_schema_ready = False
+        # HyMemoryClient routes this store through one internal event loop.
+        # This lock prevents duplicate upgrades within this store instance;
+        # cross-process exclusion remains the caller's maintenance-window duty.
+        self._bm25_upgrade_lock = asyncio.Lock()
         self._sparse_name = "bm25"
         self._tag_index_ready = False
         self._tag_index_init_lock = threading.Lock()
@@ -459,13 +464,7 @@ class QdrantVectorStore(VectorStoreBase):
         writers_stopped: bool,
         batch_size: int = 256,
     ) -> Dict[str, Any]:
-        lock = getattr(self, "_bm25_upgrade_lock", None)
-        if lock is None:
-            import asyncio
-
-            lock = asyncio.Lock()
-            self._bm25_upgrade_lock = lock
-        async with lock:
+        async with self._bm25_upgrade_lock:
             return await self._upgrade_bm25_locked(
                 writers_stopped=writers_stopped,
                 batch_size=batch_size,
@@ -512,6 +511,9 @@ class QdrantVectorStore(VectorStoreBase):
                 "encoded_points": 0,
                 "verified_points": plan["sparse_points"],
                 "failed_points": 0,
+                "schema_ready": True,
+                "reader_enabled": True,
+                "resumable": False,
             }
         if plan["state"] == "blocked":
             return {
@@ -523,6 +525,9 @@ class QdrantVectorStore(VectorStoreBase):
                 "encoded_points": 0,
                 "verified_points": plan["sparse_points"],
                 "failed_points": 0,
+                "schema_ready": bool(self._bm25_schema_ready),
+                "reader_enabled": False,
+                "resumable": bool(plan.get("can_upgrade")),
             }
 
         if not bm25_fastembed.is_available():
@@ -537,6 +542,9 @@ class QdrantVectorStore(VectorStoreBase):
                 "encoded_points": 0,
                 "verified_points": plan["sparse_points"],
                 "failed_points": 0,
+                "schema_ready": bool(self._bm25_schema_ready),
+                "reader_enabled": False,
+                "resumable": True,
             }
 
         schema_changed = False
@@ -546,6 +554,7 @@ class QdrantVectorStore(VectorStoreBase):
         skipped_raw = 0
         skipped_empty = 0
         skipped_unencodable = 0
+        zero_token_points = 0
         self._supports_fulltext = False
 
         def _prepare_schema() -> None:
@@ -603,7 +612,7 @@ class QdrantVectorStore(VectorStoreBase):
                 texts = []
                 for record in records:
                     payload = dict(getattr(record, "payload", None) or {})
-                    if payload.get("layer") == MemoryLayer.L1_RAW.value:
+                    if not self._bm25_eligible(payload):
                         skipped_raw += 1
                         continue
                     text = self._bm25_text(payload)
@@ -630,6 +639,11 @@ class QdrantVectorStore(VectorStoreBase):
                         "skipped_raw": skipped_raw,
                         "skipped_empty": skipped_empty,
                         "skipped_unencodable": skipped_unencodable,
+                        "zero_token_points": zero_token_points,
+                        "error_type": "BM25EncodingLengthMismatch",
+                        "schema_ready": True,
+                        "reader_enabled": False,
+                        "resumable": True,
                     }
                 encodable = [
                     (record, item)
@@ -637,6 +651,7 @@ class QdrantVectorStore(VectorStoreBase):
                     if item is not None
                 ]
                 skipped_unencodable += len(encoded) - len(encodable)
+                zero_token_points += len(encoded) - len(encodable)
                 encoded_count += len(encodable)
 
                 updates = [
@@ -698,6 +713,10 @@ class QdrantVectorStore(VectorStoreBase):
                 "skipped_raw": skipped_raw,
                 "skipped_empty": skipped_empty,
                 "skipped_unencodable": skipped_unencodable,
+                "zero_token_points": zero_token_points,
+                "schema_ready": bool(self._bm25_schema_ready),
+                "reader_enabled": success,
+                "resumable": not success,
             }
         except Exception as exc:
             logger.exception(
@@ -729,6 +748,10 @@ class QdrantVectorStore(VectorStoreBase):
                 "skipped_raw": skipped_raw,
                 "skipped_empty": skipped_empty,
                 "skipped_unencodable": skipped_unencodable,
+                "zero_token_points": zero_token_points,
+                "schema_ready": bool(self._bm25_schema_ready),
+                "reader_enabled": False,
+                "resumable": True,
             }
 
     # ================================================================
@@ -748,6 +771,11 @@ class QdrantVectorStore(VectorStoreBase):
         return vec
 
     @staticmethod
+    def _bm25_eligible(payload: Dict[str, Any]) -> bool:
+        """Every non-raw point must carry an explicit native sparse state."""
+        return payload.get("layer") != MemoryLayer.L1_RAW.value
+
+    @staticmethod
     def _bm25_text(payload: Dict[str, Any]) -> str:
         """Return the normalized lexical text used by every BM25 write path."""
         text = str(payload.get("search_text") or "").strip()
@@ -761,7 +789,7 @@ class QdrantVectorStore(VectorStoreBase):
 
         - sparse schema 未就绪：返回纯 dense list（兼容旧 dense-only collection）
         - sparse schema 已就绪：返回 {"": dense, "bm25": SparseVector(...)}，sparse 由
-          fastembed BM25 对 search_text 编码而来；编码失败则回落纯 dense。
+          FastEmbed BM25 对 search_text 编码；空/零 token 文本写原生空 sparse。
 
         跳过 L1_RAW：原始对话层不被任何召回路径消费（reader 召回 L0/L2/L3/L4，
         提取后又降 SHADOW，System2 也只取 L2/L4），给它编 sparse 纯浪费写入/存储。
@@ -868,8 +896,6 @@ class QdrantVectorStore(VectorStoreBase):
         if not updates:
             return True
         from qdrant_client.models import (
-            DeleteVectors,
-            DeleteVectorsOperation,
             PointVectors,
             SetPayload,
             SetPayloadOperation,
@@ -900,7 +926,6 @@ class QdrantVectorStore(VectorStoreBase):
                 )
 
             sparse_vector = None
-            delete_sparse = False
             if lexical_changed and self._bm25_schema_ready:
                 from ..pipelines._retrieval import bm25_fastembed
                 encoded = bm25_fastembed.encode_doc(updates["search_text"])
@@ -939,11 +964,6 @@ class QdrantVectorStore(VectorStoreBase):
                     operations.append(UpdateVectorsOperation(update_vectors=UpdateVectors(
                         points=[PointVectors(id=point_id, vector=vector_update)],
                     )))
-                if delete_sparse:
-                    operations.append(DeleteVectorsOperation(delete_vectors=DeleteVectors(
-                        points=[point_id], vector=[self._sparse_name],
-                    )))
-
                 if len(operations) > 1 and hasattr(
                     self._client, "batch_update_points"
                 ):
@@ -963,12 +983,6 @@ class QdrantVectorStore(VectorStoreBase):
                         collection_name=self._collection_name,
                         points=[PointVectors(id=point_id, vector=vector_update)],
                     )
-                if delete_sparse:
-                    self._client.delete_vectors(
-                        collection_name=self._collection_name,
-                        points=[point_id],
-                        vectors=[self._sparse_name],
-                    )
             await _run_in_vdb_pool(_update)
             logger.debug(
                 f"[vector-store] update_payload: id={node_id} updates={list(updates.keys())} "
@@ -986,8 +1000,6 @@ class QdrantVectorStore(VectorStoreBase):
         if not updates_by_id:
             return []
         from qdrant_client.models import (
-            DeleteVectors,
-            DeleteVectorsOperation,
             PointVectors,
             SetPayload,
             SetPayloadOperation,
@@ -1045,7 +1057,6 @@ class QdrantVectorStore(VectorStoreBase):
                 named_vectors[""] = new_embedding
             elif new_embedding is not None:
                 vector_update = new_embedding
-            delete_sparse = False
             if lexical_changed and self._bm25_schema_ready:
                 from ..pipelines._retrieval import bm25_fastembed
                 encoded = bm25_fastembed.encode_doc(updates["search_text"])
@@ -1063,11 +1074,7 @@ class QdrantVectorStore(VectorStoreBase):
                 operations.append(UpdateVectorsOperation(update_vectors=UpdateVectors(
                     points=[PointVectors(id=point_id, vector=vector_update)],
                 )))
-            if delete_sparse:
-                operations.append(DeleteVectorsOperation(delete_vectors=DeleteVectors(
-                    points=[point_id], vector=[self._sparse_name],
-                )))
-            if updates or vector_update or delete_sparse:
+            if updates or vector_update:
                 accepted_ids.append(node_id)
 
         if not operations:
@@ -2015,9 +2022,10 @@ class QdrantVectorStore(VectorStoreBase):
                 self._warned_no_fulltext = True
                 logger.warning(
                     f"[qdrant] keyword_search degraded to empty: collection "
-                    f"{self._collection_name} has no sparse 'bm25' vector (or fastembed "
-                    f"missing). Recreate collection (auto-adds sparse) + re-upsert to "
-                    f"enable real BM25. pip install fastembed"
+                    f"{self._collection_name} is not BM25-ready (schema, coverage, "
+                    f"or FastEmbed unavailable). Inspect with "
+                    f"plan_qdrant_bm25_upgrade(); run upgrade_qdrant_bm25() only "
+                    f"during a stopped-writer maintenance window."
                 )
             return []
 
