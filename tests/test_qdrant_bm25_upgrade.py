@@ -243,6 +243,39 @@ async def test_dense_only_collection_reports_an_upgrade_plan():
 
 
 @pytest.mark.asyncio
+async def test_inconsistent_indexed_empty_states_are_not_counted_ready():
+    client = _FakeQdrant(sparse_modifier="idf")
+    client.records[0].vector = {
+        "": [1.0, 0.0],
+        "bm25": SimpleNamespace(indices=[1], values=[1.0]),
+    }
+    client.records[0].payload[QdrantVectorStore._BM25_STATE_FIELD] = (
+        QdrantVectorStore._BM25_STATE_EMPTY
+    )
+    client.records.append(
+        SimpleNamespace(
+            id=str(uuid4()),
+            payload={
+                "layer": MemoryLayer.L2_FACT.value,
+                "content": "indexed without a sparse vector",
+                QdrantVectorStore._BM25_STATE_FIELD: (
+                    QdrantVectorStore._BM25_STATE_INDEXED
+                ),
+            },
+            vector=[0.5, 0.5],
+        )
+    )
+
+    plan = await _store(client).plan_bm25_upgrade()
+
+    assert plan["state"] == "upgrade_required"
+    assert plan["eligible_points"] == 2
+    assert plan["sparse_points"] == 0
+    assert plan["empty_points"] == 0
+    assert plan["missing_points"] == 2
+
+
+@pytest.mark.asyncio
 async def test_plan_does_not_load_or_download_the_bm25_model(monkeypatch):
     def unexpected_load():
         raise AssertionError("read-only plan must not load the model")
@@ -421,7 +454,8 @@ async def test_zero_token_document_gets_empty_payload_state(monkeypatch):
 
     assert result["success"] is True
     assert result["reason"] == "ready"
-    assert result["skipped_unencodable"] == 1
+    assert result["skipped_unencodable"] == 0
+    assert result["zero_token_points"] == 1
     assert result["empty_points"] == 1
     assert store._supports_fulltext is True
     assert client.records[0].vector == [1.0, 0.0]
@@ -500,7 +534,7 @@ async def test_empty_text_gets_empty_payload_state_and_reports_skip():
 
 
 @pytest.mark.asyncio
-async def test_unencodable_point_is_marked_and_does_not_block_later_batches(
+async def test_zero_token_point_is_marked_and_does_not_block_later_batches(
     monkeypatch,
 ):
     client = _FakeQdrant()
@@ -537,7 +571,8 @@ async def test_unencodable_point_is_marked_and_does_not_block_later_batches(
     assert result["success"] is True
     assert result["reason"] == "ready"
     assert result["processed_points"] == 2
-    assert result["skipped_unencodable"] == 1
+    assert result["skipped_unencodable"] == 0
+    assert result["zero_token_points"] == 1
     assert (
         client.records[0].payload[QdrantVectorStore._BM25_STATE_FIELD]
         == QdrantVectorStore._BM25_STATE_EMPTY

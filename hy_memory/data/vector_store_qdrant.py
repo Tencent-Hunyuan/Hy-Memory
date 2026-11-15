@@ -689,7 +689,6 @@ class QdrantVectorStore(VectorStoreBase):
                     for record, item in zip(eligible_records, encoded)
                     if item is not None
                 ]
-                skipped_unencodable += len(encoded) - len(encodable)
                 zero_token_points += len(encoded) - len(encodable)
                 encoded_count += len(encodable)
 
@@ -863,7 +862,8 @@ class QdrantVectorStore(VectorStoreBase):
 
         - sparse schema 未就绪：返回纯 dense list（兼容旧 dense-only collection）
         - sparse schema 已就绪：返回 {"": dense, "bm25": SparseVector(...)}，sparse 由
-          FastEmbed BM25 对 search_text 编码；空/零 token 文本写原生空 sparse。
+          FastEmbed BM25 对 search_text 编码；空/零 token 文本只写 SDK 私有
+          payload coverage 状态，不构造 sparse。
 
         跳过 L1_RAW：原始对话层不被任何召回路径消费（reader 召回 L0/L2/L3/L4，
         提取后又降 SHADOW，System2 也只取 L2/L4），给它编 sparse 纯浪费写入/存储。
