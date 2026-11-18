@@ -138,7 +138,6 @@ from one_memory.hy_sdk_types import (
     library_keyword_hits,
     parse_sdk_lane_search,
     parse_sdk_raw_search,
-    parse_sdk_search,
     raw_turn_messages,
 )
 from one_memory.imports.access import (
@@ -7455,11 +7454,12 @@ async def _search_sdk_memories(
             **overrides,
         },
     )
+    hits = parse_sdk_lane_search(raw, error_code="hy_memory_search_shape_unknown")
     if options is None or not overrides:
-        return parse_sdk_search(raw, error_code="hy_memory_search_shape_unknown")
+        return hits
     return tuple(
         hit
-        for hit in parse_sdk_lane_search(raw, error_code="hy_memory_search_shape_unknown")
+        for hit in hits
         if options.passes_floor(cast(SearchLane, hit.lane), hit.score)
     )
 
