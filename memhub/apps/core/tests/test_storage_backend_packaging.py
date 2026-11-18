@@ -87,11 +87,17 @@ def test_every_selectable_backend_has_its_driver_collected_and_pinned() -> None:
             assert pins.get(distribution), f"{provider}: {distribution} is not pinned exactly"
 
 
-def test_qdrant_ships_its_lock_dependency_and_not_its_model_downloader() -> None:
+def test_qdrant_ships_fastembed_and_its_parallel_imports() -> None:
     # qdrant-client imports portalocker for its local storage at import time.
     assert "portalocker" in _collected()
-    # fastembed would download a BM25 model at runtime; the SDK runs without it.
-    assert "fastembed" not in _pinned() and "fastembed" not in _collected()
+    pins = _pinned()
+    collected = set(_collected())
+    assert pins["fastembed"] == "0.9.0"
+    assert {"fastembed", "tqdm"} <= collected
+    spec = SPEC.read_text(encoding="utf-8")
+    assert "'tqdm.contrib'" in spec
+    assert "'tqdm.contrib.concurrent'" in spec
+    assert "src/one_memory/fastembed_cache" in spec
 
 
 def test_a_refused_backend_is_neither_pinned_nor_shipped() -> None:
@@ -101,7 +107,7 @@ def test_a_refused_backend_is_neither_pinned_nor_shipped() -> None:
 
 
 def test_the_sdk_postgres_business_store_driver_is_not_shipped() -> None:
-    # hy-memory 2.0.16 adds `hy-memory[postgres]` (psycopg) for an optional
+    # hy-memory 2.0.17 keeps `hy-memory[postgres]` (psycopg) as an optional
     # PostgreSQL Coding/Working store. MemHub keeps that store in SQLite, so
     # the driver is neither pinned, locked, collected nor frozen in.
     pins = _pinned()
@@ -143,6 +149,34 @@ def test_a_frozen_core_reports_every_shipped_driver() -> None:
     for provider in _shipped_providers():
         assert available[provider] is True, provider
     assert available["faiss"] is False
+
+
+@pytest.mark.skipif(
+    not os.environ.get("ONE_MEMORY_FROZEN_CORE"),
+    reason="set ONE_MEMORY_FROZEN_CORE to a built one-memory binary",
+)
+def test_a_frozen_core_loads_bm25_assets_offline() -> None:
+    binary = Path(os.environ["ONE_MEMORY_FROZEN_CORE"])
+    environment = {
+        **os.environ,
+        "HF_HUB_OFFLINE": "1",
+        "HF_HUB_DISABLE_TELEMETRY": "1",
+    }
+    completed = subprocess.run(
+        [str(binary), "--bm25-assets-check"],
+        capture_output=True,
+        text=True,
+        timeout=120,
+        check=True,
+        env=environment,
+    )
+    document = json.loads(completed.stdout.strip().splitlines()[-1])
+    assert document == {
+        "offline": True,
+        "product": "memhub-bm25-assets",
+        "schema_version": 1,
+        "state": "ready",
+    }
 
 
 @pytest.mark.skipif(

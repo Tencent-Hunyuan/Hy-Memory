@@ -17,6 +17,8 @@
 | `test_backup_includes_memories.py` | `integration` | A backup holds the memories: back up, wipe, restore, and everything is back. |
 | `test_backup_restore_api.py` | `integration` | 覆盖 restore endpoint refuses when runtime owns the core、restore endpoint restores a managed backup、restore endpoint rejects a source outside home 场景。 |
 | `test_baseline_probe.py` | `contract` | A0-04: the baseline probe itself must be trustworthy. |
+| `test_bm25_assets.py` | `contract` | 覆盖 a frozen core resolves the bundled cache、configure forces the bundled cache offline、missing or changed assets fail closed 等 4 个场景。 |
+| `test_bm25_maintenance.py` | `contract` | 覆盖 a qdrant home delegates to the public sdk contract、plan and upgrade forward stable options、upgrade refuses a runtime that is not stopped 等 4 个场景。 |
 | `test_bug01_workbuddy_root.py` | `contract` | 3925a kernel item 2 (BUG-01, backend half): WorkBuddy import root. |
 | `test_bug03_identity_key.py` | `contract` | BUG-03: the hook lane and the file scan must share one identity for one message. |
 | `test_bug04_thinking_strip.py` | `contract` | BUG-04: Cursor thinking text must not be stored as the assistant's answer. |
@@ -337,4 +339,4 @@
 | `test_workspace_recall.py` | `contract` | Workspace memories were unreachable from every host; these pin the way in. |
 | `test_write_queue_lease_renewal.py` | `contract` | Rule 8: a lease must outlive the work it covers, and be renewed while it runs. |
 
-共 332 个测试文件。
+共 334 个测试文件。

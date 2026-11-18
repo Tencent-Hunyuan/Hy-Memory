@@ -31,6 +31,7 @@ apps/core/data/
 # Built-in embedding weights: fetched at build time, verified by checksum.
 # See scripts/fetch_embedding_model.py and OPEN-ITEMS A-32.
 apps/core/src/one_memory/embedding_assets/
+apps/core/src/one_memory/fastembed_cache/
 
 # 生成的发行目录（打包产出，不入库
 dist-runtime/
