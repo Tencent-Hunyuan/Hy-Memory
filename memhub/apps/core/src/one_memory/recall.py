@@ -255,6 +255,7 @@ class SdkRecallTarget:
             # resolving returned IDs, but honor the caller's remaining budget.
             ledger_wait_budget(max(0.0, deadline - time.monotonic())),
         )
+        semantic_hits = _reserve_schema_slot(semantic_hits, request.limit)
         hits: list[RecallHit] = []
         used = 0
         truncated_by: TruncationBudget | None = (
@@ -319,6 +320,21 @@ class SdkRecallTarget:
             truncated_by=truncated_by,
             unexamined_count=unexamined,
         )
+
+
+def _reserve_schema_slot(
+    hits: tuple[SemanticMemoryHit, ...],
+    limit: int,
+) -> tuple[SemanticMemoryHit, ...]:
+    """Keep the best SDK schema candidate within the host's result budget."""
+    if limit < 2 or len(hits) < 2 or hits[0].lane == "schema":
+        return hits
+    # The SDK ranks schemas by reciprocal rank fusion. Those scores are not
+    # comparable to fact relevance, so keep one slot after the leading hit.
+    for index, hit in enumerate(hits[1:], start=1):
+        if hit.lane == "schema":
+            return (hits[0], hit, *hits[1:index], *hits[index + 1 :])
+    return hits
 
 
 class GovernedRecallTarget:

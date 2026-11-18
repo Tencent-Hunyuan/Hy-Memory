@@ -24,7 +24,7 @@ import pytest
 from httpx import ASGITransport, AsyncClient
 from pydantic import SecretStr
 
-from one_memory.api import create_app
+from one_memory.api import _sdk_recall_target, create_app
 from one_memory.config import Settings
 from one_memory.imports.sources.registry import build_source_catalog
 from one_memory.secrets import InMemorySecretStore
@@ -560,6 +560,45 @@ def test_raw_only_lane_failure_is_unavailable_not_an_empty_partial(tmp_path, mon
         assert response.status_code == 200, response.text
         assert response.json()["state"] == "unavailable"
         assert response.json()["items"] == []
+
+    run_with_sdk(tmp_path, monkeypatch, scenario)
+
+
+@pytest.mark.fresh_sdk
+def test_recall_reserves_one_slot_for_a_ranked_schema(tmp_path, monkeypatch) -> None:
+    async def scenario(app, sdk, client):
+        def search(_query, **_kwargs):
+            return {
+                "scene": "normal",
+                "memories": {
+                    "normal": [
+                        {"memory_id": "first-fact", "score": 0.8},
+                        {"memory_id": "second-fact", "score": 0.7},
+                        {"memory_id": "third-fact", "score": 0.6},
+                    ],
+                    "schema": [
+                        {"memory_id": "best-schema", "score": 0.0164},
+                        {"memory_id": "other-schema", "score": 0.0161},
+                    ],
+                    "proactive": [],
+                },
+            }
+
+        def look_up(memory_id):
+            layer = "l6_schema" if memory_id.endswith("-schema") else "l2_fact"
+            return _chat("local", memory_id, f"Memory {memory_id}", layer, "codex")
+
+        monkeypatch.setattr(sdk, "search", search)
+        monkeypatch.setattr(sdk, "get", look_up)
+        app.state.recall_target = _sdk_recall_target(app, "local")
+        for limit, expected in (
+            (1, ["first-fact"]),
+            (2, ["first-fact", "best-schema"]),
+            (3, ["first-fact", "best-schema", "second-fact"]),
+        ):
+            response = await client.post("/api/v1/recall", json={"query": "tea", "limit": limit})
+            assert response.status_code == 200, response.text
+            assert [hit["memory_id"] for hit in response.json()["hits"]] == expected
 
     run_with_sdk(tmp_path, monkeypatch, scenario)
 
