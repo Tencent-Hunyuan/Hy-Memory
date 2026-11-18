@@ -1,6 +1,8 @@
 """Local Qdrant must keep its SQLite connection on one owner thread."""
 
 import asyncio
+import threading
+import time
 
 import pytest
 
@@ -11,6 +13,7 @@ from qdrant_client.local.persistence import CollectionPersistence  # noqa: E402
 
 from hy_memory.config import MemoryConfig, VectorStoreConfig  # noqa: E402
 from hy_memory.data.vector_store import create_vector_store  # noqa: E402
+from hy_memory.data.vector_store_qdrant import _LocalQdrantOwner  # noqa: E402
 from hy_memory.models.memory import MemoryLayer, MemoryNode  # noqa: E402
 
 
@@ -81,3 +84,84 @@ async def test_fresh_local_collection_serializes_concurrent_writes_and_close(
         assert ids == [f"test-node-{index}" for index in range(8)]
     finally:
         await store.close()
+
+
+class _SlowCloseClient:
+    """QdrantClient stand-in whose close() takes a measurable amount of time."""
+
+    def __init__(self, close_seconds: float) -> None:
+        self._close_seconds = close_seconds
+        self.closed = False
+        self.close_calls = 0
+
+    def close(self) -> None:
+        self.close_calls += 1
+        time.sleep(self._close_seconds)
+        self.closed = True
+
+
+def test_local_owner_close_is_a_barrier_for_concurrent_callers():
+    # Regression for #454: a close() that arrives while another close is still
+    # running must wait for it instead of returning while the client (and its
+    # SQLite storage lock) is still open.
+    client = _SlowCloseClient(close_seconds=0.3)
+    owner = _LocalQdrantOwner(lambda: client)
+
+    second_elapsed: dict = {}
+
+    def second_close() -> None:
+        time.sleep(0.05)  # let the first close enter its in-flight window
+        started = time.monotonic()
+        owner.close()
+        second_elapsed["duration"] = time.monotonic() - started
+
+    thread = threading.Thread(target=second_close)
+    thread.start()
+    owner.close()  # first close: blocks for the full close duration
+    thread.join()
+
+    assert client.closed, "owner close did not actually close the client"
+    assert second_elapsed["duration"] >= 0.15, (
+        "second close returned while the first close was still running "
+        f"({second_elapsed['duration']:.3f}s)"
+    )
+
+
+@pytest.mark.asyncio
+async def test_store_close_waits_for_in_flight_local_client_release(
+    tmp_path,
+    monkeypatch,
+):
+    # Regression for #454: the second of two concurrent store.close() calls used
+    # to see _client=None and return before the first close released the local
+    # storage lock, so an immediate reopen failed with
+    # "Storage folder ... is already accessed by another instance".
+    store = create_vector_store(_config(tmp_path))
+    await store.initialize()
+
+    real_close = QdrantClient.close
+
+    def slow_close(self, *args, **kwargs):
+        time.sleep(0.3)
+        return real_close(self, *args, **kwargs)
+
+    monkeypatch.setattr(QdrantClient, "close", slow_close)
+    try:
+        first = asyncio.create_task(store.close())
+        await asyncio.sleep(0.05)
+
+        started = time.monotonic()
+        await store.close()
+        elapsed = time.monotonic() - started
+        assert elapsed >= 0.15, (
+            f"second close returned before the first close finished ({elapsed:.3f}s)"
+        )
+
+        await first
+    finally:
+        monkeypatch.undo()
+        await store.close()
+
+    # Once any close() has returned, the storage directory must be openable.
+    reopened = QdrantClient(path=str(tmp_path))
+    reopened.close()
