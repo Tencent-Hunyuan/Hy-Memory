@@ -131,6 +131,9 @@ class _LocalQdrantOwner:
         # 而不是看到 _closed 就立即返回（否则本地 Qdrant 的存储目录锁还未释放）。
         with self._lifecycle_lock:
             if self._close_future is None:
+                if self._closed:
+                    # 工厂构造失败的实例：executor 已关闭，无可关闭资源，静默返回。
+                    return
                 self._closed = True
                 self._close_future = self._executor.submit(close_owned_client)
         future = self._close_future

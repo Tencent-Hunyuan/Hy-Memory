@@ -3,6 +3,7 @@
 import asyncio
 import threading
 import time
+from typing import Optional
 
 import pytest
 
@@ -127,6 +128,16 @@ def test_local_owner_close_is_a_barrier_for_concurrent_callers():
     )
 
 
+def test_local_owner_close_is_safe_after_failed_factory():
+    # 工厂构造失败：__init__ 已置 _closed 并关闭 executor，close() 必须静默返回
+    # 而不是向已关闭的 executor 再提交任务。
+    def broken_factory():
+        raise RuntimeError("qdrant storage is not writable")
+
+    with pytest.raises(RuntimeError, match="not writable"):
+        _LocalQdrantOwner(broken_factory)
+
+
 @pytest.mark.asyncio
 async def test_store_close_waits_for_in_flight_local_client_release(
     tmp_path,
@@ -146,6 +157,7 @@ async def test_store_close_waits_for_in_flight_local_client_release(
         return real_close(self, *args, **kwargs)
 
     monkeypatch.setattr(QdrantClient, "close", slow_close)
+    first: Optional[asyncio.Task] = None
     try:
         first = asyncio.create_task(store.close())
         await asyncio.sleep(0.05)
@@ -160,6 +172,11 @@ async def test_store_close_waits_for_in_flight_local_client_release(
         await first
     finally:
         monkeypatch.undo()
+        if first is not None:
+            try:
+                await first
+            except Exception:  # noqa: BLE001 - 清理阶段不掩盖断言失败
+                pass
         await store.close()
 
     # Once any close() has returned, the storage directory must be openable.
