@@ -202,6 +202,7 @@ mode. `works` / `skipped` (nothing to do there, nothing touched) / `refused`
 | Backup create (memories included, `backup-v2.md`) | works | works (local files; the server graph is derived) | works (local files + SDK export with vectors) |
 | Restore of a backup's memories | works | works; the graph is rebuilt | works (SDK import with ids and vectors); **refused** with Coding/Working experiences or retrieval clauses on Qdrant (`backup-v2.md` §5) |
 | Upgrade migrations (`sdk-migrate`, `sdk-migration-status`) | work | **skipped** `upgrade_migration_skipped_custom_backend` | **skipped** |
+| Qdrant BM25 maintenance (`one-memory bm25-maintenance`) | not applicable | not applicable unless vectors use Qdrant | explicit plan/upgrade; Runtime and every writer must be stopped |
 
 Notes:
 
@@ -262,6 +263,10 @@ memhub settings backends set [--graph <kuzu|neo4j|memgraph>] [--graph-url <bolt-
         [--adopt-existing-graph] [--yes] [--json]
 memhub settings backends test [same options as set] [--json]
 memhub settings backends reset [--yes] [--json]
+
+# Run through the installed Core during a maintenance window:
+one-memory bm25-maintenance plan [--batch-size <n>] [--json]
+one-memory bm25-maintenance upgrade --yes [--batch-size <n>] [--json]
 ```
 
 Secrets are read from files (`--graph-password-file`, `--vector-api-key-file`;
@@ -279,15 +284,17 @@ the codes above.
 
 ## 8. Packaging
 
-The frozen Core collects `neo4j`, `qdrant_client` and `portalocker`
+The frozen Core collects `neo4j`, `qdrant_client`, `portalocker`, `fastembed`
+and `tqdm` (including `tqdm.contrib.concurrent`)
 (qdrant-client's lock dependency) beside `kuzu` and `chromadb`. With what they
 pull in (`pytz`, `h2`, `aiohttp` and its small deps) that is about 9 MB on
 disk. The spec no longer ships the SDK's `.py` source copies next to its
 frozen modules (4.8 MB that were never imported), so the folder Core grows by
-6.1 MB on macOS arm64 (`one-memory-runtime` 350.8 MB → 356.9 MB). qdrant's
-optional `fastembed` is not shipped: it downloads its BM25 model at runtime,
-and without it the SDK's Qdrant store degrades keyword search to pure vector
-search (the same as Chroma, whose keyword channel is empty). `faiss-cpu`
+6.1 MB on macOS arm64 (`one-memory-runtime` 350.8 MB → 356.9 MB), before the
+BM25 dependency delta. Release builds fetch and hash-check the pinned
+`Qdrant/bm25` snapshot into `one_memory/fastembed_cache`; frozen Core sets
+`FASTEMBED_CACHE_PATH` and `HF_HUB_OFFLINE=1`, so first launch never downloads
+model files. `faiss-cpu`
 (~18 MB) is not shipped either, since MemHub refuses FAISS (above), and the
 spec excludes it by name. `test_storage_backend_packaging` keeps the spec,
 `pyproject.toml` and the offered providers in step. The hidden

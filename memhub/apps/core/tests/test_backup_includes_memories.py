@@ -753,7 +753,7 @@ def test_the_manifest_records_backend_space_sdk_users_and_counts(local) -> None:
         "graph": "kuzu",
         "vector_prefix": None,
     }
-    assert manifest["sdk_version"] == "2.0.16"
+    assert manifest["sdk_version"] == "2.0.17"
     assert manifest["embedding_space"]["state"] == "live"
     assert manifest["embedding_space"]["collection_base"].startswith("memhub_")
     assert manifest["users"] == ["local", "alice"]

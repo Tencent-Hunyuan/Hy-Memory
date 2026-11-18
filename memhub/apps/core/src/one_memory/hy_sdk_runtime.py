@@ -26,6 +26,7 @@ from hy_memory import (
     SharedRuntime,
 )
 
+from one_memory.bm25_assets import configure_bm25_cache
 from one_memory.embedding_assets import (
     BUILTIN_EMBEDDING_DIMENSIONS,
     BUILTIN_EMBEDDING_MODEL,
@@ -61,6 +62,10 @@ from one_memory.model_profiles import (
     output_token_field,
 )
 from one_memory.storage_backends import ResolvedStorage, storage_kwargs
+
+# A frozen Runtime ships this cache. Configure it before any client can ask
+# the SDK's lazy FastEmbed singleton to load.
+configure_bm25_cache()
 
 _RUNTIME_LOCK = threading.RLock()
 BUILTIN_RETRIEVAL_PROFILE_ID = "builtin-retrieval"

@@ -4,6 +4,25 @@ Hy Memory and MemHub are versioned and released independently.
 
 ## Unreleased
 
+## MemHub 1.0.8 — 2026-11-18
+
+Build 49, on [`hy-memory==2.0.17`](https://pypi.org/project/hy-memory/2.0.17/).
+Linux x64/arm64 Runtime and macOS arm64 App and Runtime.
+
+- Pins Core to `hy-memory==2.0.17` and `fastembed==0.9.0` (same `Qdrant/bm25`
+  snapshot as 0.9.1, without the Python 3.14+ onnxruntime floor that fights
+  Core's frozen `onnxruntime==1.23.2`). Core requires Python `>=3.12,<3.14`.
+- Frozen Core ships the verified offline `Qdrant/bm25` FastEmbed cache and
+  sets `FASTEMBED_CACHE_PATH` / `HF_HUB_OFFLINE=1`, so first launch never
+  downloads BM25 assets. Release fetch verifies the pinned snapshot; hidden
+  `--bm25-assets-check` confirms the frozen binary can encode offline.
+- Adds explicit stopped-writer maintenance:
+  `one-memory bm25-maintenance <plan|upgrade> [--batch-size <n>] [--yes] [--json]`.
+  Plan and upgrade both refuse a running Runtime; upgrade also requires
+  `--yes`. Both call the SDK `plan_qdrant_bm25_upgrade` /
+  `upgrade_qdrant_bm25` APIs. Normal startup still does not migrate
+  automatically. Release builds run `--bm25-assets-check` after PyInstaller.
+
 ## Hy Memory 2.0.17 — 2026-11-14
 
 - Qdrant BM25 maintenance is explicit and safe for existing collections.
@@ -20,9 +39,9 @@ Hy Memory and MemHub are versioned and released independently.
   FastEmbed's `Qdrant/bm25` model. Startup keeps the keyword channel disabled
   when the BM25 schema or point coverage is incomplete instead of treating a
   partially migrated collection as ready.
-- This is an SDK-only maintenance API. Normal startup and MemHub Runtime/CLI
-  do not run it automatically; product packaging and maintenance entry points
-  remain separate follow-up work.
+- Published to PyPI as [`hy-memory==2.0.17`](https://pypi.org/project/hy-memory/2.0.17/).
+  MemHub 1.0.8 consumes the package and adds the product maintenance entry
+  points; normal SDK startup still does not migrate automatically.
 
 ## MemHub 1.0.7 — 2026-11-12
 

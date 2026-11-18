@@ -277,7 +277,12 @@ async def test_a_committed_switch_rebuilds_reads_without_closing_one_in_flight(
 
     finish.set()
     assert await in_flight == old
-    for _ in range(5):
+    # SdkClientHandle.close() releases the lease on a worker thread. Under a
+    # busy CI pool, a few sleep(0) turns are not enough to observe the close.
+    deadline = asyncio.get_running_loop().time() + 1.0
+    while recorder.closed != [old]:
+        if asyncio.get_running_loop().time() >= deadline:
+            break
         await asyncio.sleep(0)
     assert recorder.closed == [old]
     await handle.close()

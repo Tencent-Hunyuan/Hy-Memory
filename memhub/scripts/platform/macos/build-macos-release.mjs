@@ -156,6 +156,14 @@ export async function buildMacosRelease(options) {
     20 * 60_000,
   );
   run(
+    "bm25-assets-check",
+    path.join("apps", "core", "dist", "one-memory-runtime", "one-memory"),
+    ["--bm25-assets-check"],
+    environment,
+    evidence,
+    2 * 60_000,
+  );
+  run(
     "runtime-distribution",
     process.execPath,
     [

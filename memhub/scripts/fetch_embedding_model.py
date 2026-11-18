@@ -10,6 +10,7 @@ stay out of a repository that is about to go public.
 from __future__ import annotations
 
 import argparse
+import shutil
 import sys
 import urllib.request
 from pathlib import Path
@@ -23,6 +24,12 @@ from one_memory.embedding_assets import (  # noqa: E402
     digest_of,
     resolve_asset_dir,
     verify_assets,
+)
+from one_memory.bm25_assets import (  # noqa: E402
+    BM25_MODEL,
+    Bm25AssetError,
+    resolve_cache_dir as resolve_bm25_cache_dir,
+    verify_bm25_assets,
 )
 
 
@@ -54,9 +61,30 @@ def fetch(target: Path, *, force: bool) -> int:
     return 0
 
 
+def fetch_bm25(target: Path, *, force: bool) -> int:
+    if force:
+        shutil.rmtree(target, ignore_errors=True)
+    try:
+        from fastembed import SparseTextEmbedding
+
+        model = SparseTextEmbedding(BM25_MODEL, cache_dir=str(target))
+        # Construction downloads the snapshot; one encode proves its tokenizer
+        # and language assets are usable before they are frozen.
+        if not list(model.embed(["MemHub offline BM25 release check"])):
+            raise Bm25AssetError("bm25_embedding_empty")
+        verify_bm25_assets(target)
+    except (Bm25AssetError, ImportError, RuntimeError, ValueError) as error:
+        print(f"BM25 verification failed: {error}", file=sys.stderr)
+        shutil.rmtree(target, ignore_errors=True)
+        return 1
+    print(f"verified {BM25_MODEL} offline cache in {target}")
+    return 0
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--target", type=Path, default=None)
+    parser.add_argument("--bm25-target", type=Path, default=None)
     parser.add_argument("--force", action="store_true")
     parser.add_argument(
         "--verify-only",
@@ -66,15 +94,21 @@ def main() -> int:
     args = parser.parse_args()
 
     target = args.target or resolve_asset_dir()
+    bm25_target = args.bm25_target or resolve_bm25_cache_dir()
     if args.verify_only:
         try:
             verify_assets(target)
-        except AssetVerificationError as error:
+            verify_bm25_assets(bm25_target)
+        except (AssetVerificationError, Bm25AssetError) as error:
             print(f"verification failed: {error}", file=sys.stderr)
             return 1
         print(f"verified {len(EMBEDDING_ASSETS)} files in {target}")
+        print(f"verified {BM25_MODEL} cache in {bm25_target}")
         return 0
-    return fetch(target, force=args.force)
+    result = fetch(target, force=args.force)
+    if result != 0:
+        return result
+    return fetch_bm25(bm25_target, force=args.force)
 
 
 if __name__ == "__main__":

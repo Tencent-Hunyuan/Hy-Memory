@@ -110,6 +110,32 @@ def main() -> None:
 
         print(json.dumps(driver_availability(import_them=True), sort_keys=True), flush=True)
         raise SystemExit(0)
+    if sys.argv[1:] == ["--bm25-assets-check"]:
+        # Hidden release gate: prove the frozen FastEmbed modules and offline
+        # Qdrant/bm25 snapshot can produce a real sparse vector.
+        from fastembed import SparseTextEmbedding
+
+        from one_memory.bm25_assets import BM25_MODEL, configure_bm25_cache
+
+        cache = configure_bm25_cache()
+        if cache is None:
+            raise SystemExit("bm25_assets_missing")
+        embedded = list(SparseTextEmbedding(BM25_MODEL).embed(["MemHub BM25"]))
+        if not embedded or len(embedded[0].indices) == 0:
+            raise SystemExit("bm25_assets_unusable")
+        print(
+            json.dumps(
+                {
+                    "schema_version": 1,
+                    "product": "memhub-bm25-assets",
+                    "state": "ready",
+                    "offline": os.environ.get("HF_HUB_OFFLINE") == "1",
+                },
+                sort_keys=True,
+            ),
+            flush=True,
+        )
+        raise SystemExit(0)
     if sys.argv[1:2] == ["capture"] and __name__ != "__main__":
         _end_by(os.environ.get("ONE_MEMORY_CAPTURE_DEADLINE_S"))
 
@@ -131,6 +157,8 @@ def run(arguments: Sequence[str], *, output: TextIO | None = None) -> int:
         return sdk_migrate(options, stream)
     if command == "sdk-migration-status":
         return sdk_migration_status(options, stream)
+    if command == "bm25-maintenance":
+        return bm25_maintenance(options, stream)
     if command == "capture" and len(options) == 1:
         from one_memory.capture_handoff import capture_stdio
 
@@ -141,6 +169,7 @@ def run(arguments: Sequence[str], *, output: TextIO | None = None) -> int:
             "|restore --source <managed-backup> --yes [--json]"
             "|sdk-migrate --runtime-build <build> --yes [--json]"
             "|sdk-migration-status [--json]"
+            "|bm25-maintenance <plan|upgrade> [--batch-size <n>] [--yes] [--json]"
             "|capture SOURCE]\n"
         )
         return 2
@@ -151,6 +180,75 @@ def run(arguments: Sequence[str], *, output: TextIO | None = None) -> int:
     else:
         stream.write(f"{_status_text(command, status)}\n")
     return 0 if status.state == "running" else 3 if status.state == "stopped" else 1
+
+
+def bm25_maintenance(options: Sequence[str], stream: TextIO) -> int:
+    """Plan or explicitly run the stopped-writer Qdrant BM25 upgrade."""
+    if not options or options[0] not in {"plan", "upgrade"}:
+        stream.write("one-memory: bm25-maintenance 需要 plan 或 upgrade\n")
+        return 2
+    operation, *flags = options
+    as_json = False
+    confirmed = False
+    batch_size = 256
+    index = 0
+    while index < len(flags):
+        flag = flags[index]
+        if flag == "--json":
+            as_json = True
+        elif flag == "--yes":
+            confirmed = True
+        elif flag == "--batch-size" and index + 1 < len(flags):
+            index += 1
+            try:
+                batch_size = int(flags[index])
+            except ValueError:
+                stream.write("one-memory: --batch-size 必须是整数\n")
+                return 2
+        else:
+            stream.write(f"one-memory: 参数无效：{flag}\n")
+            return 2
+        index += 1
+    if operation == "plan" and confirmed:
+        stream.write("one-memory: plan 不接受 --yes\n")
+        return 2
+    if operation == "upgrade" and not confirmed:
+        stream.write(
+            "one-memory: upgrade 会修改 Qdrant；停止所有 Runtime/写入者后传 --yes\n"
+        )
+        return 2
+
+    from one_memory.bm25_maintenance import Bm25MaintenanceError, maintain_bm25
+
+    try:
+        document = maintain_bm25(
+            load_settings().data_dir,
+            execute=operation == "upgrade",
+            batch_size=batch_size,
+        )
+    except Bm25MaintenanceError as error:
+        document = {
+            "schema_version": 1,
+            "product": "memhub-qdrant-bm25-maintenance",
+            "state": "blocked",
+            "reason": error.code,
+            "success": False,
+            "changed": False,
+        }
+    if as_json:
+        stream.write(f"{json.dumps(document, sort_keys=True)}\n")
+    else:
+        state = document.get("state", "unknown")
+        reason = document.get("reason")
+        suffix = f" ({reason})" if reason else ""
+        stream.write(f"BM25 {operation}: {state}{suffix}\n")
+    if document.get("state") == "blocked":
+        return 4
+    if operation == "plan" and document.get("state") == "upgrade_required":
+        return 3
+    if operation == "upgrade" and not document.get("success"):
+        return 1
+    return 0
 
 
 def restore(options: Sequence[str], stream: TextIO) -> int:
