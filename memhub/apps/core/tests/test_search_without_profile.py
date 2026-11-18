@@ -1,6 +1,7 @@
 """Model-free SDK search remains available without an active write profile."""
 
 import asyncio
+import time
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -277,8 +278,13 @@ async def test_a_committed_switch_rebuilds_reads_without_closing_one_in_flight(
 
     finish.set()
     assert await in_flight == old
-    for _ in range(5):
-        await asyncio.sleep(0)
+    # The handle retires the old client through its own scheduled bookkeeping
+    # once the last borrow is released; how many loop ticks that takes depends
+    # on runner load. Counting 5 ticks flaked on ubuntu CI (see #459), so poll
+    # with a deadline instead of counting ticks.
+    deadline = time.monotonic() + 5.0
+    while recorder.closed != [old] and time.monotonic() < deadline:
+        await asyncio.sleep(0.01)
     assert recorder.closed == [old]
     await handle.close()
     assert recorder.closed == [old, new]
