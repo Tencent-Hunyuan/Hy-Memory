@@ -4,11 +4,13 @@ import logging
 import os
 import sqlite3
 from contextlib import contextmanager
+from typing import Iterable, Iterator, Tuple
 
 from .relational_repository import RelationalMemoryRepository
 from .repository_schema import (
     _CREATE_TABLE_SQL, _CREATE_FACT_TABLE_SQL, _CREATE_TRACE_TABLE_SQL,
     _CREATE_INDEX_SQL, _INDEX_NAMES, _MIGRATE_COPY_SQL, _ADDED_COLUMNS,
+    _CREATE_CONSOLIDATION_SQL,
 )
 
 logger = logging.getLogger(__name__)
@@ -37,11 +39,14 @@ class SqliteMemoryRepository(RelationalMemoryRepository):
         self._conn.execute("PRAGMA journal_mode=WAL")
         self._conn.execute("PRAGMA synchronous=NORMAL")
         self._migrate_legacy_schema_sync()
-        self._conn.executescript(_CREATE_TABLE_SQL)
-        self._conn.executescript(_CREATE_FACT_TABLE_SQL)
-        self._add_missing_columns_sync()
-        for sql in _CREATE_INDEX_SQL:
-            self._conn.execute(sql)
+        with self._business_transaction():
+            # executescript implicitly commits; never use it inside migrations.
+            for script in (_CREATE_TABLE_SQL, _CREATE_FACT_TABLE_SQL):
+                self._execute_schema(script)
+            self._add_missing_columns_sync()
+            self._execute_schema(_CREATE_CONSOLIDATION_SQL)
+            for sql in _CREATE_INDEX_SQL:
+                self._conn.execute(sql)
 
     def _init_trace_sqlite_sync(self) -> None:
         os.makedirs(os.path.dirname(self._trace_db_path) or ".", exist_ok=True)
@@ -52,6 +57,37 @@ class SqliteMemoryRepository(RelationalMemoryRepository):
         self._trace_conn.execute("PRAGMA journal_mode=WAL")
         self._trace_conn.execute("PRAGMA synchronous=NORMAL")
         self._trace_conn.executescript(_CREATE_TRACE_TABLE_SQL)
+
+    def _execute_schema(self, script: str) -> None:
+        script = "\n".join(line for line in script.splitlines()
+                           if not line.lstrip().startswith("--"))
+        for statement in script.split(";"):
+            if statement.strip():
+                self._conn.execute(statement)
+
+    @contextmanager
+    def _business_transaction(self, *, write: bool = True) -> Iterator[None]:
+        from .types import ConsolidationOutcomeUnknown
+        self._conn.execute("BEGIN IMMEDIATE" if write else "BEGIN")
+        try:
+            yield
+        except BaseException:
+            self._conn.execute("ROLLBACK")
+            raise
+        try:
+            self._conn.execute("COMMIT")
+        except BaseException as error:
+            if self._conn.in_transaction:
+                self._conn.execute("ROLLBACK")
+                raise
+            raise ConsolidationOutcomeUnknown("SQLite commit acknowledgement lost") from error
+
+    def _lock_sources(self, refs: Iterable[Tuple[str, str]]) -> None:
+        # BEGIN IMMEDIATE already serializes writers, including missing source rows.
+        pass
+
+    def _lock_groups(self, groups: Iterable[str]) -> None:
+        pass
 
     def _add_missing_columns_sync(self) -> None:
         """给已存在的表补后加的列。ADD COLUMN 各版本 SQLite 都支持，无需重建。"""

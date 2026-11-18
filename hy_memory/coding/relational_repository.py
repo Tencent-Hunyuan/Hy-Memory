@@ -3,13 +3,25 @@
 import json
 import logging
 import threading
+from contextlib import contextmanager
+from dataclasses import asdict
 from datetime import datetime
-from typing import Any, Dict, List, Mapping, Optional, Set, Tuple
+from typing import Any, Dict, Iterator, List, Mapping, Optional, Set, Tuple, Union
 
 from .repository_base import MemoryRepository
-from .types import CodingMemory, WorkingFact
+from .types import (
+    CodingMemory, WorkingFact, ConsolidationScope, ConsolidationSnapshot,
+    ConsolidationReceipt, ConsolidationConflict,
+)
+from .evidence import project, reference, identity, canonical, validate_sessions
 
 logger = logging.getLogger(__name__)
+
+# Authoritative visibility, applied before pagination/counting and after ANN recall.
+_VISIBLE = """(coding_memory_meta.consolidation_id IS NULL OR EXISTS (
+    SELECT 1 FROM consolidation_receipt cr
+    WHERE cr.consolidation_id = coding_memory_meta.consolidation_id
+      AND cr.is_current = 1 AND cr.basis_valid = 1))"""
 
 def _scope_where(
     workspace_id: Optional[str], branch: Optional[str]
@@ -90,6 +102,8 @@ def _row_to_memory(row: Mapping[str, Any]) -> CodingMemory:
         memory_at=_from_epoch(row["memory_at"]),
         created_at=_parse_dt(row["created_at"]),
         updated_at=_parse_dt(row["updated_at"]),
+        consolidation_id=row["consolidation_id"],
+        evidence_refs=json.loads(row["evidence_refs"] or "[]"),
     )
 
 def _row_to_fact(row: Mapping[str, Any]) -> WorkingFact:
@@ -120,6 +134,193 @@ def _row_to_fact(row: Mapping[str, Any]) -> WorkingFact:
 
 class RelationalMemoryRepository(MemoryRepository):
     """Share query semantics while adapters own connections and schema setup."""
+
+    supports_consolidation = True
+
+    def get_experience_for_withdrawal(self, experience_id: str, user_id: Optional[str]) -> Optional[CodingMemory]:
+        with self._lock:
+            memory = self._load_material("experience", experience_id)
+            return memory if memory and (user_id is None or memory.user_id == user_id) else None
+
+    def _load_material(self, kind: str, key: str) -> Optional[Union[CodingMemory, WorkingFact]]:
+        table, column, decode = (("working_fact", "fact_id", _row_to_fact) if kind == "fact"
+                                  else ("coding_memory_meta", "experience_id", _row_to_memory))
+        row = self._execute(f"SELECT * FROM {table} WHERE {column} = ?", (key,)).fetchone()
+        return decode(row) if row else None
+
+    @contextmanager
+    def _changing_source(self, kind: str, key: str) -> Iterator[Optional[Union[CodingMemory, WorkingFact]]]:
+        """Source lock precedes dependency lookup, including edits waiting on publish."""
+        with self._business_transaction():
+            self._lock_sources([(kind, key)])
+            before = self._load_material(kind, key)
+            yield before
+            after = self._load_material(kind, key)
+            if ((project(before) if before else None) != (project(after) if after else None)):
+                dependencies = self._execute(
+                    "SELECT DISTINCT cr.group_key FROM consolidation_receipt cr "
+                    "JOIN consolidation_read_set rs ON rs.consolidation_id=cr.consolidation_id "
+                    "WHERE rs.kind=? AND rs.material_id=?", (kind, key),
+                ).fetchall()
+                self._lock_groups([r["group_key"] for r in dependencies])
+                self._execute(
+                    "UPDATE consolidation_receipt SET basis_valid=0 WHERE consolidation_id IN ("
+                    "SELECT consolidation_id FROM consolidation_read_set WHERE kind=? AND material_id=?)",
+                    (kind, key),
+                )
+
+    def _receipt(self, consolidation_id: str, user_id: str) -> Optional[ConsolidationReceipt]:
+        row = self._execute("SELECT * FROM consolidation_receipt WHERE consolidation_id=?",
+                            (consolidation_id,)).fetchone()
+        if row is None:
+            return None
+        scope = ConsolidationScope(**json.loads(row["scope_json"]))
+        if scope.user_id != user_id:
+            return None
+        read_set = []
+        for ref in self._execute(
+            "SELECT kind,material_id,session_id,fingerprint,memory_at FROM consolidation_read_set "
+            "WHERE consolidation_id=? ORDER BY kind,material_id", (consolidation_id,),
+        ).fetchall():
+            ref = dict(ref)
+            current = self._load_material(ref["kind"], ref["material_id"])
+            ref["status"] = ("missing" if current is None else "unchanged"
+                             if reference(project(current)).fingerprint == ref["fingerprint"] else "changed")
+            read_set.append(ref)
+        ids = json.loads(row["experience_ids"])
+        withdrawn = json.loads(row["withdrawn_ids"])
+        memories = [self._load_material("experience", key) for key in ids if key not in withdrawn]
+        return ConsolidationReceipt(
+            consolidation_id=row["consolidation_id"], group_key=row["group_key"],
+            basis_digest=row["basis_digest"], scope=scope,
+            session_ids=json.loads(row["session_ids"]), decision=row["decision"],
+            is_current=bool(row["is_current"]), basis_valid=bool(row["basis_valid"]),
+            activation_epoch=row["activation_epoch"], experience_ids=ids,
+            withdrawn_ids=withdrawn, read_set=read_set,
+            experiences=[m for m in memories if m is not None],
+            attempt_id=row["attempt_id"], created_at=row["created_at"],
+        )
+
+    def get_consolidation(self, consolidation_id: str, user_id: str) -> Optional[ConsolidationReceipt]:
+        with self._lock, self._business_transaction(write=False):
+            return self._receipt(consolidation_id, user_id)
+
+    def consolidation_snapshot(self, scope: ConsolidationScope, session_ids: List[str]) -> ConsolidationSnapshot:
+        sessions = validate_sessions(session_ids)
+        where = ["user_id=?", "agent_id=?", "source=?"]
+        params = [scope.user_id, scope.agent_id, scope.source]
+        for column in ("workspace_id", "branch"):
+            value = getattr(scope, column)
+            where.append(f"{column} IS NULL" if value is None else f"{column}=?")
+            if value is not None:
+                params.append(value)
+        where.append(f"session_id IN ({','.join('?' for _ in sessions)})")
+        params.extend(sessions)
+        clause = " AND ".join(where)
+        with self._lock, self._business_transaction(write=False):
+            facts = self._execute(f"SELECT * FROM working_fact WHERE {clause} "
+                                  "AND status IN ('active','superseded')", params).fetchall()
+            memories = self._execute(f"SELECT * FROM coding_memory_meta WHERE {clause} "
+                                     "AND consolidation_id IS NULL", params).fetchall()
+            materials = [project(_row_to_fact(r)) for r in facts]
+            materials.extend(project(_row_to_memory(r)) for r in memories)
+            materials.sort(key=lambda m: (m["kind"], m["material_id"]))
+            if {m["session_id"] for m in materials} != set(sessions):
+                raise ValueError("every selected session must have materials in the exact scope")
+            refs = [reference(m) for m in materials]
+            group, basis, cid = identity(scope, sessions, refs)
+            current = self._execute(
+                "SELECT consolidation_id,activation_epoch FROM consolidation_receipt "
+                "WHERE group_key=? AND is_current=1", (group,),
+            ).fetchone()
+            baseline = (current["consolidation_id"], current["activation_epoch"]) if current else None
+            existing = self._receipt(cid, scope.user_id)
+            return ConsolidationSnapshot(scope, sessions, materials, refs, group, basis, cid,
+                                         baseline, existing if existing and existing.basis_valid else None)
+
+    def publish_consolidation(
+        self, snapshot: ConsolidationSnapshot, memories: List[CodingMemory], attempt_id: str, *, reuse: bool = False,
+    ) -> ConsolidationReceipt:
+        """The sole publication protocol. No model or vector operation holds SQL locks."""
+        with self._lock, self._business_transaction():
+            self._lock_sources([(r.kind, r.material_id) for r in snapshot.read_set])
+            for ref in snapshot.read_set:
+                current = self._load_material(ref.kind, ref.material_id)
+                if current is None or reference(project(current)) != ref:
+                    raise ConsolidationConflict("frozen consolidation evidence changed")
+            self._lock_groups([snapshot.group_key])
+            row = self._execute(
+                "SELECT consolidation_id,activation_epoch FROM consolidation_receipt "
+                "WHERE group_key=? AND is_current=1", (snapshot.group_key,),
+            ).fetchone()
+            baseline = (row["consolidation_id"], row["activation_epoch"]) if row else None
+            existing = self._receipt(snapshot.consolidation_id, snapshot.scope.user_id)
+            # Same-basis simultaneous attempts return the winner's authoritative manifest.
+            if baseline != snapshot.baseline:
+                if (snapshot.baseline is None and existing and existing.is_current
+                        and existing.basis_valid and existing.activation_epoch == 1):
+                    return existing
+                if (existing and existing.is_current and existing.basis_valid
+                        and baseline[0] == snapshot.consolidation_id
+                        and snapshot.baseline is not None
+                        and baseline[1] == snapshot.baseline[1] + 1):
+                    return existing
+                raise ConsolidationConflict("consolidation activation changed")
+            if existing and existing.is_current and existing.basis_valid:
+                return existing
+            if reuse and (not existing or not existing.basis_valid):
+                raise ConsolidationConflict("historical decision requires review")
+            epoch = self._execute(
+                "SELECT MAX(activation_epoch) AS epoch FROM consolidation_receipt WHERE group_key=?",
+                (snapshot.group_key,),
+            ).fetchone()["epoch"] or 0
+            self._execute("UPDATE consolidation_receipt SET is_current=0 WHERE group_key=?",
+                          (snapshot.group_key,))
+            if reuse:
+                self._execute(
+                    "UPDATE consolidation_receipt SET is_current=1,activation_epoch=? WHERE consolidation_id=?",
+                    (epoch + 1, snapshot.consolidation_id),
+                )
+            else:
+                if existing:
+                    for key in existing.experience_ids:
+                        self._execute("DELETE FROM coding_memory_meta WHERE experience_id=?", (key,))
+                for memory in memories:
+                    self._insert_consolidated(memory, snapshot)
+                ids = [m.experience_id for m in memories]
+                self._execute(
+                    "INSERT INTO consolidation_receipt "
+                    "(consolidation_id,group_key,basis_digest,scope_json,session_ids,decision,is_current,"
+                    "basis_valid,activation_epoch,experience_ids,withdrawn_ids,attempt_id,created_at) "
+                    "VALUES (?,?,?,?,?,?,1,1,?,?,?,?,?) ON CONFLICT(consolidation_id) DO UPDATE SET "
+                    "decision=excluded.decision,is_current=1,basis_valid=1,activation_epoch=excluded.activation_epoch,"
+                    "experience_ids=excluded.experience_ids,attempt_id=excluded.attempt_id",
+                    (snapshot.consolidation_id, snapshot.group_key, snapshot.basis_digest,
+                     canonical(asdict(snapshot.scope)), canonical(snapshot.session_ids),
+                     "published" if memories else "no_result", epoch + 1, canonical(ids), "[]", attempt_id,
+                     _now_iso()),
+                )
+                self._execute("DELETE FROM consolidation_read_set WHERE consolidation_id=?",
+                              (snapshot.consolidation_id,))
+                for ref in snapshot.read_set:
+                    self._execute("INSERT INTO consolidation_read_set "
+                                  "(consolidation_id,kind,material_id,session_id,fingerprint,memory_at) "
+                                  "VALUES (?,?,?,?,?,?)", (snapshot.consolidation_id, ref.kind, ref.material_id,
+                                                          ref.session_id, ref.fingerprint, ref.memory_at))
+            return self._receipt(snapshot.consolidation_id, snapshot.scope.user_id)
+
+    def _insert_consolidated(self, memory: CodingMemory, snapshot: ConsolidationSnapshot) -> None:
+        scope = snapshot.scope
+        if (memory.consolidation_id != snapshot.consolidation_id or memory.session_id is not None
+                or memory.memory_at is not None or any(getattr(memory, key) != getattr(scope, key)
+                for key in ("user_id", "agent_id", "source", "workspace_id", "branch"))):
+            raise ValueError("invalid consolidated product scope")
+        data = memory.to_dict()
+        for key in ("search_keys", "files", "source_fact_ids", "evidence_refs"):
+            data[key] = canonical(data[key])
+        columns = list(data)
+        self._execute(f"INSERT INTO coding_memory_meta ({','.join(columns)}) "
+                      f"VALUES ({','.join('?' for _ in columns)})", [data[c] for c in columns])
 
     def __init__(self) -> None:
         self._conn = None
@@ -152,7 +353,7 @@ class RelationalMemoryRepository(MemoryRepository):
         with self._lock:
             assert self._conn is not None
             sql = (f"SELECT * FROM coding_memory_meta WHERE user_id = ? AND {scope_sql} "
-                   f"AND {source_sql} "
+                   f"AND {source_sql} AND {_VISIBLE} "
                    f"ORDER BY updated_at DESC, experience_id ASC LIMIT ? OFFSET ?")
             params: List[Any] = ([user_id] + scope_params + source_params
                                  + [limit, offset])
@@ -171,7 +372,7 @@ class RelationalMemoryRepository(MemoryRepository):
             row = self._execute(
                 f"SELECT COUNT(*) AS n, MAX(created_at) AS created, "
                 f"MAX(updated_at) AS updated FROM coding_memory_meta "
-                f"WHERE user_id = ? AND {scope_sql} AND {source_sql}",
+                f"WHERE user_id = ? AND {scope_sql} AND {source_sql} AND {_VISIBLE}",
                 [user_id] + scope_params + source_params,
             ).fetchone()
             facts = self._execute(
@@ -188,7 +389,9 @@ class RelationalMemoryRepository(MemoryRepository):
         }
 
     def upsert_experience(self, memory: CodingMemory) -> None:
-        with self._lock:
+        with self._lock, self._changing_source("experience", memory.experience_id) as previous:
+            if memory.consolidation_id or (previous and previous.consolidation_id):
+                raise ValueError("consolidated experiences cannot be overwritten")
             assert self._conn is not None
             self._execute(
                 """
@@ -232,14 +435,27 @@ class RelationalMemoryRepository(MemoryRepository):
 
     def delete_experience(self, experience_id: str, user_id: str) -> None:
         with self._lock:
-            assert self._conn is not None
-            self._execute(
-                "DELETE FROM coding_memory_meta WHERE experience_id = ? AND user_id = ?",
-                (experience_id, user_id),
-            )
+            previous = self._load_material("experience", experience_id)
+            if previous is None or previous.user_id != user_id:
+                return
+            if previous.consolidation_id:
+                # Derived withdrawal takes the group lock before touching products.
+                with self._business_transaction():
+                    receipt = self._receipt(previous.consolidation_id, user_id)
+                    self._lock_groups([receipt.group_key])
+                    receipt = self._receipt(previous.consolidation_id, user_id)
+                    withdrawn = sorted(set(receipt.withdrawn_ids + [experience_id]))
+                    self._execute("DELETE FROM coding_memory_meta WHERE experience_id=? AND user_id=?",
+                                  (experience_id, user_id))
+                    self._execute("UPDATE consolidation_receipt SET withdrawn_ids=? WHERE consolidation_id=?",
+                                  (canonical(withdrawn), previous.consolidation_id))
+            else:
+                with self._changing_source("experience", experience_id):
+                    self._execute("DELETE FROM coding_memory_meta WHERE experience_id=? AND user_id=?",
+                                  (experience_id, user_id))
 
     def delete_fact(self, fact_id: str, user_id: str) -> None:
-        with self._lock:
+        with self._lock, self._changing_source("fact", fact_id):
             assert self._conn is not None
             self._execute(
                 "DELETE FROM working_fact WHERE fact_id = ? AND user_id = ?",
@@ -253,12 +469,12 @@ class RelationalMemoryRepository(MemoryRepository):
             assert self._conn is not None
             if user_id:
                 cur = self._execute(
-                    "SELECT * FROM coding_memory_meta WHERE experience_id = ? AND user_id = ?",
+                    "SELECT * FROM coding_memory_meta WHERE experience_id = ? AND user_id = ? AND " + _VISIBLE,
                     (experience_id, user_id),
                 )
             else:
                 cur = self._execute(
-                    "SELECT * FROM coding_memory_meta WHERE experience_id = ?",
+                    "SELECT * FROM coding_memory_meta WHERE experience_id = ? AND " + _VISIBLE,
                     (experience_id,),
                 )
             row = cur.fetchone()
@@ -287,6 +503,7 @@ class RelationalMemoryRepository(MemoryRepository):
                 marks = ",".join("?" * len(exclude_sources))
                 sql += f" AND source NOT IN ({marks})"
                 params.extend(exclude_sources)
+            sql += " AND " + _VISIBLE
             cur = self._execute(sql, params)
             rows = cur.fetchall()
             # 保留输入顺序
@@ -311,15 +528,20 @@ class RelationalMemoryRepository(MemoryRepository):
         if agent_sql:
             scope_sql = f"({agent_sql}) AND ({scope_sql})"
             scope_params = [*agent_params, *scope_params]
-        session_sql, session_params = _in_clause("session_id", session_ids)
-        if session_sql:
-            scope_sql = f"({session_sql}) AND ({scope_sql})"
-            scope_params = [*session_params, *scope_params]
+        if session_ids:
+            session_sql, session_params = _in_clause("session_id", session_ids)
+            marks = ",".join("?" for _ in session_ids)
+            scope_sql = (f"({scope_sql}) AND ((consolidation_id IS NULL AND {session_sql}) OR "
+                         "(consolidation_id IS NOT NULL AND NOT EXISTS ("
+                         "SELECT 1 FROM consolidation_read_set rs "
+                         "WHERE rs.consolidation_id=coding_memory_meta.consolidation_id "
+                         f"AND rs.session_id NOT IN ({marks}))))")
+            scope_params += session_params + list(session_ids)
         with self._lock:
             assert self._conn is not None
             cur = self._execute(
                 f"SELECT experience_id, ({scope_sql}) AS in_scope "
-                f"FROM coding_memory_meta WHERE user_id = ?",
+                f"FROM coding_memory_meta WHERE user_id = ? AND {_VISIBLE}",
                 scope_params + [user_id],
             )
             rows = cur.fetchall()
@@ -358,7 +580,7 @@ class RelationalMemoryRepository(MemoryRepository):
         return int(row["scoped"] or 0), int(row["total"] or 0)
 
     def upsert_fact(self, fact: WorkingFact) -> None:
-        with self._lock:
+        with self._lock, self._changing_source("fact", fact.fact_id):
             assert self._conn is not None
             self._execute(
                 """
@@ -470,6 +692,10 @@ class RelationalMemoryRepository(MemoryRepository):
         self, table: str, key_column: str, key: str, column: str, value: List[str]
     ) -> None:
         with self._lock:
+            if table == "coding_memory_meta":
+                memory = self._load_material("experience", key)
+                if memory and memory.consolidation_id:
+                    raise ValueError("consolidated experiences cannot receive source backfill")
             assert self._conn is not None
             self._execute(
                 f"UPDATE {table} SET {column} = ? WHERE {key_column} = ?",
@@ -480,7 +706,7 @@ class RelationalMemoryRepository(MemoryRepository):
         with self._lock:
             assert self._conn is not None
             cur = self._execute(
-                "SELECT task FROM coding_memory_meta WHERE user_id = ? "
+                f"SELECT task FROM coding_memory_meta WHERE user_id = ? AND {_VISIBLE} "
                 "ORDER BY updated_at DESC LIMIT ?",
                 (user_id, limit),
             )

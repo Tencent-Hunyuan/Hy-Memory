@@ -98,6 +98,7 @@ PROMPT_NAMES: Tuple[str, ...] = (
     "CODING_RECONCILE_PROMPT",
     "CODING_FACT_RECONCILE_PROMPT",
     "CODING_CHAIN_SUMMARY_PROMPT",
+    "CODING_CONSOLIDATION_PROMPT",
     # summaries
     "EPISODE_SUMMARY_PROMPT",
     "TOPIC_SUMMARY_PROMPT",
@@ -126,6 +127,7 @@ FORMAT_FIELDS: Dict[str, Tuple[str, ...]] = {
     "CODING_RECONCILE_PROMPT": ("candidates_block", "drafts_block"),
     "CODING_FACT_RECONCILE_PROMPT": ("candidates_block", "drafts_block"),
     "CODING_CHAIN_SUMMARY_PROMPT": ("chain_block",),
+    "CODING_CONSOLIDATION_PROMPT": ("materials", "scene"),
     "EPISODE_SUMMARY_PROMPT": ("memories",),
     "TOPIC_SUMMARY_PROMPT": ("memories", "topic_name"),
 }

@@ -244,3 +244,14 @@ client = HyMemoryClient.from_config({
 
 历史配置不会生效；当前支持项以本页表格和 `.env.example` 为准。Cache backend 当前仅支持
 `sqlite` 和 `mysql`。
+
+### 跨会话经验巩固预算
+
+| 环境变量 | 默认值 | 作用 |
+| --- | --- | --- |
+| `MEMORY_CODING_CONSOLIDATION_MAX_INPUT_TOKENS` | `16000` | 完整归纳 prompt 的输入 token 预算，超限整次拒绝，不裁材料 |
+| `MEMORY_CODING_CONSOLIDATION_MAX_OUTPUT_TOKENS` | `4096` | 巩固模型输出 max_tokens；截断整批失败 |
+
+对应 `CodingConfig.consolidation_max_input_tokens` / `consolidation_max_output_tokens`，必须为
+正整数。Working / Coding 共用预算配置，各自在独立业务库 namespace 和原生经验向量集合中
+发布。没有新增调度、任务队列、VDB adapter 或 HTTP/MemHub 入口。

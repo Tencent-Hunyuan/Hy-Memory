@@ -11,9 +11,9 @@ Coding Memory 数据结构
 对外 scene 与返回结构见 docs/scene_coding_usage.md。
 """
 
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 from datetime import datetime
-from typing import List, Optional, Dict, Any, Literal
+from typing import List, Optional, Dict, Any, Literal, Tuple
 
 
 # 事实层 status 取值
@@ -145,6 +145,15 @@ class CodingMemory:
     memory_at: Optional[datetime] = None
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
+    consolidation_id: Optional[str] = None
+    evidence_refs: List[Dict[str, Any]] = field(default_factory=list)
+
+    def derived_metadata(self) -> Dict[str, Any]:
+        """Additional public fields present only on consolidated experiences."""
+        if self.consolidation_id is None:
+            return {}
+        return {"consolidation_id": self.consolidation_id,
+                "evidence_refs": [dict(ref) for ref in self.evidence_refs]}
 
     def __post_init__(self) -> None:
         from ..utils.source_filter import normalize_source
@@ -170,7 +179,105 @@ class CodingMemory:
             "memory_at": _epoch(self.memory_at),
             "created_at": self.created_at.isoformat() if self.created_at else None,
             "updated_at": self.updated_at.isoformat() if self.updated_at else None,
+            **self.derived_metadata(),
         }
+
+
+@dataclass(frozen=True)
+class ConsolidationScope:
+    """Exact scope: None matches SQL NULL, never a wildcard."""
+    user_id: str
+    agent_id: str
+    source: str
+    workspace_id: Optional[str]
+    branch: Optional[str]
+    scene: str = "working"
+
+    def __post_init__(self) -> None:
+        from ..utils.source_filter import normalize_source
+        for name in ("user_id", "agent_id", "source"):
+            value = getattr(self, name)
+            if not isinstance(value, str) or not value.strip():
+                raise ValueError(f"{name} must be a nonempty string")
+        for name in ("workspace_id", "branch"):
+            value = getattr(self, name)
+            if value is not None and (not isinstance(value, str) or not value.strip()):
+                raise ValueError(f"{name} must be None or a nonempty string")
+        if self.scene not in ("working", "coding"):
+            raise ValueError("consolidation requires scene='working' or 'coding'")
+        object.__setattr__(self, "source", normalize_source(self.source))
+
+
+@dataclass(frozen=True)
+class EvidenceReference:
+    kind: str
+    material_id: str
+    session_id: str
+    fingerprint: str
+    memory_at: Optional[int] = None
+
+    def to_dict(self) -> Dict[str, Any]:
+        return asdict(self)
+
+
+@dataclass
+class ConsolidationReceipt:
+    consolidation_id: str
+    group_key: str
+    basis_digest: str
+    scope: ConsolidationScope
+    session_ids: List[str]
+    decision: str
+    is_current: bool
+    basis_valid: bool
+    activation_epoch: int
+    experience_ids: List[str]
+    withdrawn_ids: List[str]
+    read_set: List[Dict[str, Any]]
+    experiences: List[CodingMemory]
+    attempt_id: str
+    created_at: str
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            **asdict(self), "scope": asdict(self.scope),
+            "status": "needs_review" if not self.basis_valid else self.decision,
+            "experiences": [m.to_dict() for m in self.experiences],
+        }
+
+
+@dataclass
+class ConsolidationSnapshot:
+    scope: ConsolidationScope
+    session_ids: List[str]
+    materials: List[Dict[str, Any]]
+    read_set: List[EvidenceReference]
+    group_key: str
+    basis_digest: str
+    consolidation_id: str
+    baseline: Optional[Tuple[str, int]]
+    reusable: Optional[ConsolidationReceipt] = None
+
+
+@dataclass
+class ConsolidationResult:
+    status: str
+    consolidation_id: str
+    receipt: Optional[ConsolidationReceipt] = None
+    reused: bool = False
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {"status": self.status, "consolidation_id": self.consolidation_id,
+                "reused": self.reused,
+                "receipt": self.receipt.to_dict() if self.receipt else None}
+
+
+class ConsolidationConflict(RuntimeError):
+    """Publication was rolled back after a frozen basis or activation changed."""
+
+
+class ConsolidationOutcomeUnknown(RuntimeError):
+    """Commit was attempted but its acknowledgement was lost."""
 
 
 # ================================================================

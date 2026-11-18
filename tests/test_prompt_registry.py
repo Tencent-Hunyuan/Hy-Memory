@@ -83,7 +83,7 @@ _PINNED_SHA256 = {
 }
 
 
-_NEW_ONLY = {"OUTPUT_LANGUAGE_DIRECTIVE", "LANGUAGE_NAME"}
+_NEW_ONLY = {"OUTPUT_LANGUAGE_DIRECTIVE", "LANGUAGE_NAME", "CODING_CONSOLIDATION_PROMPT"}
 _TRANSLATED = [code for code in SUPPORTED_LANGUAGES if code not in ("en", "zh-Hans")]
 
 _JSON_KEY_RE = re.compile(r'"([A-Za-z_][A-Za-z0-9_]*)"\s*:')

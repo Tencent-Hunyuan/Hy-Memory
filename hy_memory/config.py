@@ -1207,7 +1207,16 @@ class CodingConfig:
     # 默认关闭（opt-in）：中重度 coding 用户可省下大量 prompt token；写入侧仍可 observe。
     chain_block_enabled: bool = None
 
+    consolidation_max_input_tokens: int = None
+    consolidation_max_output_tokens: int = None
+
     def __post_init__(self):
+        if self.consolidation_max_input_tokens is None:
+            self.consolidation_max_input_tokens = _get_env_int(
+                "MEMORY_CODING_CONSOLIDATION_MAX_INPUT_TOKENS", 16_000)
+        if self.consolidation_max_output_tokens is None:
+            self.consolidation_max_output_tokens = _get_env_int(
+                "MEMORY_CODING_CONSOLIDATION_MAX_OUTPUT_TOKENS", 4_096)
         if self.enable is None:
             self.enable = _get_env_bool("MEMORY_CODING_ENABLED", True)
         if self.db_path is None:
