@@ -235,13 +235,24 @@ class MemoryScorer:
         
         权重会自动归一化
         """
+        # ``or`` would treat an explicitly supplied ``0.0`` as missing and
+        # silently keep the old weight, so callers could not disable a single
+        # scoring dimension. Only ``None`` means "leave this weight unchanged".
         weights = [
-            semantic_weight or self.config.semantic_weight,
-            recency_weight or self.config.recency_weight,
-            importance_weight or self.config.importance_weight,
-            access_weight or self.config.access_weight,
+            self.config.semantic_weight
+            if semantic_weight is None
+            else semantic_weight,
+            self.config.recency_weight
+            if recency_weight is None
+            else recency_weight,
+            self.config.importance_weight
+            if importance_weight is None
+            else importance_weight,
+            self.config.access_weight
+            if access_weight is None
+            else access_weight,
         ]
-        
+
         # 归一化
         total = sum(weights)
         if total > 0:
