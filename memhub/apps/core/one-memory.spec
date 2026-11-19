@@ -9,7 +9,10 @@ if layout not in {'single-file', 'folder'}:
     raise ValueError('Unsupported ONE_MEMORY_CORE_LAYOUT')
 folder_layout = layout == 'folder'
 
-datas = [('src/one_memory/embedding_assets', 'one_memory/embedding_assets')]
+datas = [
+    ('src/one_memory/embedding_assets', 'one_memory/embedding_assets'),
+    ('src/one_memory/fastembed_cache', 'one_memory/fastembed_cache'),
+]
 binaries = []
 # Loaded lazily by the API; static dependency analysis cannot discover it.
 hiddenimports = []
@@ -30,6 +33,13 @@ datas += tmp_ret[0]; binaries += tmp_ret[1]; hiddenimports += tmp_ret[2]
 for driver in ('neo4j', 'qdrant_client', 'portalocker'):
     tmp_ret = collect_all(driver)
     datas += tmp_ret[0]; binaries += tmp_ret[1]; hiddenimports += tmp_ret[2]
+# Qdrant BM25 is lazy in the SDK and invisible to static analysis. Collect
+# FastEmbed and tqdm explicitly; FastEmbed imports tqdm.contrib.concurrent only
+# on its parallel path, which PyInstaller otherwise misses.
+for package in ('fastembed', 'tqdm'):
+    tmp_ret = collect_all(package)
+    datas += tmp_ret[0]; binaries += tmp_ret[1]; hiddenimports += tmp_ret[2]
+hiddenimports += ['tqdm.contrib', 'tqdm.contrib.concurrent']
 tmp_ret = collect_all('onnxruntime')
 datas += tmp_ret[0]; binaries += tmp_ret[1]; hiddenimports += tmp_ret[2]
 tmp_ret = collect_all('tokenizers')
@@ -59,7 +69,10 @@ a = Analysis(
     # MemHub refuses the `faiss` storage backend, so its ~18 MB driver is never
     # shipped. The SDK imports it inside a function, which PyInstaller still
     # follows when a build machine happens to have it, so it is excluded by name.
-    excludes=['faiss'],
+    # So is psycopg: hy-memory 2.0.17's optional PostgreSQL business store
+    # (`hy-memory[postgres]`) imports it lazily, and MemHub always keeps the
+    # SDK's Coding/Working store in SQLite (`build_sdk_config`).
+    excludes=['faiss', 'psycopg', 'psycopg_binary', 'psycopg_c'],
     noarchive=False,
     optimize=0,
 )

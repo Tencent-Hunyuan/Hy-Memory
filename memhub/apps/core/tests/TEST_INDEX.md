@@ -17,6 +17,8 @@
 | `test_backup_includes_memories.py` | `integration` | A backup holds the memories: back up, wipe, restore, and everything is back. |
 | `test_backup_restore_api.py` | `integration` | 覆盖 restore endpoint refuses when runtime owns the core、restore endpoint restores a managed backup、restore endpoint rejects a source outside home 场景。 |
 | `test_baseline_probe.py` | `contract` | A0-04: the baseline probe itself must be trustworthy. |
+| `test_bm25_assets.py` | `contract` | 覆盖 a frozen core resolves the bundled cache、configure forces the bundled cache offline、missing or changed assets fail closed 等 4 个场景。 |
+| `test_bm25_maintenance.py` | `contract` | 覆盖 a qdrant home delegates to the public sdk contract、plan and upgrade forward stable options、upgrade refuses a runtime that is not stopped 等 4 个场景。 |
 | `test_bug01_workbuddy_root.py` | `contract` | 3925a kernel item 2 (BUG-01, backend half): WorkBuddy import root. |
 | `test_bug03_identity_key.py` | `contract` | BUG-03: the hook lane and the file scan must share one identity for one message. |
 | `test_bug04_thinking_strip.py` | `contract` | BUG-04: Cursor thinking text must not be stored as the assistant's answer. |
@@ -217,6 +219,7 @@
 | `test_obs03_health_probe.py` | `contract` | OBS-03: '/health' answered with the web app instead of a health payload. |
 | `test_observation_gate.py` | `contract` | A7-02: the gate that stops "nothing changed" from being certified blind. |
 | `test_onboarding_profile.py` | `integration` | R-09：首次安装引导把画像录下来，不问用户一句话。 |
+| `test_output_token_parameter.py` | `contract` | A profile's output-token field reaches every generation request (#287, #427). |
 | `test_oversized_file_guard.py` | `contract` | One pass over a source file is bounded by a byte budget, not skipped. |
 | `test_parent_watchdog.py` | `integration` | A Core that outlives its launcher makes the next launch impossible. |
 | `test_pinned_sdk_raw_search.py` | `integration` | MemHub's raw search against the hy-memory wheel it pins, not the repo source. |
@@ -311,6 +314,7 @@
 | `test_storage_backend_neo4j_live.py` | `contract` | A real Neo4j/Memgraph server, when one is named: probe, then an ultra SDK client. |
 | `test_storage_backend_packaging.py` | `contract` | The frozen Core ships every driver a selectable storage backend needs. |
 | `test_storage_backend_qdrant.py` | `contract` | MemHub on a Qdrant vector store, end to end, against the pinned SDK wheel. |
+| `test_storage_backend_qdrant_switch.py` | `contract` | An embedding switch on a Qdrant vector store, end to end, against the pinned SDK. |
 | `test_storage_backends.py` | `contract` | The `storage_backends` setting: what it accepts, where its secrets go, what it builds. |
 | `test_storage_ingest_journal.py` | `contract` | 覆盖 legacy put and reopen never initialize journal、initialized put records final origins create revision and noop、attribution propagation journals old rows as maintenance only 等 11 个场景。 |
 | `test_store_binding.py` | `contract` | A2: which store is in force, and honest reporting of it. |
@@ -335,4 +339,4 @@
 | `test_workspace_recall.py` | `contract` | Workspace memories were unreachable from every host; these pin the way in. |
 | `test_write_queue_lease_renewal.py` | `contract` | Rule 8: a lease must outlive the work it covers, and be renewed while it runs. |
 
-共 330 个测试文件。
+共 334 个测试文件。

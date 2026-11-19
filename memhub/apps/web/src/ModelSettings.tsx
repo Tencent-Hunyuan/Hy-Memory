@@ -2028,6 +2028,8 @@ export function probeLabel(code: ProbeCode): string {
     structured_output_unsupported: "结构化输出未通过",
     embedding_model_required: "需要填写 Embedding 模型",
     embedding_unavailable: "Embedding 模型不可用",
+    output_token_parameter_rejected:
+      "服务要求 max_completion_tokens；把模型配置的输出 token 参数改为 max_completion_tokens 后再检测",
   };
   return labels[code];
 }

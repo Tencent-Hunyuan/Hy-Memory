@@ -5,8 +5,7 @@ There is no Qdrant server in CI, so the child interpreter answers every
 own local engine, `:memory:`): to the SDK it is a server every store and every
 client shares, exactly what MemHub requires (`storage_backends`). The rest is
 real: Core's routes, the setting and its secret, the SDK's Qdrant store, the
-lite write path and raw search, backup (with the export) and the restore
-refusal.
+lite write path and raw search, backup (with the export) and restore.
 
 Like `test_pinned_sdk_raw_search`, the child runs with `-I` so `hy_memory` is
 the installed wheel, with a deterministic local embedder (no model, no ONNX).
@@ -312,17 +311,17 @@ def test_switching_moves_nothing_and_leaves_chroma_untouched(qdrant) -> None:
     assert any("bees" in hit for hit in qdrant["back_on_chroma"])
 
 
-def test_embedding_maintenance_skips_or_refuses_on_qdrant(qdrant) -> None:
+def test_embedding_maintenance_runs_on_this_homes_qdrant_collections(qdrant) -> None:
     capabilities = qdrant["capabilities"]
-    assert capabilities["embedding_switch"] == "refused"
-    assert capabilities["embedding_space_scan"] == "skipped"
+    # hy-memory 2.0.16 re-embeds Qdrant: the switch and the space scan work,
+    # on this home's prefixed collections (`test_storage_backend_qdrant_switch`).
+    assert capabilities["embedding_switch"] == "works"
+    assert capabilities["embedding_space_scan"] == "works"
     assert capabilities["upgrade_migration"] == "skipped"
     assert capabilities["backup"] == "works"
-    # Restoring memories onto Qdrant needs an SDK write that keeps ids and
-    # vectors (hy-memory 2.0.15 has none): refused, see backup-v2.md.
-    assert capabilities["restore"] == "refused"
-    assert qdrant["scan"] == ["done", "embedding_scan_skipped_custom_backend", False]
-    assert qdrant["spaces_scan_error"] == "embedding_scan_skipped_custom_backend"
+    assert capabilities["restore"] == "works"
+    assert qdrant["scan"] == ["done", None, False]
+    assert qdrant["spaces_scan_error"] is None
 
 
 def test_status_shows_the_active_backends(qdrant) -> None:
@@ -335,7 +334,8 @@ def test_status_shows_the_active_backends(qdrant) -> None:
 def test_backup_works_and_restore_keeps_the_setting(qdrant) -> None:
     assert qdrant["backup"] == 200
     assert qdrant["backup_kind"] == "remote_vector"
-    assert qdrant["restore"] == [422, "backup_restore_remote_sdk_unsupported"]
+    # Written back onto the server through the SDK (`test_backup_includes_memories`).
+    assert qdrant["restore"] == [200, None]
     assert qdrant["restore_old"] == [200, False]
     assert any("Miso" in hit for hit in qdrant["after_restart_hits"])
 

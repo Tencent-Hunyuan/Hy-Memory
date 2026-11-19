@@ -620,6 +620,70 @@ def test_ambiguous_memory_id_is_a_conflict(tmp_path, monkeypatch):
 
 
 @pytest.mark.fresh_sdk
+def test_an_edit_the_sdk_cannot_embed_is_refused_and_keeps_the_memory(tmp_path, monkeypatch):
+    """hy-memory 2.0.16 (#399): `CodingWriteError(EMBEDDING_FAILED)`, nothing stored."""
+    from hy_memory.coding.types import CodingWriteError
+
+    async def scenario(app, sdk, client):
+        sdk.add_productivity("experience", experience_row("exp-1", "Old task", "Old solution"))
+
+        def refuse(memory_id, content, kind=None, variant=None, task=None):
+            raise CodingWriteError("EMBEDDING_FAILED", "embedding provider said no: sk-123")
+
+        monkeypatch.setattr(sdk, "update", refuse)
+        response = await client.put(
+            "/api/v2/memories/exp-1",
+            json={"content": "New solution", "kind": "experience", "variant": "working"},
+        )
+        assert response.status_code == 503
+        assert response.json() == {"detail": "memory_update_embedding_failed"}
+        kept = await client.get(
+            "/api/v2/memories/exp-1", params={"kind": "experience", "variant": "working"}
+        )
+        assert kept.json()["solution"] == "Old solution"
+
+        # Any other SDK model error keeps the generic code.
+        def broken(memory_id, content, kind=None, variant=None, task=None):
+            raise CodingWriteError("LLM_ERROR", "the model is down")
+
+        monkeypatch.setattr(sdk, "update", broken)
+        response = await client.put(
+            "/api/v2/memories/exp-1",
+            json={"content": "x", "kind": "experience", "variant": "working"},
+        )
+        assert (response.status_code, response.json()["detail"]) == (
+            503,
+            "hy_memory_update_failed",
+        )
+
+    run_with_sdk(tmp_path, monkeypatch, scenario)
+
+
+@pytest.mark.fresh_sdk
+def test_a_chat_edit_whose_graph_node_was_not_updated_says_so(tmp_path, monkeypatch):
+    """hy-memory 2.0.16 (#439): the vector store holds the edit; the graph did not follow."""
+
+    async def scenario(app, sdk, client):
+        sdk.add_chat(chat_row("chat-1", "hello"))
+        plain = await client.put("/api/v2/memories/chat-1", json={"content": "hello again"})
+        assert plain.status_code == 200
+        assert "x-memory-graph-sync" not in plain.headers
+
+        original = sdk.update
+
+        def graph_failed(memory_id, content, kind=None, variant=None, task=None):
+            return {**original(memory_id, content, kind, variant, task), "graph_sync_failed": True}
+
+        monkeypatch.setattr(sdk, "update", graph_failed)
+        edited = await client.put("/api/v2/memories/chat-1", json={"content": "hello, graph"})
+        assert edited.status_code == 200
+        assert edited.json()["content"] == "hello, graph"
+        assert edited.headers["x-memory-graph-sync"] == "failed"
+
+    run_with_sdk(tmp_path, monkeypatch, scenario)
+
+
+@pytest.mark.fresh_sdk
 def test_scene_filter_lists_one_scene(tmp_path, monkeypatch):
     async def scenario(app, sdk, client):
         sdk.add_chat(chat_row("chat-1", "chat text"))

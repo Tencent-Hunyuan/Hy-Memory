@@ -17,6 +17,7 @@ from one_memory.model_profiles import (
     ModelProfileStore,
     ProviderKind,
     attach_disable_thinking,
+    output_token_field,
 )
 from one_memory.secrets import SecretStore
 
@@ -45,6 +46,12 @@ class ProbeCode(StrEnum):
     STRUCTURED_OUTPUT_UNSUPPORTED = "structured_output_unsupported"
     EMBEDDING_MODEL_REQUIRED = "embedding_model_required"
     EMBEDDING_UNAVAILABLE = "embedding_unavailable"
+    # The provider refused `max_tokens` and asked for `max_completion_tokens`
+    # (#287). Not retried with the other field: the SDK and every other Core
+    # request send the profile's field, so a probe that passed on a retry
+    # would leave extraction failing. The fix is the profile's
+    # `output_token_parameter`.
+    OUTPUT_TOKEN_PARAMETER_REJECTED = "output_token_parameter_rejected"
 
 
 class ProbeStage(BaseModel):
@@ -374,6 +381,13 @@ class ModelProber:
             return _stage(stage, False, ProbeCode.MODEL_NOT_FOUND, started)
         if response.status_code == 429:
             return _stage(stage, False, ProbeCode.RATE_LIMITED, started)
+        if (
+            response.status_code == 400
+            and payload is not None
+            and isinstance(sent := _sent_output_token_field(payload), str)
+            and _output_token_field_refused(response, sent)
+        ):
+            return _stage(stage, False, ProbeCode.OUTPUT_TOKEN_PARAMETER_REJECTED, started)
         if not response.is_success:
             # The body is read here too, not only on the 200 path below. A
             # gateway that refuses `response_format` says so in a 400 body, and
@@ -570,7 +584,7 @@ def _structured_request(
         )
     payload: dict[str, object] = {
         "model": profile.model,
-        "max_tokens": 256,
+        output_token_field(profile): 256,
         "messages": [
             {
                 "role": "user",
@@ -640,6 +654,38 @@ _RATE_LIMIT_ERROR_CODES = frozenset(
         "requestlimitexceeded",
     }
 )
+
+
+_OUTPUT_TOKEN_FIELDS = ("max_tokens", "max_completion_tokens")
+
+
+def _sent_output_token_field(payload: dict[str, object]) -> str | None:
+    return next((field for field in _OUTPUT_TOKEN_FIELDS if field in payload), None)
+
+
+def _output_token_field_refused(response: httpx.Response, sent: str) -> bool:
+    """A 400 that names the token field the probe sent and asks for the other.
+
+    The OpenAI shape (`error.param` = the refused field, the message naming
+    the replacement), as #427 matched it, plus a message that names both.
+    Anything less specific stays a generic refusal.
+    """
+    try:
+        body = response.json()
+    except ValueError:
+        return False
+    error = body.get("error") if isinstance(body, dict) else None
+    if not isinstance(error, dict):
+        return False
+    other = next(field for field in _OUTPUT_TOKEN_FIELDS if field != sent)
+    message = str(error.get("message", ""))
+    if other not in message:
+        return False
+    if error.get("param") == sent:
+        return True
+    # `max_tokens` is a substring of `max_completion_tokens`; drop the
+    # replacement before looking for the refused field.
+    return sent in message.replace(other, "")
 
 
 def _compact_code(value: object) -> str:

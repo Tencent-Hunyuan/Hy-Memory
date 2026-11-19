@@ -239,8 +239,9 @@ node apps/cli/dist/one-memory.cjs settings backends reset --yes         # 回到
 - 图数据库里已经有记忆图谱时（图谱不按资料空间隔离，可能是另一个 MemHub 的），需要加
   `--adopt-existing-graph` 才能接管。Qdrant 的集合都带本资料空间的前缀（`namespace`），多个
   MemHub 共用一台服务器也不会互相读写。
-- 在 Qdrant 上更换向量模型会被拒绝（`embedding_switch_backend_unsupported`，SDK 还不能为 Qdrant
-  重新生成向量）；Neo4j/Memgraph 在 ultra 下同样拒绝。`show` 列出每个功能在当前后端上是
+- 在 Qdrant 上可以更换向量模型（hy-memory 2.0.16 起 SDK 能为 Qdrant 重新生成向量），只读写本资料空间
+  前缀下的集合；Neo4j/Memgraph 图数据库在 ultra 下仍拒绝（`embedding_switch_backend_unsupported`，
+  一个库只有一个固定维度的向量索引）。`show` 列出每个功能在当前后端上是
   可用、跳过还是不支持。升级迁移在自定义后端上跳过。
 - API：`GET`/`PUT`/`DELETE /api/v1/settings/storage-backends`，`POST /api/v1/settings/storage-backends/test`。
 
@@ -260,7 +261,7 @@ node apps/cli/dist/one-memory.cjs backup restore --source <数据目录>/backups
 
 从 1.0.7 起备份**包含全部记忆**：主库（来源、写入队列、配置）加记忆库 `hy-memory/`
 （Chroma、Kuzu 图谱、SDK 的 SQLite 缓存）；向量在 Qdrant 服务器上时另含一份经 SDK
-导出的 `export/memories.jsonl`。备份是一个目录 `backups/<名字>.memhub-backup/`
+导出、带向量的 `export/memories.jsonl`。备份是一个目录 `backups/<名字>.memhub-backup/`
 （`backups/x.sqlite3` 也写成 `backups/x.memhub-backup`），只有本人可读写（0700/0600）。
 
 - `create` 不加 `--yes` 只显示目标和预计大小（`GET /api/v1/backup/estimate`），
@@ -272,8 +273,12 @@ node apps/cli/dist/one-memory.cjs backup restore --source <数据目录>/backups
   `backups/pre-restore-<时间>.memhub-previous/`。图谱打不开会被隔离并在下次启动时重建。
 - 旧格式备份（单个 `.sqlite3` 文件）照旧恢复主库，结果写明
   `memories_included: false`：它不含记忆，记忆库保持原样。
-- 后端不同（本机 Kuzu + Chroma 与服务器之间）拒绝恢复：`backup_restore_backend_mismatch`；
-  记忆在 Qdrant 上时暂不支持恢复记忆：`backup_restore_remote_sdk_unsupported`。
+- 后端不同（本机 Kuzu + Chroma 与服务器之间）拒绝恢复：`backup_restore_backend_mismatch`。
+- 记忆在 Qdrant 上时，恢复经 SDK 按原 id 写回记忆（含状态、演化关系、时间和向量），恢复前服务器上的
+  记忆另存为 `backups/pre-restore-<时间>.memhub-previous-vectors.jsonl`。SDK 还不能写回的内容会
+  拒绝恢复并说明原因：Coding/Working 经验（`backup_restore_qdrant_experiences_unsupported`）、
+  检索子句索引（`backup_restore_qdrant_retrieval_clauses_unsupported`）、2.0.16 之前的备份
+  （`backup_restore_export_without_vectors`）、换过向量模型之后（`backup_restore_qdrant_space_changed`）。
 
 合同：[`../contracts/backup-v2.md`](../contracts/backup-v2.md)。
 

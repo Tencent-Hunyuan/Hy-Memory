@@ -60,6 +60,7 @@ const CODES = new Set([
   "structured_output_unsupported",
   "embedding_model_required",
   "embedding_unavailable",
+  "output_token_parameter_rejected",
 ]);
 
 export type ModelProbeFlowDocument =

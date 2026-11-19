@@ -1431,7 +1431,7 @@ def test_only_one_model_profile_can_be_active() -> None:
 
     def insert(profile_id: str, active: int) -> None:
         db.execute(
-            "INSERT INTO model_profiles VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            "INSERT INTO model_profiles VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (
                 profile_id,
                 "n",
@@ -1455,6 +1455,7 @@ def test_only_one_model_profile_can_be_active() -> None:
                 active,
                 "2026",
                 "2026",
+                "max_tokens",
             ),
         )
 

@@ -3,9 +3,9 @@
   "dataLicense": "CC0-1.0",
   "SPDXID": "SPDXRef-DOCUMENT",
   "name": "one-memory",
-  "documentNamespace": "https://one-memory.local/spdx/2026-11-10T13:55:40Z",
+  "documentNamespace": "https://one-memory.local/spdx/2026-11-18T15:41:54Z",
   "creationInfo": {
-    "created": "2026-11-10T13:55:40Z",
+    "created": "2026-11-18T15:41:54Z",
     "creators": [
       "Tool: one-memory-generate-sbom"
     ]
@@ -582,6 +582,23 @@
       ]
     },
     {
+      "SPDXID": "SPDXRef-Package-pypi-fastembed",
+      "name": "fastembed",
+      "versionInfo": "0.9.0",
+      "downloadLocation": "NOASSERTION",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "NOASSERTION",
+      "copyrightText": "NOASSERTION",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:pypi/fastembed@0.9.0"
+        }
+      ]
+    },
+    {
       "SPDXID": "SPDXRef-Package-pypi-filelock",
       "name": "filelock",
       "versionInfo": "3.32.4",
@@ -1143,6 +1160,23 @@
       ]
     },
     {
+      "SPDXID": "SPDXRef-Package-pypi-loguru",
+      "name": "loguru",
+      "versionInfo": "0.7.3",
+      "downloadLocation": "NOASSERTION",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "NOASSERTION",
+      "copyrightText": "NOASSERTION",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:pypi/loguru@0.7.3"
+        }
+      ]
+    },
+    {
       "SPDXID": "SPDXRef-Package-pypi-macholib",
       "name": "macholib",
       "versionInfo": "1.16.4",
@@ -1568,6 +1602,23 @@
       ]
     },
     {
+      "SPDXID": "SPDXRef-Package-pypi-pillow",
+      "name": "pillow",
+      "versionInfo": "12.3.0",
+      "downloadLocation": "NOASSERTION",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "NOASSERTION",
+      "copyrightText": "NOASSERTION",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:pypi/pillow@12.3.0"
+        }
+      ]
+    },
+    {
       "SPDXID": "SPDXRef-Package-pypi-pluggy",
       "name": "pluggy",
       "versionInfo": "1.6.0",
@@ -1632,6 +1683,23 @@
           "referenceCategory": "PACKAGE-MANAGER",
           "referenceType": "purl",
           "referenceLocator": "pkg:pypi/protobuf@7.36.0"
+        }
+      ]
+    },
+    {
+      "SPDXID": "SPDXRef-Package-pypi-py-rust-stemmers",
+      "name": "py-rust-stemmers",
+      "versionInfo": "0.1.8",
+      "downloadLocation": "NOASSERTION",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "NOASSERTION",
+      "copyrightText": "NOASSERTION",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:pypi/py-rust-stemmers@0.1.8"
         }
       ]
     },
@@ -2471,7 +2539,7 @@
     {
       "SPDXID": "SPDXRef-Package-hy-memory",
       "name": "hy-memory",
-      "versionInfo": "2.0.15",
+      "versionInfo": "2.0.17",
       "downloadLocation": "NOASSERTION",
       "filesAnalyzed": false,
       "licenseConcluded": "Apache-2.0",
@@ -2664,6 +2732,11 @@
     {
       "spdxElementId": "SPDXRef-Package-one-memory",
       "relationshipType": "DEPENDS_ON",
+      "relatedSpdxElement": "SPDXRef-Package-pypi-fastembed"
+    },
+    {
+      "spdxElementId": "SPDXRef-Package-one-memory",
+      "relationshipType": "DEPENDS_ON",
       "relatedSpdxElement": "SPDXRef-Package-pypi-filelock"
     },
     {
@@ -2829,6 +2902,11 @@
     {
       "spdxElementId": "SPDXRef-Package-one-memory",
       "relationshipType": "DEPENDS_ON",
+      "relatedSpdxElement": "SPDXRef-Package-pypi-loguru"
+    },
+    {
+      "spdxElementId": "SPDXRef-Package-one-memory",
+      "relationshipType": "DEPENDS_ON",
       "relatedSpdxElement": "SPDXRef-Package-pypi-macholib"
     },
     {
@@ -2954,6 +3032,11 @@
     {
       "spdxElementId": "SPDXRef-Package-one-memory",
       "relationshipType": "DEPENDS_ON",
+      "relatedSpdxElement": "SPDXRef-Package-pypi-pillow"
+    },
+    {
+      "spdxElementId": "SPDXRef-Package-one-memory",
+      "relationshipType": "DEPENDS_ON",
       "relatedSpdxElement": "SPDXRef-Package-pypi-pluggy"
     },
     {
@@ -2970,6 +3053,11 @@
       "spdxElementId": "SPDXRef-Package-one-memory",
       "relationshipType": "DEPENDS_ON",
       "relatedSpdxElement": "SPDXRef-Package-pypi-protobuf"
+    },
+    {
+      "spdxElementId": "SPDXRef-Package-one-memory",
+      "relationshipType": "DEPENDS_ON",
+      "relatedSpdxElement": "SPDXRef-Package-pypi-py-rust-stemmers"
     },
     {
       "spdxElementId": "SPDXRef-Package-one-memory",

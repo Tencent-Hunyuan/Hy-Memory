@@ -33,8 +33,8 @@ import os
 import shutil
 import sqlite3
 import time
-from collections.abc import Awaitable, Callable, Iterable, Iterator, Mapping
-from contextlib import closing, suppress
+from collections.abc import AsyncIterator, Awaitable, Callable, Iterable, Iterator, Mapping
+from contextlib import AbstractAsyncContextManager, asynccontextmanager, closing, suppress
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
@@ -55,8 +55,34 @@ DATABASE_NAME = "one-memory.sqlite3"
 MANAGEMENT_PATH = f"management/{DATABASE_NAME}"
 SDK_PREFIX = f"sdk/{HY_MEMORY_NAMESPACE}"
 EXPORT_PATH = "export/memories.jsonl"
+#: The `node` lines of an export: `MemoryNode.to_dict()` with its vector, as
+#: hy-memory 2.0.16's `export_user_memories` returns it. An export without it
+#: (MemHub before 2.0.16: list items, no vectors) cannot be written back.
+EXPORT_NODE_FORMAT = "hy-memory-node-v1"
 RESTORE_JOURNAL = ".memhub-restore.json"
 PREVIOUS_SUFFIX = ".memhub-previous"
+#: Beside the protective copy: this home's Qdrant memories before a restore.
+PREVIOUS_VECTORS_SUFFIX = ".memhub-previous-vectors.jsonl"
+
+#: Restoring onto Qdrant: what hy-memory 2.0.16's export/import cannot carry.
+#: Coding/Working experiences keep their vectors in collections of their own
+#: (`coding_keys*`, `working_facts*`), which no public SDK call exports or
+#: writes back with their ids; their SQLite rows would come back without them.
+RESTORE_QDRANT_EXPERIENCES = "backup_restore_qdrant_experiences_unsupported"
+#: The hidden retrieval clauses of long L2 memories (`<memory>__retrieval_clauses`)
+#: are not in `export_user_memories` and `import_user_memories` does not rebuild them.
+RESTORE_QDRANT_CLAUSES = "backup_restore_qdrant_retrieval_clauses_unsupported"
+#: A Qdrant backup written before 2.0.16: its export holds no vectors or node ids.
+RESTORE_EXPORT_WITHOUT_VECTORS = "backup_restore_export_without_vectors"
+#: The embedding space changed since the backup: the backup's vectors belong to
+#: another space's collections, and the live space's would be merged back in.
+RESTORE_QDRANT_SPACE_CHANGED = "backup_restore_qdrant_space_changed"
+#: No SDK client could be built to write the memories back (an offline restore).
+RESTORE_VECTOR_CLIENT_UNAVAILABLE = "backup_restore_vector_client_unavailable"
+#: `import_user_memories` refused or wrote fewer memories than the backup holds.
+RESTORE_IMPORT_FAILED = "backup_restore_import_failed"
+#: The Qdrant roles whose records name a Coding/Working experience or fact.
+_EXPERIENCE_ROLES = ("coding_keys", "coding_keys_cv", "working_facts", "working_facts_cv")
 
 #: The SDK's vector layers (`MemoryLayer`), raw turns included. L5-L7 live in
 #: the graph and are counted there (`count_graph_memories`).
@@ -235,8 +261,12 @@ def _size(path: Path) -> int:
     return 0
 
 
-#: A rough size of one exported memory line (content, metadata, no vector).
+#: A rough size of one exported memory line without its vector.
 EXPORT_BYTES_PER_MEMORY = 1536
+#: A float of a vector as JSON text (`-0.012345678901234567,`), on average.
+EXPORT_BYTES_PER_DIMENSION = 21
+#: The width assumed for an estimate when the live space has none recorded.
+_ESTIMATE_DIMENSIONS = 1024
 
 
 @dataclass(frozen=True)
@@ -261,12 +291,22 @@ class BackupEstimate:
 
 
 def estimate(
-    data_dir: Path, *, backend: BackendIdentity, memories: int | None = None
+    data_dir: Path,
+    *,
+    backend: BackendIdentity,
+    memories: int | None = None,
+    dims: int | None = None,
 ) -> BackupEstimate:
-    """What `create_backup` would write: no file is read, only sizes."""
+    """What `create_backup` would write: no file is read, only sizes.
+
+    On Qdrant the export carries every memory's vector, `dims` floats each.
+    """
     planned = plan_files(data_dir)
     local = sum(item.bytes for item in planned)
-    export = (memories or 0) * EXPORT_BYTES_PER_MEMORY if backend.kind == "remote_vector" else 0
+    per_memory = EXPORT_BYTES_PER_MEMORY + EXPORT_BYTES_PER_DIMENSION * (
+        dims or _ESTIMATE_DIMENSIONS
+    )
+    export = (memories or 0) * per_memory if backend.kind == "remote_vector" else 0
     free: int | None = None
     with suppress(OSError):
         free = shutil.disk_usage(data_dir.resolve()).free
@@ -433,16 +473,21 @@ def count_layers(client: Any, users: Iterable[str]) -> dict[str, dict[str, int]]
 def write_export(client: Any, users: Iterable[str], target: Path) -> dict[str, object]:
     """The memories on a vector server, as portable JSONL, through the SDK.
 
-    One line per memory: `{"user_id", "layer"|"scene", "memory"}` where
-    `memory` is the SDK's own list item (content, ids, status, times, source).
-    Paged per user and per layer, every status, raw turns included, written
-    as it is read. hy-memory 2.0.15 has no public read that returns the
-    vector, so `embeddings_included` is false: a restore re-embeds with the
-    space's model (`docs/contracts/backup-v2.md`).
+    Two kinds of line. `{"user_id", "node"}`: one memory of the vector store,
+    exactly as the SDK's `export_user_memories` returns it (hy-memory 2.0.16:
+    `MemoryNode.to_dict()` with its id, layer, status, evolution links, times
+    and vector), every status and every layer, raw turns included; a restore
+    writes these back with `import_user_memories`. `{"user_id", "scene",
+    "memory"}`: a Coding/Working experience as `list_memories(scene=...)`
+    lists it. Those have no SDK export with their vectors, which is why a
+    restore onto Qdrant refuses a home that has any
+    (`backup_restore_qdrant_experiences_unsupported`). Written as it is read.
     """
     _owner_only_directory(target.parent)
     digest = hashlib.sha256()
     counts: dict[str, dict[str, int]] = {}
+    dims: int | None = None
+    model: str | None = None
     descriptor = os.open(target, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
     with os.fdopen(descriptor, "wb") as writer:
 
@@ -452,29 +497,22 @@ def write_export(client: Any, users: Iterable[str], target: Path) -> dict[str, o
             writer.write(line)
 
         for user_id in users:
-            per_user = counts.setdefault(user_id, {})
-            for layer in VECTOR_LAYERS:
-                per_user[layer] = 0
-                offset = 0
-                while True:
-                    listed = client.list_memories(
-                        user_id=user_id,
-                        layers=[layer],
-                        statuses=list(ALL_STATUSES),
-                        limit=_EXPORT_PAGE,
-                        offset=offset,
-                        order="asc",
-                    )
-                    vdb = listed.get("vdb") if isinstance(listed, Mapping) else None
-                    items = vdb.get("memories") if isinstance(vdb, Mapping) else None
-                    if not items:
-                        break
-                    for item in items:
-                        emit({"user_id": user_id, "layer": layer, "memory": item})
-                    per_user[layer] += len(items)
-                    offset += len(items)
-                    if len(items) < _EXPORT_PAGE:
-                        break
+            per_user = counts.setdefault(user_id, {layer: 0 for layer in VECTOR_LAYERS})
+            exported = client.export_user_memories(user_id, include_embeddings=True)
+            if not isinstance(exported, Mapping) or exported.get("success") is False:
+                raise BackupError("backup_sdk_unavailable")
+            nodes = exported.get("nodes")
+            for node in nodes if isinstance(nodes, list) else ():
+                if not isinstance(node, Mapping):
+                    raise BackupError("backup_sdk_unavailable")
+                emit({"user_id": user_id, "node": dict(node)})
+                layer = str(node.get("layer") or "")
+                per_user[layer] = per_user.get(layer, 0) + 1
+            exported_dims = exported.get("embedding_dims")
+            if isinstance(exported_dims, int) and not isinstance(exported_dims, bool):
+                dims = exported_dims
+            if isinstance(exported.get("embedding_model"), str):
+                model = str(exported["embedding_model"])
             for scene in EXPERIENCE_SCENES:
                 key = f"scene:{scene}"
                 per_user[key] = 0
@@ -505,10 +543,40 @@ def write_export(client: Any, users: Iterable[str], target: Path) -> dict[str, o
     return {
         "path": EXPORT_PATH,
         "format": "jsonl",
-        "embeddings_included": False,
+        "node_format": EXPORT_NODE_FORMAT,
+        "embeddings_included": True,
+        "embedding_dims": dims,
+        "embedding_model": model,
         "counts": counts,
         "sha256": digest.hexdigest(),
     }
+
+
+def read_export(path: Path, sha256: str) -> dict[str, list[dict[str, object]]]:
+    """The exported memories per user, after checking the file's hash.
+
+    Only the `node` lines: what `import_user_memories` writes back.
+    """
+    digest = hashlib.sha256()
+    nodes: dict[str, list[dict[str, object]]] = {}
+    try:
+        with path.open("rb") as reader:
+            for line in reader:
+                digest.update(line)
+                record = json.loads(line)
+                if not isinstance(record, dict) or not isinstance(record.get("user_id"), str):
+                    raise BackupError("backup_restore_verify_failed")
+                node = record.get("node")
+                if node is None:
+                    continue
+                if not isinstance(node, dict) or node.get("user_id") != record["user_id"]:
+                    raise BackupError("backup_restore_verify_failed")
+                nodes.setdefault(record["user_id"], []).append(node)
+    except (OSError, ValueError) as error:
+        raise BackupError("backup_restore_verify_failed") from error
+    if digest.hexdigest() != sha256:
+        raise BackupError("backup_restore_verify_failed")
+    return nodes
 
 
 @dataclass
@@ -742,12 +810,66 @@ def _write_journal(home: Path, document: dict[str, object]) -> None:
     _fsync(home)
 
 
+def _role_records(counts: object, roles: Iterable[str]) -> int:
+    """Records in `roles` across every space of a `vector_store_counts` document."""
+    wanted = set(roles)
+    total = 0
+    for space in counts.values() if isinstance(counts, Mapping) else ():
+        for role, per_user in space.items() if isinstance(space, Mapping) else ():
+            if role in wanted and isinstance(per_user, Mapping):
+                total += sum(value for value in per_user.values() if isinstance(value, int))
+    return total
+
+
+def qdrant_restore_refusal(
+    manifest: Mapping[str, object],
+    *,
+    current_space_id: str | None,
+    current_vectors: Mapping[str, object] | None,
+) -> str | None:
+    """Why a Qdrant backup cannot be written back onto this home's server; None if it can.
+
+    hy-memory 2.0.16 exports and imports the memory collection only (ids,
+    statuses, evolution links, times and vectors, raw turns included). It
+    has nothing for Coding/Working experience vectors or the retrieval-clause
+    index, so a backup or a live server holding either is refused rather than
+    restored without them. Checked before anything changes.
+    """
+    export = manifest.get("export")
+    if (
+        not isinstance(export, Mapping)
+        or export.get("embeddings_included") is not True
+        or export.get("node_format") != EXPORT_NODE_FORMAT
+        or not isinstance(export.get("sha256"), str)
+    ):
+        return RESTORE_EXPORT_WITHOUT_VECTORS
+    space = manifest.get("embedding_space")
+    space_id = space.get("space_id") if isinstance(space, Mapping) else None
+    if current_space_id is None or space_id != current_space_id:
+        return RESTORE_QDRANT_SPACE_CHANGED
+    layers = _counts(manifest, "layers")
+    for per_user in layers.values() if isinstance(layers, Mapping) else ():
+        if not isinstance(per_user, Mapping):
+            continue
+        if any(per_user.get(f"scene:{scene}") for scene in EXPERIENCE_SCENES):
+            return RESTORE_QDRANT_EXPERIENCES
+    for counts in (_counts(manifest, "vector_store"), current_vectors):
+        if _role_records(counts, _EXPERIENCE_ROLES):
+            return RESTORE_QDRANT_EXPERIENCES
+    for counts in (_counts(manifest, "vector_store"), current_vectors):
+        if _role_records(counts, ("retrieval_clauses",)):
+            return RESTORE_QDRANT_CLAUSES
+    return None
+
+
 def prepare_restore(
     data_dir: Path,
     source: BackupSource,
     *,
     current: BackendIdentity,
     now: datetime | None = None,
+    current_space_id: str | None = None,
+    current_vectors: Mapping[str, object] | None = None,
 ) -> PreparedRestore:
     """Verify a v2 backup against this home and stage its SDK files; nothing live changes."""
     home = data_dir.resolve()
@@ -760,12 +882,19 @@ def prepare_restore(
     if backend.kind != current.kind or (
         backend.vector != current.vector or backend.graph != current.graph
     ):
-        # Converting between a local store and a server needs an SDK write
-        # API that keeps ids and vectors (2.0.15 has none): refuse instead of
-        # restoring memories this home would not read.
+        # Converting between a local store and a server is a different job:
+        # every memory written into another store with its id and vector.
+        # Refused instead of restoring memories this home would not read.
         raise BackupError("backup_restore_backend_mismatch")
     if backend.kind == "remote_vector":
-        raise BackupError("backup_restore_remote_sdk_unsupported")
+        if backend.vector_prefix != current.vector_prefix:
+            # Another home's namespace on the server (or another server's).
+            raise BackupError("backup_restore_backend_mismatch")
+        refusal = qdrant_restore_refusal(
+            manifest, current_space_id=current_space_id, current_vectors=current_vectors
+        )
+        if refusal is not None:
+            raise BackupError(refusal)
     files = _files(manifest)
     verify_files(source.path, files)
     total = sum(int(str(item["bytes"])) for item in files)
@@ -1016,6 +1145,8 @@ class RestoreResult:
     graph_rebuild_users: tuple[str, ...]
     source_schema_version: int
     backend: BackendIdentity
+    #: On Qdrant: the server's memories as they were before the restore.
+    previous_vectors: Path | None = None
 
     def document(self) -> dict[str, object]:
         return {
@@ -1031,12 +1162,97 @@ class RestoreResult:
             "graph_rebuild_scheduled": bool(self.graph_rebuild_users),
             "duration_ms": self.duration_ms,
             "note": None,
+            "previous_vectors_path": (
+                str(self.previous_vectors) if self.previous_vectors is not None else None
+            ),
         }
 
 
 Quiesce = Callable[[], Awaitable[Callable[[], None]]]
 CountLayers = Callable[[list[str]], Awaitable[dict[str, dict[str, int]] | None]]
 ScheduleGraphRebuild = Callable[[tuple[str, ...], bool], None]
+
+
+@dataclass(frozen=True)
+class QdrantRestore:
+    """What a restore onto this home's Qdrant server needs from the running Core.
+
+    `client` opens a public SDK client on the live space's Qdrant collections
+    whose local files (graph, caches) are a scratch directory of its own: its
+    `delete_all` and `import_user_memories` touch the server's memory
+    collection and nothing of the home's restored files.
+    """
+
+    client: Callable[[], AbstractAsyncContextManager[Any]]
+    #: This home's Qdrant records per space, role and user (`vector_store_counts`).
+    vectors: Callable[[], Awaitable[Mapping[str, object]]]
+    #: Every user this home knows now; their Qdrant memories are replaced too.
+    current_users: tuple[str, ...]
+    current_space_id: str | None
+
+
+def _export_nodes(client: Any, users: Iterable[str]) -> dict[str, list[dict[str, object]]]:
+    nodes: dict[str, list[dict[str, object]]] = {}
+    for user_id in users:
+        exported = client.export_user_memories(user_id, include_embeddings=True)
+        if not isinstance(exported, Mapping) or exported.get("success") is False:
+            raise BackupError(RESTORE_IMPORT_FAILED)
+        listed = exported.get("nodes")
+        nodes[user_id] = (
+            [dict(node) for node in listed if isinstance(node, Mapping)]
+            if isinstance(listed, list)
+            else []
+        )
+    return nodes
+
+
+def _write_nodes(path: Path, nodes: Mapping[str, list[dict[str, object]]]) -> None:
+    _owner_only_directory(path.parent)
+    descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    with os.fdopen(descriptor, "wb") as writer:
+        for user_id, items in nodes.items():
+            for node in items:
+                record = {"user_id": user_id, "node": node}
+                writer.write(
+                    (json.dumps(record, ensure_ascii=False, sort_keys=True) + "\n").encode()
+                )
+        writer.flush()
+        os.fsync(writer.fileno())
+
+
+def _replace_nodes(
+    client: Any, users: Iterable[str], nodes: Mapping[str, list[dict[str, object]]]
+) -> None:
+    """Make the server's memory collection hold exactly `nodes` for `users`.
+
+    Every user's memories are deleted (`delete_all`), then each user's nodes
+    are written back with their ids and vectors (`import_user_memories`,
+    which requires an empty user and rolls its own partial write back).
+    """
+    for user_id in users:
+        deleted = client.delete_all(user_id=user_id)
+        if isinstance(deleted, Mapping) and deleted.get("success") is False:
+            raise BackupError(RESTORE_IMPORT_FAILED)
+    for user_id, items in nodes.items():
+        if not items:
+            continue
+        imported = client.import_user_memories(user_id, items, require_empty=True)
+        if (
+            not isinstance(imported, Mapping)
+            or imported.get("success") is not True
+            or imported.get("imported_count") != len(items)
+        ):
+            logger.warning(
+                "backup_restore_import_failed user_count=%d error=%s",
+                len(items),
+                imported.get("error_message") if isinstance(imported, Mapping) else None,
+            )
+            raise BackupError(RESTORE_IMPORT_FAILED)
+
+
+@asynccontextmanager
+async def _no_client() -> AsyncIterator[None]:
+    yield None
 
 
 async def _no_quiesce() -> Callable[[], None]:
@@ -1053,6 +1269,7 @@ async def run_restore(
     schedule_graph_rebuild: ScheduleGraphRebuild | None = None,
     graph_probe: Callable[[Path], str] | None = None,
     now: datetime | None = None,
+    qdrant: QdrantRestore | None = None,
 ) -> RestoreResult:
     """Restore a v2 backup: stage, swap, verify the counts, roll back on any failure.
 
@@ -1060,13 +1277,35 @@ async def run_restore(
     offline, returning the release; a stopped Runtime needs none. The
     previous data is kept until the counts match, then stays as a protective
     copy (`previous_backup_path`).
+
+    Onto Qdrant (`qdrant`), the local files are swapped as on any backend and
+    the server's memory collection is written back through the SDK: the
+    server's current memories are exported first (`previous_vectors_path`),
+    every user's memories are deleted and the backup's are imported with their
+    ids, statuses, links, times and vectors. Any failure writes the exported
+    ones back before the files are rolled back.
     """
     import asyncio
 
     from one_memory.hy_sdk_migration import vector_store_counts
 
     started = time.monotonic()
-    prepared = await asyncio.to_thread(prepare_restore, data_dir, source, current=current, now=now)
+    remote = (
+        current.kind == "remote_vector"
+        and BackendIdentity.from_document(source.manifest.get("backend")).kind == "remote_vector"
+    )
+    if remote and qdrant is None:
+        raise BackupError(RESTORE_VECTOR_CLIENT_UNAVAILABLE)
+    current_vectors = await qdrant.vectors() if remote and qdrant is not None else None
+    prepared = await asyncio.to_thread(
+        prepare_restore,
+        data_dir,
+        source,
+        current=current,
+        now=now,
+        current_space_id=qdrant.current_space_id if qdrant is not None else None,
+        current_vectors=current_vectors,
+    )
     manifest = prepared.manifest
     listed = manifest.get("users")
     users = [user for user in listed if isinstance(user, str)] if isinstance(listed, list) else []
@@ -1075,45 +1314,95 @@ async def run_restore(
     # and a rollback from any later point puts the previous data back.
     swapped = False
     graph_rebuild: tuple[str, ...] = ()
+    previous_vectors: Path | None = None
+    restored_nodes: dict[str, list[dict[str, object]]] = {}
+    protective: dict[str, list[dict[str, object]]] | None = None
+    replaced_users: list[str] = []
+    vectors_kept = False
     try:
-        release = await quiesce()
-        try:
-            swapped = True
-            await asyncio.to_thread(swap_in, prepared)
-        finally:
-            release()
+        if remote:
+            export = manifest.get("export")
+            sha256 = str(export.get("sha256")) if isinstance(export, Mapping) else ""
+            restored_nodes = await asyncio.to_thread(read_export, source.path / EXPORT_PATH, sha256)
+        opened = qdrant.client() if remote and qdrant is not None else _no_client()
+    except BaseException:
+        discard_prepared(prepared)
+        raise
+    try:
+        async with opened as vectors:
+            try:
+                if remote:
+                    assert qdrant is not None
+                    replaced_users = sorted({*qdrant.current_users, *users, *restored_nodes})
+                    protective = await asyncio.to_thread(_export_nodes, vectors, replaced_users)
+                    previous_vectors = prepared.previous.with_name(
+                        prepared.previous.name.removesuffix(PREVIOUS_SUFFIX)
+                        + PREVIOUS_VECTORS_SUFFIX
+                    )
+                    await asyncio.to_thread(_write_nodes, previous_vectors, protective)
+                release = await quiesce()
+                try:
+                    swapped = True
+                    await asyncio.to_thread(swap_in, prepared)
+                finally:
+                    release()
 
-        expected_vectors = _counts(manifest, "vector_store")
-        actual_vectors = await vector_store_counts(prepared.home)
-        compare("vector_store", expected_vectors or {}, actual_vectors, verification.mismatches)
-        verification.vector_store = "verified"
+                if remote:
+                    await asyncio.to_thread(_replace_nodes, vectors, replaced_users, restored_nodes)
+                    # Every node the backup holds was written back with its id.
+                    verification.vector_store = "verified"
+                else:
+                    expected_vectors = _counts(manifest, "vector_store")
+                    actual_vectors = await vector_store_counts(prepared.home)
+                    compare(
+                        "vector_store",
+                        expected_vectors or {},
+                        actual_vectors,
+                        verification.mismatches,
+                    )
+                    verification.vector_store = "verified"
 
-        if prepared.backend.kind == "remote_graph":
-            # A graph server is derived data the restore cannot replace: its
-            # projection of the restored facts is rebuilt from scratch.
-            verification.graph = "rebuild_scheduled"
-            graph_rebuild = tuple(users)
-        else:
-            graph_rebuild = await asyncio.to_thread(
-                _check_graph, prepared, verification, users, graph_probe
-            )
+                if prepared.backend.graph != "kuzu":
+                    # A graph server is derived data the restore cannot replace: its
+                    # projection of the restored facts is rebuilt from scratch.
+                    verification.graph = "rebuild_scheduled"
+                    graph_rebuild = tuple(users)
+                else:
+                    graph_rebuild = await asyncio.to_thread(
+                        _check_graph, prepared, verification, users, graph_probe
+                    )
 
-        if count_layers_after is not None:
-            actual_layers = await count_layers_after(users)
-            if actual_layers is None:
-                verification.layers_reason = "sdk_client_unavailable"
-            else:
-                compare(
-                    "layers",
-                    _counts(manifest, "layers") or {},
-                    actual_layers,
-                    verification.mismatches,
-                )
-                verification.layers = "verified"
-        else:
-            verification.layers_reason = "runtime_stopped"
-        if verification.mismatches:
-            raise BackupError("backup_restore_counts_mismatch")
+                if count_layers_after is not None:
+                    actual_layers = await count_layers_after(users)
+                    if actual_layers is None:
+                        verification.layers_reason = "sdk_client_unavailable"
+                    else:
+                        compare(
+                            "layers",
+                            _counts(manifest, "layers") or {},
+                            actual_layers,
+                            verification.mismatches,
+                        )
+                        verification.layers = "verified"
+                else:
+                    verification.layers_reason = "runtime_stopped"
+                if verification.mismatches:
+                    raise BackupError("backup_restore_counts_mismatch")
+            except BaseException:
+                if protective is not None and swapped:
+                    try:
+                        await asyncio.to_thread(_replace_nodes, vectors, replaced_users, protective)
+                    except Exception as rollback_error:  # noqa: BLE001 - files still roll back
+                        # The server's previous memories stay in the export
+                        # file beside the protective copy, for a manual retry.
+                        vectors_kept = True
+                        logger.error(
+                            "backup_restore_vectors_rollback_failed error_type=%s kept=%s",
+                            type(rollback_error).__name__,
+                            previous_vectors,
+                        )
+                        raise BackupError("backup_restore_rollback_failed") from rollback_error
+                raise
     except BaseException as error:
         if swapped:
             release = await quiesce()
@@ -1123,6 +1412,9 @@ async def run_restore(
                 release()
         else:
             discard_prepared(prepared)
+        if previous_vectors is not None and not vectors_kept:
+            # Nothing on the server changed, or it was written back.
+            previous_vectors.unlink(missing_ok=True)
         if isinstance(error, BackupError) or not isinstance(error, Exception):
             raise
         from one_memory.sdk_migration_log import error_chain_text
@@ -1136,7 +1428,7 @@ async def run_restore(
 
     commit(prepared)
     if graph_rebuild and schedule_graph_rebuild is not None:
-        schedule_graph_rebuild(graph_rebuild, prepared.backend.kind == "remote_graph")
+        schedule_graph_rebuild(graph_rebuild, prepared.backend.graph != "kuzu")
     return RestoreResult(
         path=source.path,
         previous=prepared.previous,
@@ -1147,6 +1439,7 @@ async def run_restore(
         graph_rebuild_users=graph_rebuild,
         source_schema_version=_schema_version(prepared.home / DATABASE_NAME),
         backend=prepared.backend,
+        previous_vectors=previous_vectors,
     )
 
 

@@ -34,6 +34,7 @@ const CODES: readonly ProbeCode[] = [
   "structured_output_unsupported",
   "embedding_model_required",
   "embedding_unavailable",
+  "output_token_parameter_rejected",
 ];
 let inFlight = false;
 

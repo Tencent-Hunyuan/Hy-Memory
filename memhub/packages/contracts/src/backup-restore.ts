@@ -3,7 +3,7 @@
  *
  * A backup (`POST /api/v1/backup`) is a v2 directory with the memories: the
  * management database, every SDK file of the home, and on a Qdrant server an
- * export of the memories through the SDK. `GET /api/v1/backup/estimate`
+ * SDK export of the memories with their vectors, which a restore writes back. `GET /api/v1/backup/estimate`
  * reports its size first. Restore replaces the management database and the
  * memories. Core refuses it while a Runtime-owned Core is live, accepts only
  * managed sources under the One Memory Home `backups/` directory, verifies
@@ -94,6 +94,8 @@ export interface BackupRestoreResult {
   duration_ms?: number | null;
   /** `management_database_only_no_memories` for an old backup. */
   note?: string | null;
+  /** Onto Qdrant: the server's memories as they were before the restore. */
+  previous_vectors_path?: string | null;
 }
 
 export type BackupRestoreFailureCode =
@@ -106,7 +108,15 @@ export type BackupRestoreFailureCode =
   | "backup_restore_manifest_invalid"
   | "backup_restore_verify_failed"
   | "backup_restore_backend_mismatch"
+  /** Answered by a Core on hy-memory 2.0.15 or older. */
   | "backup_restore_remote_sdk_unsupported"
+  /** Onto Qdrant: what hy-memory 2.0.16's export/import cannot carry. */
+  | "backup_restore_qdrant_experiences_unsupported"
+  | "backup_restore_qdrant_retrieval_clauses_unsupported"
+  | "backup_restore_export_without_vectors"
+  | "backup_restore_qdrant_space_changed"
+  | "backup_restore_vector_client_unavailable"
+  | "backup_restore_import_failed"
   | "backup_restore_counts_mismatch"
   | "backup_restore_disk_space_insufficient"
   | "backup_restore_stage_failed"

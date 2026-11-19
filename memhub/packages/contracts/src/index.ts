@@ -341,12 +341,16 @@ export interface ModelProfile {
   max_concurrency: number;
   context_window: number | null;
   disable_thinking: boolean;
+  /** The field OpenAI-compatible requests carry the output-token ceiling in. */
+  output_token_parameter?: OutputTokenParameter;
   capabilities: ModelCapabilities;
   revision: number;
   is_active: boolean;
   created_at: string;
   updated_at: string;
 }
+
+export type OutputTokenParameter = "max_tokens" | "max_completion_tokens";
 
 export interface ModelProfileInput {
   creation_operation_id?: string;
@@ -363,6 +367,7 @@ export interface ModelProfileInput {
   max_concurrency?: number;
   context_window?: number | null;
   disable_thinking?: boolean;
+  output_token_parameter?: OutputTokenParameter;
 }
 
 export interface ModelCreationOperation {
@@ -392,6 +397,7 @@ export interface ModelProfilePatch {
   max_concurrency?: number;
   context_window?: number | null;
   disable_thinking?: boolean;
+  output_token_parameter?: OutputTokenParameter;
 }
 
 export type ProbeCode =
@@ -407,7 +413,8 @@ export type ProbeCode =
   | "invalid_response"
   | "structured_output_unsupported"
   | "embedding_model_required"
-  | "embedding_unavailable";
+  | "embedding_unavailable"
+  | "output_token_parameter_rejected";
 
 export interface ModelProbeResult {
   profile_id: string;

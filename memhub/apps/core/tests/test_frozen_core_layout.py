@@ -15,6 +15,8 @@ CORE_PACKAGES = [
     "neo4j",
     "qdrant_client",
     "portalocker",
+    "fastembed",
+    "tqdm",
     "onnxruntime",
     "tokenizers",
 ]

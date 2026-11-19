@@ -4,6 +4,7 @@ import json
 import logging
 import os
 import re
+import shutil
 import sqlite3
 import sys
 import time
@@ -20,7 +21,7 @@ from datetime import UTC, datetime, timedelta
 from functools import partial
 from pathlib import Path
 from typing import Any, Literal, cast
-from uuid import UUID
+from uuid import UUID, uuid4
 
 from fastapi import (
     Depends,
@@ -111,11 +112,14 @@ from one_memory.hy_runtime_config import (
     set_diagnostic_log_level,
 )
 from one_memory.hy_sdk_runtime import (
+    GRAPH_SYNC_HEADER,
+    MEMORY_UPDATE_EMBEDDING_FAILED,
     AmbiguousMemoryIdError,
     SdkClientHandle,
     close_all_shared_runtimes,
     hold_stores_offline,
     release_stores,
+    sdk_edit_embedding_failed,
     sdk_feature_defaults,
     sdk_relevance_floor,
 )
@@ -339,6 +343,7 @@ from one_memory.storage_backends import (
     ResolvedStorage,
     StorageBackends,
     StorageBackendStore,
+    embedding_scan_skip,
     embedding_switch_refusal,
 )
 from one_memory.strict_query import forbid_unknown_query_params
@@ -1680,7 +1685,11 @@ def create_app(
                 profiles=app.state.model_profile_store,
                 spaces=app.state.embedding_spaces,
                 secrets=app.state.secret_store,
-                backend=default_reembed_backend(runtime_settings.data_dir),
+                # Re-embeds the configured vector store: the home's Chroma,
+                # or this home's prefixed collections on a Qdrant server.
+                backend=default_reembed_backend(
+                    runtime_settings.data_dir, storage=lambda: _storage_resolved(app)
+                ),
                 drain_idle=embedding_writes_drained,
                 on_commit=after_embedding_commit,
                 quiesce_clients=quiesce_sdk_clients,
@@ -1688,13 +1697,15 @@ def create_app(
                 graph_enabled=lambda: _memory_mode(app) == "ultra",
                 worker_enabled=runtime_settings.embedding_switch_worker,
                 drain_timeout_s=runtime_settings.embedding_switch_drain_timeout_seconds,
-                # The SDK re-embeds Chroma and Kuzu only; on another store the
-                # switch is refused and the old Chroma files are never opened.
+                # The SDK re-embeds Chroma, Qdrant and Kuzu; a graph server in
+                # ultra is refused. The Chroma files of a store that was left
+                # are never opened.
                 storage_refusal=lambda: embedding_switch_refusal(
                     _storage_settings(app), mode=_memory_mode(app)
                 ),
                 chroma_is_live=lambda: _storage_settings(app).vector.provider == "chroma",
                 kuzu_is_live=lambda: _storage_settings(app).graph.provider == "kuzu",
+                scan_skip=lambda: embedding_scan_skip(_storage_settings(app)),
             )
             app.state.storage_backend_hooks = StorageBackendHooks(
                 store=app.state.storage_backends,
@@ -4484,12 +4495,14 @@ def create_app(
     async def update_sdk_memory(
         memory_id: str,
         request: SdkMemoryUpdateRequest,
+        response: Response,
     ) -> HySdkMemoryRecord:
         _check_memory_namespace(request.kind, request.variant)
         if request.task is not None and request.kind in {"chat", "fact"}:
             raise HTTPException(status_code=422, detail="memory_task_requires_experience")
         namespace = _namespace_kwargs(request.kind, request.variant)
         _refuse_write_during_embedding_switch(app)
+        graph_sync_failed = False
         try:
             async with app.state.sdk_write_coordinator.use_client() as client:
                 # `update` takes no user: read the memory first and refuse
@@ -4511,6 +4524,10 @@ def create_app(
                     if "not found" in str(result.get("error_message") or ""):
                         raise HTTPException(status_code=404, detail="memory_not_found")
                     raise HySdkError("hy_memory_update_rejected")
+                # hy-memory 2.0.16 (#439): a chat edit also updates the memory's
+                # graph node. The vector store holds the edit either way; a
+                # failed graph update is passed on, not turned into a failure.
+                graph_sync_failed = result.get("graph_sync_failed") is True
                 # The SDK names the namespace it wrote; read that one back.
                 if result.get("kind") in {"experience", "fact"}:
                     namespace = {"kind": result["kind"]}
@@ -4528,9 +4545,18 @@ def create_app(
             # The SDK refuses `task` for anything but an experience.
             raise HTTPException(status_code=422, detail="memory_task_requires_experience") from None
         except Exception as error:
+            if sdk_edit_embedding_failed(error):
+                # hy-memory 2.0.16 (#399): a Coding/Working edit whose new text
+                # cannot be embedded is refused and the stored memory is kept.
+                raise HTTPException(
+                    status_code=503, detail=MEMORY_UPDATE_EMBEDDING_FAILED
+                ) from None
             raise _sdk_http_error(error, "hy_memory_update_failed") from None
         if memory is None:
             raise HTTPException(status_code=404, detail="memory_not_found")
+        if graph_sync_failed:
+            logger.warning("memory_update_graph_sync_failed memory_id=%s", memory_id)
+            response.headers[GRAPH_SYNC_HEADER] = "failed"
         return memory
 
     @app.delete(
@@ -7572,6 +7598,57 @@ def _backup_hooks(app: FastAPI, *, manage_runtime: bool) -> BackupHooks:
         finally:
             await handle.close()
 
+    @asynccontextmanager
+    async def restore_vector_client() -> AsyncIterator[Any]:
+        """A client on the live space's Qdrant collections, over scratch local files.
+
+        Restoring onto Qdrant writes the server's memory collection through
+        the SDK (`delete_all`, `import_user_memories`). The client's own files
+        (Kuzu graph, caches) are a scratch directory and its graph is a Kuzu
+        file there even when the home uses a graph server, so neither the
+        restored graph nor a graph server is touched by its `delete_all`.
+        """
+        from one_memory.memory_backup import (
+            RESTORE_VECTOR_CLIENT_UNAVAILABLE,
+            BackupError,
+        )
+
+        storage = _storage_resolved(app)
+        if storage is None or storage.vector_provider != "qdrant":
+            raise BackupError(RESTORE_VECTOR_CLIENT_UNAVAILABLE)
+        vectors_only = replace(
+            storage,
+            graph_provider="kuzu",
+            graph_url=None,
+            graph_username=None,
+            graph_database=None,
+            graph_password=None,
+        )
+        scratch = settings.data_dir.resolve() / "hy-memory" / f".restore-vectors-{uuid4().hex}"
+        scratch.mkdir(mode=0o700, parents=True)
+        app.state.embedding_spaces.invalidate()
+        handle = ActiveProfileReadHandle(
+            profiles=_model_profile_store(app),
+            secrets=_secret_store(app),
+            data_dir=scratch,
+            memory_mode=lambda: "pro",
+            spaces=app.state.embedding_spaces,
+            storage=lambda: vectors_only,
+        )
+        try:
+            try:
+                client = await handle.client()
+            except Exception as error:  # noqa: BLE001 - reported with a stable code
+                logger.warning(
+                    "backup_restore_vector_client_unavailable error_type=%s",
+                    type(error).__name__,
+                )
+                raise BackupError(RESTORE_VECTOR_CLIENT_UNAVAILABLE) from error
+            yield client
+        finally:
+            await handle.close()
+            await asyncio.to_thread(shutil.rmtree, scratch, True)
+
     def schedule_graph_rebuild(users: tuple[str, ...], clear_first: bool) -> None:
         """Rebuild the graph from the restored memories after the next start."""
         app.state.evolve_state_store.set_graph_build(
@@ -7607,6 +7684,8 @@ def _backup_hooks(app: FastAPI, *, manage_runtime: bool) -> BackupHooks:
         schedule_graph_rebuild=schedule_graph_rebuild,
         after_restore=after_restore,
         runtime_build=__version__,
+        resolved_storage=lambda: _storage_resolved(app),
+        restore_vector_client=restore_vector_client,
     )
 
 

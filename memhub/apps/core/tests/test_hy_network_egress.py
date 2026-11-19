@@ -87,3 +87,20 @@ def test_no_ambient_remote_backend_survives_sdk_config(
         assert forbidden not in rendered
     assert config.vector_store.provider == "chroma"
     assert config.graph_store.provider == "kuzu"
+
+
+def test_no_ambient_postgres_business_store_survives_sdk_config(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    # hy-memory 2.0.16 reads MEMORY_BUSINESS_STORE / MEMORY_POSTGRES_DSN for an
+    # optional PostgreSQL Coding/Working store. MemHub keeps it in SQLite.
+    monkeypatch.setenv("MEMORY_BUSINESS_STORE", "postgres")
+    monkeypatch.setenv("MEMORY_POSTGRES_DSN", "postgresql://u:p@ambient.example/db")
+
+    config = build_sdk_config(_profile(), api_key=None, data_dir=tmp_path)
+
+    assert config.business_store.backend == "sqlite"
+    assert config.business_store.postgres_dsn is None
+    assert "ambient.example" not in repr(config).lower()
+    assert config.coding.db_path == str(tmp_path.resolve() / "hy-memory/governed-v2/coding.sqlite3")

@@ -873,3 +873,125 @@ def test_a_reconcile_reply_the_sdk_cannot_use_is_retried_then_failed_with_its_ca
 )
 def test_a_failed_sdk_write_keeps_only_the_sdks_stable_code(result, code) -> None:
     assert sdk_write_failure_code({"success": False, **result}) == code
+
+
+# --- hy-memory 2.0.16: a malformed embedding index mapping is not an outage (#437) ---
+
+
+def _sdk_embedder(tmp_path, transport: BackedOffModelTransport):
+    """The pinned SDK's own embedding service, through MemHub's transport."""
+    from hy_memory.core.embed_service import EmbedService
+
+    from one_memory.hy_sdk_runtime import build_sdk_config
+    from one_memory.model_profiles import ModelProfileSnapshot, ProviderKind
+
+    profile = ModelProfileSnapshot(
+        profile_id="p",
+        revision=1,
+        provider_kind=ProviderKind.OPENAI_COMPATIBLE,
+        base_url="https://models.example.com/v1",
+        model="chat",
+        embedding_provider_kind=ProviderKind.OPENAI_COMPATIBLE,
+        embedding_base_url="https://models.example.com/v1",
+        embedding_model="embedder",
+        embedding_dimensions=4,
+        timeout_seconds=30,
+        max_concurrency=1,
+        context_window=None,
+        has_api_key=True,
+    )
+    config = build_sdk_config(profile, api_key="sk-test", data_dir=tmp_path)
+    config.http_transport_factory = lambda: transport
+    config.embedder.retry_delay = 0.0
+    return EmbedService(config)
+
+
+def _embeddings(indices: list[int]) -> httpx.Response:
+    return httpx.Response(
+        200,
+        json={
+            "object": "list",
+            "model": "embedder",
+            "data": [
+                {"object": "embedding", "index": index, "embedding": [0.5, 0.5, 0.5, 0.5]}
+                for index in indices
+            ],
+            "usage": {"prompt_tokens": 1, "total_tokens": 1},
+        },
+    )
+
+
+def test_a_malformed_index_mapping_fails_its_write_once_and_pauses_nothing(tmp_path) -> None:
+    """A 200 whose `index` fields do not map onto the inputs is the request's answer.
+
+    hy-memory 2.0.16 refuses it once instead of retrying (#437): the provider
+    answers every retry the same way. The breaker saw a success, so nothing
+    pauses and no provider failure is charged; the job spends its own retries
+    (`retry_or_fail`), as a reply the SDK cannot use does.
+    """
+    backoff = ModelBackoff(clock=_Clock())
+    calls: list[str] = []
+
+    def provider(request: httpx.Request) -> httpx.Response:
+        calls.append(request.url.path)
+        return _embeddings([0, 0])
+
+    service = _sdk_embedder(
+        tmp_path,
+        BackedOffModelTransport(backoff, profile_id="p:1", inner=httpx.MockTransport(provider)),
+    )
+    with (
+        backoff.attempt() as attempt,
+        pytest.raises(ValueError, match="index mismatch") as raised,
+    ):
+        asyncio.run(service.embed_batch(["one", "two"], use_cache=False))
+    assert type(raised.value).__name__ == "EmbeddingIndexMappingError"
+    assert calls == ["/v1/embeddings"]
+    assert attempt.failure is None
+    assert backoff.allowance() is None and not backoff.paused()
+
+
+def test_an_embedding_outage_is_still_a_provider_failure(tmp_path) -> None:
+    """A 503 from the same endpoint keeps waiting for the provider, as before."""
+    backoff = ModelBackoff(clock=_Clock())
+    service = _sdk_embedder(
+        tmp_path,
+        BackedOffModelTransport(
+            backoff,
+            profile_id="p:1",
+            inner=httpx.MockTransport(lambda _request: httpx.Response(503)),
+        ),
+    )
+    service._embed_config.max_retries = 0
+    with (
+        backoff.attempt() as attempt,
+        pytest.raises(Exception),  # noqa: B017 - the SDK's provider error
+    ):
+        asyncio.run(service.embed_batch(["one"], use_cache=False))
+    assert attempt.failure == "model_server_error"
+    assert backoff.paused()
+
+
+def test_responses_without_indices_still_embed_in_order(tmp_path) -> None:
+    """OpenAI-compatible servers that omit `index` keep working (#437)."""
+    backoff = ModelBackoff(clock=_Clock())
+
+    def provider(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "object": "list",
+                "model": "embedder",
+                "data": [
+                    {"object": "embedding", "embedding": [1.0, 0.0, 0.0, 0.0]},
+                    {"object": "embedding", "embedding": [0.0, 1.0, 0.0, 0.0]},
+                ],
+            },
+        )
+
+    service = _sdk_embedder(
+        tmp_path,
+        BackedOffModelTransport(backoff, profile_id="p:1", inner=httpx.MockTransport(provider)),
+    )
+    vectors = asyncio.run(service.embed_batch(["one", "two"], use_cache=False))
+    assert vectors == [[1.0, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0]]

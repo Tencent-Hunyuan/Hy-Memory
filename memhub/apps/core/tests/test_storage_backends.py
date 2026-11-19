@@ -48,6 +48,7 @@ from one_memory.storage_backends import (
     VectorBackend,
     capabilities,
     custom_backends_configured,
+    embedding_scan_skip,
     embedding_switch_refusal,
     storage_kwargs,
 )
@@ -315,12 +316,22 @@ def test_capabilities_per_backend_and_mode() -> None:
     assert on_neo4j["graph_width_check"].state == "skipped"
     assert on_neo4j["embedding_space_scan"].state == "works"
     assert on_neo4j["upgrade_migration"].code == "upgrade_migration_skipped_custom_backend"
-    # Qdrant: the SDK cannot re-embed it (hy-memory 2.0.15), in any mode.
-    assert embedding_switch_refusal(qdrant, mode="lite") == "embedding_switch_backend_unsupported"
-    assert capabilities(qdrant, mode="pro")["embedding_space_scan"].state == "skipped"
-    # A backup exports Qdrant's memories; writing them back needs an SDK API.
+    # Qdrant: re-embedded by the SDK since hy-memory 2.0.16, so a switch and
+    # the stray-space scan work, outside ultra on a graph server too.
+    assert embedding_switch_refusal(qdrant, mode="lite") is None
+    assert embedding_switch_refusal(qdrant, mode="ultra") is None
+    assert embedding_scan_skip(qdrant) is None
+    assert capabilities(qdrant, mode="pro")["embedding_space_scan"].state == "works"
+    assert capabilities(qdrant, mode="pro")["embedding_switch"].state == "works"
+    # A graph server keeps one fixed-width index: ultra stays refused on Qdrant.
+    both = StorageBackends(graph=GraphBackend(**NEO4J), vector=VectorBackend(**QDRANT))
+    assert embedding_switch_refusal(both, mode="pro") is None
+    assert embedding_switch_refusal(both, mode="ultra") == "embedding_switch_backend_unsupported"
+    # A backup exports Qdrant's memories with their vectors, and a restore
+    # writes them back (`import_user_memories`); gaps are refused per backup.
     assert capabilities(qdrant, mode="pro")["backup"].state == "works"
-    assert capabilities(qdrant, mode="pro")["restore"].code == "backup_restore_remote_sdk_unsupported"
+    assert capabilities(qdrant, mode="pro")["restore"].state == "works"
+    assert capabilities(qdrant, mode="pro")["restore"].code is None
     assert capabilities(neo4j, mode="ultra")["restore"].state == "works"
 
 

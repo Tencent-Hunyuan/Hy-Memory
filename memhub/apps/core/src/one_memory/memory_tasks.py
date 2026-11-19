@@ -741,6 +741,7 @@ class MemoryTaskStore:
             context_window=profile.context_window,
             has_api_key=profile.has_configured_api_key or profile.has_api_key,
             disable_thinking=profile.disable_thinking,
+            output_token_parameter=profile.output_token_parameter,
         )
         task_id = str(uuid4())
         now = datetime.now(UTC).isoformat()
@@ -1220,6 +1221,7 @@ class MemoryTaskStore:
             context_window=profile.context_window,
             has_api_key=profile.has_configured_api_key or profile.has_api_key,
             disable_thinking=profile.disable_thinking,
+            output_token_parameter=profile.output_token_parameter,
         )
         now = datetime.now(UTC).isoformat()
         with self._connect(writing=True) as connection:

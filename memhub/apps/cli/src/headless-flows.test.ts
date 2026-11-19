@@ -448,6 +448,50 @@ describe("models add", () => {
     );
   });
 
+  it("passes output_token_parameter through and refuses an unknown value", async () => {
+    const configFile = path.join(directory, "model-otp.json");
+    await writeFile(
+      configFile,
+      JSON.stringify({
+        name: "Synthetic",
+        provider_kind: "openai_compatible",
+        model: "synthetic-model",
+        output_token_parameter: "max_completion_tokens",
+      }),
+    );
+    const result = await capturedRun([
+      "models",
+      "add",
+      "--config-file",
+      configFile,
+      "--json",
+    ]);
+    expect(result.code).toBe(0);
+    expect(transport.post.mock.calls[0][1]).toMatchObject({
+      output_token_parameter: "max_completion_tokens",
+    });
+    transport.post.mockClear();
+    await writeFile(
+      configFile,
+      JSON.stringify({
+        name: "Synthetic",
+        provider_kind: "openai_compatible",
+        model: "synthetic-model",
+        output_token_parameter: "max_output_tokens",
+      }),
+    );
+    const rejected = await capturedRun([
+      "models",
+      "add",
+      "--config-file",
+      configFile,
+      "--json",
+    ]);
+    expect(rejected.code).toBe(1);
+    expect(JSON.parse(rejected.stdout).code).toBe("model_config_invalid");
+    expect(transport.post).not.toHaveBeenCalled();
+  });
+
   it("refuses credentials embedded in the config file before contacting Core", async () => {
     const configFile = path.join(directory, "model.json");
     await writeFile(

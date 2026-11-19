@@ -23,6 +23,7 @@ from one_memory.model_profiles import (
     ModelProfileStore,
     ProviderKind,
     attach_disable_thinking,
+    output_token_field,
 )
 from one_memory.recall import _terms as _recall_terms
 from one_memory.secrets import SecretStore, SecretStoreUnavailableError
@@ -694,7 +695,7 @@ def _answer_request(
         "messages": messages,
         "stream": stream,
         "temperature": 0.1,
-        "max_tokens": 768,
+        output_token_field(profile): 768,
     }
     # Sent only where it is accepted. A gateway that refuses the parameter
     # answers the whole request with a 400, so asking for the schema anyway

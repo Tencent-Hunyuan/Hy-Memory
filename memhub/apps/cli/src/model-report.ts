@@ -20,6 +20,7 @@ interface SafeModelProfile {
   max_concurrency: number;
   context_window: number | null;
   disable_thinking: boolean;
+  output_token_parameter: "max_tokens" | "max_completion_tokens";
   capabilities: ModelProfile["capabilities"];
   revision: number;
   is_active: boolean;
@@ -129,6 +130,8 @@ function project(profile: ModelProfile): SafeModelProfile {
     max_concurrency: profile.max_concurrency,
     context_window: profile.context_window,
     disable_thinking: profile.disable_thinking,
+    // A Core before the option sent `max_tokens`.
+    output_token_parameter: profile.output_token_parameter ?? "max_tokens",
     capabilities: { ...profile.capabilities },
     revision: profile.revision,
     is_active: profile.is_active,

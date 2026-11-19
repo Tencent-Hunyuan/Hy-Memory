@@ -66,12 +66,31 @@ describe("model profile create request", () => {
       [{ context_window: 512 }, "context_window_invalid"],
       [{ embedding_dimensions: 0 }, "embedding_dimensions_invalid"],
       [{ disable_thinking: "yes" as never }, "disable_thinking_invalid"],
+      [
+        { output_token_parameter: "max_output_tokens" as never },
+        "output_token_parameter_invalid",
+      ],
     ];
     for (const [patch, code] of cases) {
       expect(() => buildModelProfileCreateRequest(input(patch), OP)).toThrow(
         code,
       );
     }
+  });
+
+  it("carries the profile's output-token field (#287)", () => {
+    const { body } = buildModelProfileCreateRequest(
+      input({ output_token_parameter: "max_completion_tokens" }),
+      OP,
+    );
+    expect(body.output_token_parameter).toBe("max_completion_tokens");
+    const patch = buildModelProfileUpdateRequest("setup-1", {
+      expected_revision: 2,
+      output_token_parameter: "max_completion_tokens",
+    });
+    expect(patch.body).toMatchObject({
+      output_token_parameter: "max_completion_tokens",
+    });
   });
 
   it("requires a well-formed creation operation id", () => {
@@ -206,6 +225,10 @@ describe("model profile update request", () => {
       [{ ...base, context_window: 512 }, "context_window_invalid"],
       [{ ...base, embedding_dimensions: 0 }, "embedding_dimensions_invalid"],
       [{ ...base, disable_thinking: "yes" }, "disable_thinking_invalid"],
+      [
+        { ...base, output_token_parameter: "max_output_tokens" },
+        "output_token_parameter_invalid",
+      ],
     ];
     for (const [patch, code] of cases) {
       expect(() => buildModelProfileUpdateRequest("setup-1", patch)).toThrow(

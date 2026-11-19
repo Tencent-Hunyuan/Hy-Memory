@@ -145,7 +145,14 @@ def test_memory_processing_reports_the_stranded_count_on_the_sdk_plane(tmp_path:
             # A fresh home starts on the legacy plane; the route reads the
             # authority per request, so this selects the SDK-plane branch.
             app.state.memory_authority = MemoryAuthority.SDK
-            db = app.state.sdk_memory_runtime.write_queue.database_path
+            queue = app.state.sdk_memory_runtime.write_queue
+            # The live drain's first tick runs `reclaim_expired`, which would
+            # turn the stranded rows below back into pending ones whenever it
+            # lands between the inserts and the request (about 1 run in 8).
+            # Stranded rows are exactly what this endpoint must report, so
+            # hold recovery off for the length of the request.
+            queue.reclaim_expired = lambda: 0
+            db = queue.database_path
             now = datetime.now(UTC)
             _add_row(db, job_id="live", seq=1, owner="w", expires_at=now + timedelta(hours=1))
             _add_row(db, job_id="orphan", seq=2, owner=None, expires_at=None)

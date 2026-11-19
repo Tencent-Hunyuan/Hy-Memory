@@ -70,11 +70,24 @@ def test_a_revoked_grant_is_not_a_missing_one(tmp_path) -> None:
     assert state is SourceAuthorizationState.REVOKED_GRANT
 
 
+def _rebuild(root: Path) -> None:
+    """Replace `root` with a new directory that cannot reuse its inode.
+
+    rmdir then mkdir lets ext4 hand the freed inode straight back, and Linux
+    has no birth time to tell them apart (see `access._changed_ns`), so the
+    replacement would be indistinguishable on CI. Creating it while the old
+    directory still exists guarantees a different inode on every platform.
+    """
+    retired = root.with_name(root.name + ".retired")
+    root.rename(retired)
+    root.mkdir()
+    retired.rmdir()
+
+
 def test_a_rebuilt_directory_is_not_a_moved_candidate(tmp_path) -> None:
     store, _database, home = build_store(tmp_path)
     root = _grant(store, home, "workbuddy")
-    root.rmdir()
-    root.mkdir()
+    _rebuild(root)
 
     state = store.authorization_state(user_id="local", source_id="workbuddy", candidate=root)
 
@@ -105,8 +118,7 @@ def test_a_grant_pointing_somewhere_else_is_a_moved_candidate(tmp_path) -> None:
 def test_a_grant_still_fails_closed_when_a_state_is_named(tmp_path) -> None:
     store, _database, home = build_store(tmp_path)
     root = _grant(store, home, "workbuddy")
-    root.rmdir()
-    root.mkdir()
+    _rebuild(root)
 
     # Naming the reason is not granting access: the read path still refuses,
     # and says so through the same code it always did.
