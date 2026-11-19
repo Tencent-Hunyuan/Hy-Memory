@@ -94,6 +94,9 @@ TOPN_FACTS = int(os.environ.get("HCM_TOPN_FACTS", "1"))
 BODY_MAX_CHARS = int(os.environ.get("HCM_BODY_CHARS", "900"))
 
 _HUNK = re.compile(r'^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@[ \t]*(.*)$', re.M)
+# hunk 头(整行)。_core_diff 逐 hunk 求差, 原因见那里的注释: 跨 hunk 合并 -/+ 行
+# 会让 _rev_lines 的按下标配对把两个不相干的改动配成一次"替换"。
+_HUNK_HDR = re.compile(r'(?m)^(@@[^\n]*)$')
 _SYM = re.compile(r'(?:func|def|class|function)\s+(?:\([^)]*\)\s*)?([A-Za-z_$][\w$]*)')
 # 从对话里认 agent 的"整段替换"写法(_patch_from_edits 用)。这是空 commit 轮次里
 # 常见的编辑形态: 一段 Python, 先 open(path) 读、再 s.replace(old, new)、最后写回。
@@ -827,19 +830,39 @@ class HyCodeMem:
         seq_add = {}      # seq -> 该版新增的行(strip 后)
         out = {}
         for seq, said, patch in rs:
-            core = self._core_diff(patch or "")
-            dels = [line[1:].strip() for line in core if line[:1] == "-" and line[1:].strip()]
-            adds = [line[1:].strip() for line in core if line[:1] == "+" and line[1:].strip()]
-            # 撤销: 本版删掉的行, 曾是之前哪几版加上的(先算再登记, 免得自己撞自己)
+            # 逐 hunk 配对: 删除与新增只在**同一个 hunk** 内配成替换对。
+            # 见 _core_diff 上的注释 —— 跨 hunk 按下标配对会造出并不存在的替换。
+            lines = []
+            dels = []
+            adds = []
+            for body in self._hunk_bodies(patch or ""):
+                core = self._core_diff_one(body)
+                h_dels = [line[1:].strip() for line in core
+                          if line[:1] == "-" and line[1:].strip()]
+                h_adds = [line[1:].strip() for line in core
+                          if line[:1] == "+" and line[1:].strip()]
+                dels.extend(h_dels)
+                adds.extend(h_adds)
+                k = min(len(h_dels), len(h_adds))
+                lines += [f"~ {h_dels[i]} → {h_adds[i]}" for i in range(k)]
+                lines += [f"- {x}" for x in h_dels[k:]]
+                lines += [f"+ {x}" for x in h_adds[k:]]
+            # 撤销: 本版删掉的行, 曾是之前哪几版加上的(先算再登记, 免得自己撞自己)。
+            # 整版合一算 —— 撤销是版本之间的关系, 与 hunk 无关。
             rev = sorted(s for s, a in seq_add.items() if s < seq and (set(dels) & a))
             seq_add[seq] = set(adds)
-            # 配对: 删和加数量相同的部分按位置配成替换对; 多出来的单列
-            k = min(len(dels), len(adds))
-            lines = [f"~ {dels[i]} → {adds[i]}" for i in range(k)]
-            lines += [f"- {x}" for x in dels[k:]]
-            lines += [f"+ {x}" for x in adds[k:]]
             out[seq] = (lines, rev)
         return out
+
+    @staticmethod
+    def _hunk_bodies(patch):
+        """把一版 patch 切成 hunk 体(含 `@@` 头行); 没有 hunk 头时整段算一个。"""
+        if not patch:
+            return []
+        parts = _HUNK_HDR.split(patch)
+        if len(parts) == 1:
+            return [patch]
+        return [parts[i] + parts[i + 1] for i in range(1, len(parts), 2)]
 
     def _core_diff(self, patch):
         """从一版的 patch 里抽出**真正变化的行对**(带 -/+ 前缀), 而不是只给新增行。
@@ -852,12 +875,24 @@ class HyCodeMem:
         为什么要压缩: agent 有时用"整函数替换"的写法, patch 就把整个函数删一遍再加一遍,
         而真正变的只有几处。整段装不进预算, 关键行会被窗口截掉, 比不给更糟。
         用 difflib 对 -/+ 两侧再求一次差, 只留下真正的判别信息。
+
+        ⚠️ **必须按 hunk 分别求差, 不能把整段 patch 的 -/+ 行合起来算一次。**
+        一轮改多处时 patch 有多个 hunk(_patch_from_edits 每个编辑动作一个 hunk,
+        observe 又把同一轮的多个 hunk 合进同一版)。全局求差后 `_rev_lines` 是按下标
+        配对的, 于是 hunk 1 多出来的新增行会被配给 hunk 2 的删除行, 渲染出
+        "`~ 另一个函数的旧行 → 本函数的新行`" 这种并不存在的替换 —— 那份 diff
+        会被未来 agent 当作事实。逐 hunk 求差后, 删除与新增只在本 hunk 内配对。
         """
-        if not patch:
-            return []
-        old = [line[1:] for line in patch.splitlines()
+        core = []
+        for body in self._hunk_bodies(patch or ""):
+            core.extend(self._core_diff_one(body))
+        return core
+
+    def _core_diff_one(self, body):
+        """单个 hunk 的 -/+ 求差; 见 _core_diff。"""
+        old = [line[1:] for line in body.splitlines()
                if line.startswith("-") and not line.startswith("---")]
-        new = [line[1:] for line in patch.splitlines()
+        new = [line[1:] for line in body.splitlines()
                if line.startswith("+") and not line.startswith("+++")]
         if not old:                      # 纯新增(新建函数), 没有可对照的旧版
             return ["+ " + x.strip() for x in new]
