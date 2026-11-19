@@ -302,7 +302,10 @@ class Merger:
         
         for mem in memories:
             content = self._get_content(mem)
-            content_hash = hash(content.strip().lower())
+            # A nullable "content" column can yield None, and callers may pass
+            # non-string scalars; .strip() on those raised AttributeError.
+            # Coerce to text so dedup treats them like the empty content.
+            content_hash = hash(str(content or "").strip().lower())
             
             if content_hash not in seen:
                 seen.add(content_hash)
