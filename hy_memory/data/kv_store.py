@@ -294,9 +294,13 @@ class KVStore:
             键值字典
         """
         result = {}
+        # A stored value may legitimately be None; get()'s default is also
+        # None, so use a private sentinel to tell "missing" from "present
+        # with value None" instead of dropping None-valued keys.
+        missing = object()
         for key in keys:
-            value = self.get(key)
-            if value is not None:
+            value = self.get(key, default=missing)
+            if value is not missing:
                 result[key] = value
         return result
     
