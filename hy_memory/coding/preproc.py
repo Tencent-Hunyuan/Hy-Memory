@@ -280,7 +280,11 @@ def keep_last_k_user_turns(
             user_turn_starts.append(idx)
 
     # 2) 决定窗口起点：保留最后 k 个 user-turn → 取倒数第 k 个起点
-    if len(user_turn_starts) > k:
+    # k == 0 makes -k == 0, which would select the first turn and keep
+    # everything; an explicit zero means "keep no turns".
+    if k <= 0:
+        window_start = len(messages)
+    elif len(user_turn_starts) > k:
         window_start = user_turn_starts[-k]
     else:
         window_start = 0
