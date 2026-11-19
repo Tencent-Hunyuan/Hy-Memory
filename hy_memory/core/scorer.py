@@ -6,7 +6,7 @@ Agent Memory - 记忆评分
 
 import math
 from typing import List, Optional
-from datetime import datetime
+from datetime import datetime, timezone
 
 from ..models import MemoryEntry, MemoryScore
 from ..config import RecallConfig
@@ -130,8 +130,19 @@ class MemoryScorer:
         event_time = self._get_event_time(entry)
         if event_time is None:
             return 0.5  # 默认中等分数
+
+        # score() defaults reference_time to a naive datetime.now(), but event
+        # times coming from history_store / embed_service may be timezone-aware.
+        # Subtracting naive from aware (or vice versa) raises TypeError and
+        # aborts scoring for that memory. Normalize: treat a naive value as UTC
+        # so both sides share a tz basis, without changing the decay formula.
+        if (reference_time.tzinfo is None) != (event_time.tzinfo is None):
+            if reference_time.tzinfo is None:
+                reference_time = reference_time.replace(tzinfo=timezone.utc)
+            else:
+                event_time = event_time.replace(tzinfo=timezone.utc)
         days_passed = (reference_time - event_time).days
-        
+
         if days_passed <= 0:
             return 1.0
         
