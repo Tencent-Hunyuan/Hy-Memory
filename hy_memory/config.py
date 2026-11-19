@@ -69,7 +69,7 @@ def _get_env_bool(key: str, default: bool) -> bool:
     value = os.getenv(key)
     if value is None:
         return default
-    return value.lower() in ("true", "1", "yes", "on")
+    return value.strip().lower() in ("true", "1", "yes", "on")
 
 
 def _default_data_dir() -> str:
@@ -661,10 +661,17 @@ class RecallConfig:
             raw_novel_floor_margin = os.getenv(
                 "MEMORY_HIERARCHY_BUNDLE_NOVEL_FLOOR_MARGIN", ""
             ).strip()
-            self.hierarchy_bundle_novel_floor_margin = (
-                float(raw_novel_floor_margin)
-                if raw_novel_floor_margin else None
-            )
+            # A bare float() here would raise ValueError on a malformed env
+            # value and prevent the whole client from starting up. Other
+            # numeric fields tolerate bad values; do the same here by leaving
+            # the optional field unset.
+            try:
+                self.hierarchy_bundle_novel_floor_margin = (
+                    float(raw_novel_floor_margin)
+                    if raw_novel_floor_margin else None
+                )
+            except ValueError:
+                self.hierarchy_bundle_novel_floor_margin = None
         if self.multi_seed_bundle_enabled is None:
             self.multi_seed_bundle_enabled = _get_env_bool(
                 "MEMORY_MULTI_SEED_BUNDLE_ENABLED", False
