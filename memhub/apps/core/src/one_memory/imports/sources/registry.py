@@ -14,6 +14,11 @@ from one_memory.imports.host_packages import (
     polling_live_sync_capabilities,
     with_recall_install_target,
 )
+from one_memory.imports.sources.antigravity_source import (
+    ANTIGRAVITY_DESCRIPTOR,
+    APP_DATA_DIRS,
+    create_antigravity_adapter,
+)
 from one_memory.imports.sources.claude_code import (
     CLAUDE_CODE_DESCRIPTOR,
     create_claude_code_adapter,
@@ -281,6 +286,21 @@ def build_source_catalog(
                 polling_live_sync_capabilities(verification=VerificationLevel.FIXTURE_ONLY)
             ),
         ),
+        SourceRegistration(
+            descriptor=ANTIGRAVITY_DESCRIPTOR,
+            # Antigravity documents three app data directories (App / CLI /
+            # IDE); each keeps conversations under brain/<conversationId>.
+            # Probe in the declared order rather than guessing one.
+            candidate=_antigravity_brain_root(home=home),
+            create_adapter=create_antigravity_adapter,
+            # Live sync is the hook-free file lane: the transcript.jsonl steps
+            # are read by the shared poller. There is no recall install target
+            # yet, so it is deliberately not declared, and no real Antigravity
+            # session has been replayed on this machine.
+            capabilities=polling_live_sync_capabilities(
+                verification=VerificationLevel.FIXTURE_ONLY
+            ),
+        ),
     )
     if import_root is not None:
         registrations += tuple(
@@ -495,3 +515,19 @@ def _cursor_data_root(
     from one_memory.imports.sources.cursor import cursor_default_root
 
     return cursor_default_root(home, platform=platform, environment=environment)
+
+
+def _antigravity_brain_root(*, home: Path) -> SourceRootCandidate:
+    """The brain root of whichever Antigravity variant is installed here.
+
+    Each variant keeps its conversations at ``<app_data_dir>/brain/<id>/
+    .system_generated/logs/transcript.jsonl``. Only one usually holds history.
+    The declared order wins, never mtime, so a leftover directory cannot
+    outrank the variant actually in use.
+    """
+    candidates = tuple(home / ".gemini" / name / "brain" for name in APP_DATA_DIRS)
+    existing = next((path for path in candidates if path.is_dir()), None)
+    return SourceRootCandidate(
+        path=existing if existing is not None else candidates[0],
+        kind=RootCandidateKind.DEFAULT,
+    )

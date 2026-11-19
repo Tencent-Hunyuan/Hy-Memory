@@ -5,6 +5,7 @@
 | 测试文件 | 等级 | 一句话说明 |
 | --- | --- | --- |
 | `test_anchor_invalid_rewind.py` | `contract` | Bug 2 real branch: an in-place same-length rewrite invalidates the anchor. |
+| `test_antigravity_capture.py` | `contract` | Antigravity steps: visible turns only, from the host's own brain tree. |
 | `test_architecture_layer_gate.py` | `contract` | A0-01: L0-L4 dependency-direction gate. |
 | `test_archive_detection.py` | `contract` | S4.1: what an uploaded export is, decided before anything parses it. |
 | `test_archive_extract.py` | `contract` | Unpacking an archive a stranger sent, onto this user's disk. |
