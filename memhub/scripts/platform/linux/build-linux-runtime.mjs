@@ -98,6 +98,11 @@ run(
   { ...releaseEnvironment, ONE_MEMORY_CORE_LAYOUT: "folder" },
 );
 run(
+  path.join("apps", "core", "dist", "one-memory-runtime", "one-memory"),
+  ["--bm25-assets-check"],
+  releaseEnvironment,
+);
+run(
   "pnpm",
   [
     "--filter",

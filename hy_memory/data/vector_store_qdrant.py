@@ -16,8 +16,10 @@ Agent Memory V2 - VectorStore (Qdrant)
 - 简化运维，后续可按需拆分
 """
 
+import asyncio
 import concurrent.futures
 import os
+import re
 import tempfile
 import stat
 import threading
@@ -145,6 +147,9 @@ class QdrantVectorStore(VectorStoreBase):
 
     _supports_retrieval_clauses = True
     _supports_narrow_episode_queries = True
+    _BM25_STATE_FIELD = "_hy_memory_bm25_state"
+    _BM25_STATE_INDEXED = "indexed"
+    _BM25_STATE_EMPTY = "empty"
 
     def __init__(self, config: MemoryConfig):
         super().__init__(config)
@@ -156,6 +161,14 @@ class QdrantVectorStore(VectorStoreBase):
         # collection 是否含 sparse "bm25" 向量 + fastembed 可用 → 决定 keyword_search
         # 是否走真 BM25；旧的 dense-only collection 无 sparse 字段则降级。
         self._supports_fulltext = False
+        # Schema readiness is separate from reader readiness. During a maintenance
+        # backfill readers remain fail-closed, while any accidental same-process
+        # write must still populate the sparse vector once the IDF schema exists.
+        self._bm25_schema_ready = False
+        # HyMemoryClient routes this store through one internal event loop.
+        # This lock prevents duplicate upgrades within this store instance;
+        # cross-process exclusion remains the caller's maintenance-window duty.
+        self._bm25_upgrade_lock = asyncio.Lock()
         self._sparse_name = "bm25"
         self._tag_index_ready = False
         self._tag_index_init_lock = threading.Lock()
@@ -168,7 +181,7 @@ class QdrantVectorStore(VectorStoreBase):
         try:
             from qdrant_client import QdrantClient
             from qdrant_client.models import (
-                VectorParams, Distance,
+                VectorParams, Distance, Modifier,
                 PayloadSchemaType, TextIndexParams, TokenizerType,
             )
             try:
@@ -224,7 +237,7 @@ class QdrantVectorStore(VectorStoreBase):
                 )
                 if enable_sparse:
                     create_kwargs["sparse_vectors_config"] = {
-                        self._sparse_name: SparseVectorParams()
+                        self._sparse_name: SparseVectorParams(modifier=Modifier.IDF)
                     }
                     created_with_sparse = True
                 self._client.create_collection(**create_kwargs)
@@ -295,31 +308,524 @@ class QdrantVectorStore(VectorStoreBase):
                                 field_name, exc,
                             )
 
-            # 探测该 collection 是否含 sparse "bm25" 向量（兼容旧 dense-only collection）
-            has_sparse = created_with_sparse
-            if not has_sparse:
-                try:
-                    info = self._client.get_collection(self._collection_name)
-                    sp = getattr(getattr(info, "config", None), "params", None)
-                    sparse_cfg = getattr(sp, "sparse_vectors", None) if sp else None
-                    has_sparse = bool(sparse_cfg) and self._sparse_name in sparse_cfg
-                except Exception as e:
-                    logger.debug(f"[qdrant] sparse probe failed: {e}")
-                    has_sparse = False
-            return has_sparse
+            return self._inspect_bm25_state_sync()
 
         try:
-            has_sparse = await _run_in_vdb_pool(_ensure_collection)
+            sparse_state = await _run_in_vdb_pool(_ensure_collection)
         except BaseException:
             client, self._client = self._client, None
             if client is not None:
                 await _run_in_vdb_pool(client.close)
             raise
-        self._supports_fulltext = bool(has_sparse and bm25_fastembed.is_available())
+        self._bm25_schema_ready = bool(
+            sparse_state["has_sparse_schema"]
+            and sparse_state["schema_modifier"] == "idf"
+        )
+        self._supports_fulltext = bool(
+            sparse_state["state"] == "ready" and bm25_fastembed.is_available()
+        )
         logger.info(
             f"[qdrant] fulltext(BM25 sparse)={'on' if self._supports_fulltext else 'off'}"
         )
+        if sparse_state["state"] != "ready" and enable_sparse:
+            logger.warning(
+                "[qdrant] BM25 sparse upgrade required: collection=%s reason=%s "
+                "eligible=%s sparse=%s",
+                self._collection_name,
+                sparse_state["reason"],
+                sparse_state["eligible_points"],
+                sparse_state["sparse_points"],
+            )
         logger.debug(f"VectorStore initialized (Qdrant sync client), collection={self._collection_name}")
+
+    @staticmethod
+    def _modifier_value(value: Any) -> str | None:
+        if value is None:
+            return None
+        normalized = getattr(value, "value", value)
+        return str(normalized).strip().lower()
+
+    @staticmethod
+    def _supports_vector_schema_api(version: str | None) -> bool:
+        if not version:
+            return False
+        match = re.fullmatch(r"v?(\d+)\.(\d+)(?:\.\d+)?", version.strip())
+        if match is None:
+            return False
+        parts = (int(match.group(1)), int(match.group(2)))
+        return parts >= (1, 18)
+
+    def _inspect_bm25_state_sync(self) -> Dict[str, Any]:
+        """Inspect schema and point coverage without changing Qdrant."""
+        from qdrant_client.models import (
+            FieldCondition,
+            Filter,
+            HasVectorCondition,
+            MatchValue,
+        )
+
+        info = self._client.get_collection(self._collection_name)
+        params = getattr(getattr(info, "config", None), "params", None)
+        sparse_config = getattr(params, "sparse_vectors", None) if params else None
+        sparse_entry = (
+            sparse_config.get(self._sparse_name)
+            if isinstance(sparse_config, dict)
+            else None
+        )
+        modifier = self._modifier_value(getattr(sparse_entry, "modifier", None))
+        has_schema = sparse_entry is not None
+        try:
+            server_version = str(self._client.info().version)
+        except Exception as exc:
+            logger.debug("[qdrant] server version probe failed: %s", exc)
+            server_version = None
+
+        non_raw = [
+            FieldCondition(
+                key="layer",
+                match=MatchValue(value=MemoryLayer.L1_RAW.value),
+            )
+        ]
+        eligible = int(
+            self._client.count(
+                collection_name=self._collection_name,
+                count_filter=Filter(must_not=non_raw),
+                exact=True,
+            ).count
+        )
+        sparse_points = 0
+        empty_points = 0
+        if has_schema:
+            sparse_points = int(
+                self._client.count(
+                    collection_name=self._collection_name,
+                    count_filter=Filter(
+                        must=[
+                            HasVectorCondition(has_vector=self._sparse_name),
+                            FieldCondition(
+                                key=self._BM25_STATE_FIELD,
+                                match=MatchValue(value=self._BM25_STATE_INDEXED),
+                            ),
+                        ],
+                        must_not=non_raw,
+                    ),
+                    exact=True,
+                ).count
+            )
+            empty_points = int(
+                self._client.count(
+                    collection_name=self._collection_name,
+                    count_filter=Filter(
+                        must=[
+                            FieldCondition(
+                                key=self._BM25_STATE_FIELD,
+                                match=MatchValue(value=self._BM25_STATE_EMPTY),
+                            )
+                        ],
+                        must_not=[
+                            *non_raw,
+                            HasVectorCondition(has_vector=self._sparse_name),
+                        ],
+                    ),
+                    exact=True,
+                ).count
+            )
+
+        if not has_schema:
+            reason = "sparse_schema_missing"
+        elif modifier != "idf":
+            reason = "sparse_modifier_not_idf"
+        elif sparse_points + empty_points != eligible:
+            reason = "sparse_vectors_missing"
+        else:
+            reason = "ready"
+        return {
+            "schema_version": 1,
+            "product": "hy-memory-qdrant-bm25-upgrade",
+            "provider": "qdrant",
+            "collection_name": self._collection_name,
+            "state": "ready" if reason == "ready" else "upgrade_required",
+            "reason": reason,
+            "has_sparse_schema": has_schema,
+            "schema_modifier": modifier,
+            "eligible_points": eligible,
+            "sparse_points": sparse_points,
+            "empty_points": empty_points,
+            "covered_points": sparse_points + empty_points,
+            "missing_points": max(
+                0,
+                eligible - sparse_points - empty_points,
+            ),
+            "server_version": server_version,
+            "can_upgrade": (
+                hasattr(self._client, "update_vectors")
+                and hasattr(self._client, "create_vector_name")
+                and (
+                    (
+                        getattr(self, "_is_local", False)
+                        and hasattr(self._client, "update_collection")
+                    )
+                    or hasattr(self._client, "delete_vector_name")
+                )
+            )
+            and self._supports_vector_schema_api(server_version),
+        }
+
+    async def plan_bm25_upgrade(self) -> Dict[str, Any]:
+        """Return the explicit maintenance plan for this Qdrant collection."""
+        from ..pipelines._retrieval import bm25_fastembed
+
+        state = await _run_in_vdb_pool(self._inspect_bm25_state_sync)
+        if not bm25_fastembed.package_available():
+            return {
+                **state,
+                "state": "blocked",
+                "reason": "fastembed_unavailable",
+                "can_upgrade": False,
+            }
+        if state["state"] != "ready" and not state["can_upgrade"]:
+            return {
+                **state,
+                "state": "blocked",
+                "reason": "qdrant_vector_schema_api_unavailable",
+            }
+        return state
+
+    async def upgrade_bm25(
+        self,
+        *,
+        writers_stopped: bool,
+        batch_size: int = 256,
+    ) -> Dict[str, Any]:
+        async with self._bm25_upgrade_lock:
+            return await self._upgrade_bm25_locked(
+                writers_stopped=writers_stopped,
+                batch_size=batch_size,
+            )
+
+    async def _upgrade_bm25_locked(
+        self,
+        *,
+        writers_stopped: bool,
+        batch_size: int,
+    ) -> Dict[str, Any]:
+        """Add/backfill native Qdrant BM25 while preserving dense data.
+
+        This is an explicit maintenance operation. The caller must stop every
+        writer before invoking it. Repeating it is safe: an already complete
+        collection returns immediately, and a partial backfill is overwritten
+        with the same deterministic sparse vectors.
+        """
+        if not writers_stopped:
+            raise ValueError("writers_stopped must be true for Qdrant BM25 upgrade")
+        if batch_size < 1 or batch_size > 10_000:
+            raise ValueError("batch_size must be between 1 and 10000")
+
+        from ..pipelines._retrieval import bm25_fastembed
+        from qdrant_client.models import (
+            DeleteVectors,
+            DeleteVectorsOperation,
+            Modifier,
+            PointVectors,
+            SetPayload,
+            SetPayloadOperation,
+            SparseVector,
+            SparseVectorConfig,
+            SparseVectorNameConfig,
+            SparseVectorParams,
+            UpdateVectors,
+            UpdateVectorsOperation,
+        )
+
+        plan = await self.plan_bm25_upgrade()
+        if plan["state"] == "ready":
+            self._bm25_schema_ready = True
+            self._supports_fulltext = True
+            return {
+                **plan,
+                "success": True,
+                "changed": False,
+                "processed_points": 0,
+                "scanned_points": 0,
+                "encoded_points": 0,
+                "verified_points": plan["sparse_points"],
+                "failed_points": 0,
+                "schema_ready": True,
+                "reader_enabled": True,
+                "resumable": False,
+            }
+        if plan["state"] == "blocked":
+            return {
+                **plan,
+                "success": False,
+                "changed": False,
+                "processed_points": 0,
+                "scanned_points": 0,
+                "encoded_points": 0,
+                "verified_points": plan["sparse_points"],
+                "failed_points": 0,
+                "schema_ready": bool(self._bm25_schema_ready),
+                "reader_enabled": False,
+                "resumable": bool(plan.get("can_upgrade")),
+            }
+
+        if not bm25_fastembed.is_available():
+            return {
+                **plan,
+                "state": "blocked",
+                "reason": "bm25_model_unavailable",
+                "success": False,
+                "changed": False,
+                "processed_points": 0,
+                "scanned_points": 0,
+                "encoded_points": 0,
+                "verified_points": plan["sparse_points"],
+                "failed_points": 0,
+                "schema_ready": bool(self._bm25_schema_ready),
+                "reader_enabled": False,
+                "resumable": True,
+            }
+
+        schema_changed = False
+        processed = 0
+        scanned = 0
+        encoded_count = 0
+        skipped_raw = 0
+        skipped_empty = 0
+        skipped_unencodable = 0
+        zero_token_points = 0
+        self._supports_fulltext = False
+
+        def _prepare_schema() -> None:
+            nonlocal schema_changed
+            if plan["has_sparse_schema"] and plan["schema_modifier"] != "idf":
+                if getattr(self, "_is_local", False):
+                    self._client.update_collection(
+                        collection_name=self._collection_name,
+                        sparse_vectors_config={
+                            self._sparse_name: SparseVectorParams(
+                                modifier=Modifier.IDF
+                            )
+                        },
+                    )
+                else:
+                    self._client.delete_vector_name(
+                        collection_name=self._collection_name,
+                        vector_name=self._sparse_name,
+                        wait=True,
+                    )
+                schema_changed = True
+            if not plan["has_sparse_schema"] or (
+                plan["schema_modifier"] != "idf"
+                and not getattr(self, "_is_local", False)
+            ):
+                self._client.create_vector_name(
+                    collection_name=self._collection_name,
+                    vector_name=self._sparse_name,
+                    vector_name_config=SparseVectorNameConfig(
+                        sparse=SparseVectorConfig(modifier=Modifier.IDF)
+                    ),
+                    wait=True,
+                )
+                schema_changed = True
+
+        try:
+            await _run_in_vdb_pool(_prepare_schema)
+            self._bm25_schema_ready = True
+            offset = None
+            while True:
+
+                def _scroll():
+                    return self._client.scroll(
+                        collection_name=self._collection_name,
+                        limit=batch_size,
+                        offset=offset,
+                        with_payload=True,
+                        with_vectors=False,
+                    )
+
+                records, next_offset = await _run_in_vdb_pool(_scroll)
+                scanned += len(records)
+                eligible_records = []
+                empty_records = []
+                texts = []
+                for record in records:
+                    payload = dict(getattr(record, "payload", None) or {})
+                    if not self._bm25_eligible(payload):
+                        skipped_raw += 1
+                        continue
+                    text = self._bm25_text(payload)
+                    if not text:
+                        skipped_empty += 1
+                        empty_records.append(record)
+                        continue
+                    eligible_records.append(record)
+                    texts.append(text)
+
+                encoded = bm25_fastembed.encode_docs(texts)
+                if len(encoded) != len(eligible_records):
+                    failed = await self.plan_bm25_upgrade()
+                    return {
+                        **failed,
+                        "success": False,
+                        "changed": schema_changed or processed > 0,
+                        "reason": "bm25_encoding_failed",
+                        "processed_points": processed,
+                        "scanned_points": scanned,
+                        "encoded_points": encoded_count,
+                        "verified_points": failed["sparse_points"],
+                        "failed_points": len(eligible_records),
+                        "skipped_raw": skipped_raw,
+                        "skipped_empty": skipped_empty,
+                        "skipped_unencodable": skipped_unencodable,
+                        "zero_token_points": zero_token_points,
+                        "error_type": "BM25EncodingLengthMismatch",
+                        "schema_ready": True,
+                        "reader_enabled": False,
+                        "resumable": True,
+                    }
+                encodable = [
+                    (record, item)
+                    for record, item in zip(eligible_records, encoded)
+                    if item is not None
+                ]
+                zero_token_points += len(encoded) - len(encodable)
+                encoded_count += len(encodable)
+
+                vector_updates = [
+                    PointVectors(
+                        id=record.id,
+                        vector={
+                            self._sparse_name: SparseVector(
+                                indices=item[0],
+                                values=item[1],
+                            )
+                        },
+                    )
+                    for record, item in encodable
+                ]
+                indexed_ids = [record.id for record, _item in encodable]
+                empty_ids = [record.id for record in empty_records]
+                empty_ids.extend(
+                    record.id
+                    for record, item in zip(eligible_records, encoded)
+                    if item is None
+                )
+                operations = []
+                if vector_updates:
+                    operations.append(
+                        UpdateVectorsOperation(
+                            update_vectors=UpdateVectors(
+                                points=vector_updates,
+                            )
+                        )
+                    )
+                if empty_ids:
+                    operations.append(
+                        DeleteVectorsOperation(
+                            delete_vectors=DeleteVectors(
+                                points=empty_ids,
+                                vector=[self._sparse_name],
+                            )
+                        )
+                    )
+                if indexed_ids:
+                    operations.append(
+                        SetPayloadOperation(
+                            set_payload=SetPayload(
+                                payload={
+                                    self._BM25_STATE_FIELD: (
+                                        self._BM25_STATE_INDEXED
+                                    )
+                                },
+                                points=indexed_ids,
+                            )
+                        )
+                    )
+                if empty_ids:
+                    operations.append(
+                        SetPayloadOperation(
+                            set_payload=SetPayload(
+                                payload={
+                                    self._BM25_STATE_FIELD: (
+                                        self._BM25_STATE_EMPTY
+                                    )
+                                },
+                                points=empty_ids,
+                            )
+                        )
+                    )
+                if operations:
+
+                    def _update() -> None:
+                        self._client.batch_update_points(
+                            collection_name=self._collection_name,
+                            update_operations=operations,
+                            wait=True,
+                        )
+
+                    await _run_in_vdb_pool(_update)
+                    processed += len(indexed_ids) + len(empty_ids)
+
+                if next_offset is None:
+                    break
+                offset = next_offset
+
+            final = await self.plan_bm25_upgrade()
+            success = final["state"] == "ready"
+            self._supports_fulltext = success
+            return {
+                **final,
+                "success": success,
+                "changed": schema_changed or processed > 0,
+                "processed_points": processed,
+                "scanned_points": scanned,
+                "encoded_points": encoded_count,
+                "verified_points": final["sparse_points"],
+                "failed_points": 0 if success else final["missing_points"],
+                "skipped_raw": skipped_raw,
+                "skipped_empty": skipped_empty,
+                "skipped_unencodable": skipped_unencodable,
+                "zero_token_points": zero_token_points,
+                "schema_ready": bool(self._bm25_schema_ready),
+                "reader_enabled": success,
+                "resumable": not success,
+            }
+        except Exception as exc:
+            logger.exception(
+                "[qdrant] BM25 sparse upgrade failed: collection=%s",
+                self._collection_name,
+            )
+            try:
+                failed = await self.plan_bm25_upgrade()
+            except Exception:
+                failed = {
+                    "schema_version": 1,
+                    "product": "hy-memory-qdrant-bm25-upgrade",
+                    "provider": "qdrant",
+                    "collection_name": self._collection_name,
+                    "state": "blocked",
+                    "can_upgrade": False,
+                }
+            return {
+                **failed,
+                "success": False,
+                "changed": schema_changed or processed > 0,
+                "reason": "bm25_upgrade_failed",
+                "error_type": type(exc).__name__,
+                "processed_points": processed,
+                "scanned_points": scanned,
+                "encoded_points": encoded_count,
+                "verified_points": failed.get("sparse_points", 0),
+                "failed_points": failed.get("missing_points", 0),
+                "skipped_raw": skipped_raw,
+                "skipped_empty": skipped_empty,
+                "skipped_unencodable": skipped_unencodable,
+                "zero_token_points": zero_token_points,
+                "schema_ready": bool(self._bm25_schema_ready),
+                "reader_enabled": False,
+                "resumable": True,
+            }
 
     # ================================================================
     # 写入
@@ -337,13 +843,27 @@ class QdrantVectorStore(VectorStoreBase):
             return vec.get("") or vec.get("dense")
         return vec
 
+    @staticmethod
+    def _bm25_eligible(payload: Dict[str, Any]) -> bool:
+        """Every non-raw point must carry an explicit native sparse state."""
+        return payload.get("layer") != MemoryLayer.L1_RAW.value
+
+    @staticmethod
+    def _bm25_text(payload: Dict[str, Any]) -> str:
+        """Return the normalized lexical text used by every BM25 write path."""
+        text = str(payload.get("search_text") or "").strip()
+        if text:
+            return text
+        return str(payload.get("content") or "").strip()
+
     def _build_vector_field(self, payload: Dict[str, Any], embedding: List[float]):
         """
         构造 PointStruct.vector 字段。
 
-        - fulltext 关闭：返回纯 dense list（向后兼容旧 dense-only collection）
-        - fulltext 开启：返回 {"": dense, "bm25": SparseVector(...)}，sparse 由
-          fastembed BM25 对 search_text 编码而来；编码失败则回落纯 dense。
+        - sparse schema 未就绪：返回纯 dense list（兼容旧 dense-only collection）
+        - sparse schema 已就绪：返回 {"": dense, "bm25": SparseVector(...)}，sparse 由
+          FastEmbed BM25 对 search_text 编码；空/零 token 文本只写 SDK 私有
+          payload coverage 状态，不构造 sparse。
 
         跳过 L1_RAW：原始对话层不被任何召回路径消费（reader 召回 L0/L2/L3/L4，
         提取后又降 SHADOW，System2 也只取 L2/L4），给它编 sparse 纯浪费写入/存储。
@@ -351,17 +871,19 @@ class QdrantVectorStore(VectorStoreBase):
         # 防御：若上游误传了命名多向量 dict（如 clone 复制了读路径的 embedding），
         # 先抽出 dense，避免再包一层生成非法嵌套结构。
         embedding = self._dense_of(embedding)
-        if not self._supports_fulltext:
+        if not self._bm25_schema_ready:
             return embedding
         if payload.get("layer") == MemoryLayer.L1_RAW.value:
             return embedding
         from ..pipelines._retrieval import bm25_fastembed
         from qdrant_client.models import SparseVector
 
-        text = payload.get("search_text") or payload.get("content") or ""
+        text = self._bm25_text(payload)
         sp = bm25_fastembed.encode_doc(text) if text else None
         if not sp:
+            payload[self._BM25_STATE_FIELD] = self._BM25_STATE_EMPTY
             return embedding
+        payload[self._BM25_STATE_FIELD] = self._BM25_STATE_INDEXED
         indices, values = sp
         return {"": embedding, self._sparse_name: SparseVector(indices=indices, values=values)}
 
@@ -479,25 +1001,27 @@ class QdrantVectorStore(VectorStoreBase):
                 )
 
             sparse_vector = None
-            delete_sparse = False
-            if lexical_changed and self._supports_fulltext:
+            empty_lexical = False
+            if lexical_changed and self._bm25_schema_ready:
                 from ..pipelines._retrieval import bm25_fastembed
                 encoded = bm25_fastembed.encode_doc(updates["search_text"])
                 if encoded:
                     sparse_vector = SparseVector(
                         indices=encoded[0], values=encoded[1],
                     )
+                    updates[self._BM25_STATE_FIELD] = (
+                        self._BM25_STATE_INDEXED
+                    )
                 else:
-                    # Empty/unencodable replacement text must not leave the old
-                    # document vector searchable in the sparse channel.
-                    delete_sparse = True
+                    updates[self._BM25_STATE_FIELD] = self._BM25_STATE_EMPTY
+                    empty_lexical = True
 
             def _update():
                 # Payload + vector changes belong to one logical memory update.
                 # Qdrant's batch endpoint applies both operations in one HTTP
                 # request, avoiding two serial network round trips per UPDATE.
                 vector_update: Any = None
-                if self._supports_fulltext:
+                if self._bm25_schema_ready:
                     named_vectors: Dict[str, Any] = {}
                     if new_embedding is not None:
                         named_vectors[""] = new_embedding
@@ -518,11 +1042,10 @@ class QdrantVectorStore(VectorStoreBase):
                     operations.append(UpdateVectorsOperation(update_vectors=UpdateVectors(
                         points=[PointVectors(id=point_id, vector=vector_update)],
                     )))
-                if delete_sparse:
+                if empty_lexical:
                     operations.append(DeleteVectorsOperation(delete_vectors=DeleteVectors(
                         points=[point_id], vector=[self._sparse_name],
                     )))
-
                 if len(operations) > 1 and hasattr(
                     self._client, "batch_update_points"
                 ):
@@ -542,7 +1065,7 @@ class QdrantVectorStore(VectorStoreBase):
                         collection_name=self._collection_name,
                         points=[PointVectors(id=point_id, vector=vector_update)],
                     )
-                if delete_sparse:
+                if empty_lexical:
                     self._client.delete_vectors(
                         collection_name=self._collection_name,
                         points=[point_id],
@@ -614,37 +1137,38 @@ class QdrantVectorStore(VectorStoreBase):
                     updates.get("content", current.get("content", "")),
                     updates.get("tags", current.get("tags", [])),
                 )
-            if updates:
-                operations.append(SetPayloadOperation(set_payload=SetPayload(
-                    payload=updates, points=[point_id],
-                )))
             vector_update: Any = None
             named_vectors: Dict[str, Any] = {}
-            if self._supports_fulltext and new_embedding is not None:
+            if self._bm25_schema_ready and new_embedding is not None:
                 named_vectors[""] = new_embedding
             elif new_embedding is not None:
                 vector_update = new_embedding
-            delete_sparse = False
-            if lexical_changed and self._supports_fulltext:
+            if lexical_changed and self._bm25_schema_ready:
                 from ..pipelines._retrieval import bm25_fastembed
                 encoded = bm25_fastembed.encode_doc(updates["search_text"])
                 if encoded:
                     named_vectors[self._sparse_name] = SparseVector(
                         indices=encoded[0], values=encoded[1],
                     )
+                    updates[self._BM25_STATE_FIELD] = (
+                        self._BM25_STATE_INDEXED
+                    )
                 else:
-                    delete_sparse = True
+                    updates[self._BM25_STATE_FIELD] = self._BM25_STATE_EMPTY
+                    operations.append(DeleteVectorsOperation(delete_vectors=DeleteVectors(
+                        points=[point_id], vector=[self._sparse_name],
+                    )))
+            if updates:
+                operations.append(SetPayloadOperation(set_payload=SetPayload(
+                    payload=updates, points=[point_id],
+                )))
             if named_vectors:
                 vector_update = named_vectors
             if vector_update:
                 operations.append(UpdateVectorsOperation(update_vectors=UpdateVectors(
                     points=[PointVectors(id=point_id, vector=vector_update)],
                 )))
-            if delete_sparse:
-                operations.append(DeleteVectorsOperation(delete_vectors=DeleteVectors(
-                    points=[point_id], vector=[self._sparse_name],
-                )))
-            if updates or vector_update or delete_sparse:
+            if updates or vector_update:
                 accepted_ids.append(node_id)
 
         if not operations:
@@ -1107,7 +1631,10 @@ class QdrantVectorStore(VectorStoreBase):
         # 去匹配所有非 raw 层（见 #189）。注意这里在导入 qdrant_client
         # 之前短路，避免无 backend 依赖时也能正确返回。
         if layers and not allow_raw_layer:
-            _lv = [l.value if hasattr(l, 'value') else str(l) for l in layers]
+            _lv = [
+                layer.value if hasattr(layer, 'value') else str(layer)
+                for layer in layers
+            ]
             if all(v == MemoryLayer.L1_RAW.value for v in _lv):
                 logger.info(
                     f"[vector-store] list_by_user: user_ids={effective_uids} "
@@ -1589,9 +2116,10 @@ class QdrantVectorStore(VectorStoreBase):
                 self._warned_no_fulltext = True
                 logger.warning(
                     f"[qdrant] keyword_search degraded to empty: collection "
-                    f"{self._collection_name} has no sparse 'bm25' vector (or fastembed "
-                    f"missing). Recreate collection (auto-adds sparse) + re-upsert to "
-                    f"enable real BM25. pip install fastembed"
+                    f"{self._collection_name} is not BM25-ready (schema, coverage, "
+                    f"or FastEmbed unavailable). Inspect with "
+                    f"plan_qdrant_bm25_upgrade(); run upgrade_qdrant_bm25() only "
+                    f"during a stopped-writer maintenance window."
                 )
             return []
 

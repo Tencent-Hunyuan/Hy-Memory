@@ -46,10 +46,14 @@ class LoopWatchdog:
         self._reported_at = 0.0
         self.stalls: list[float] = []
         self.stall_stacks: list[tuple[str, ...]] = []
+        # The thread that beats is the loop's; its stack is the one a report
+        # must never drop, however many other threads are alive.
+        self._loop_thread: int | None = None
 
     def beat(self) -> None:
         """Called from the loop. Its silence is the signal."""
         self._beat = time.monotonic()
+        self._loop_thread = threading.get_ident()
 
     def start(self) -> None:
         if self._thread is not None:
@@ -80,7 +84,7 @@ class LoopWatchdog:
                 continue
             self._reported_at = now
             self.stalls.append(stalled_for)
-            self.stall_stacks.append(_safe_stacks_for_all_threads())
+            self.stall_stacks.append(_safe_stacks_for_all_threads(first=self._loop_thread))
             logger.warning(
                 "event loop blocked for %.1fs — nothing is being answered:\n%s",
                 stalled_for,
@@ -121,10 +125,15 @@ def _safe_stack_for_main_thread() -> tuple[str, ...]:
     return tuple(lines)
 
 
-def _safe_stacks_for_all_threads() -> tuple[str, ...]:
-    """Return bounded stack summaries without recording thread names."""
+def _safe_stacks_for_all_threads(*, first: int | None = None) -> tuple[str, ...]:
+    """Return bounded stack summaries without recording thread names.
+
+    At most 16 threads are kept, so the blocked loop's thread (`first`) leads:
+    ordered by ident alone, it was cut whenever enough other threads existed.
+    """
     lines: list[str] = []
-    for _ident, frame in sorted(sys._current_frames().items()):
+    frames = sorted(sys._current_frames().items(), key=lambda item: (item[0] != first, item[0]))
+    for _ident, frame in frames:
         stack: list[str] = []
         # Most specific frame first; append only complete frames so truncation
         # can never turn a valid location into free text.
