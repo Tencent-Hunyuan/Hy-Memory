@@ -244,7 +244,11 @@ class HyCodeMem:
         # 否则尾部标点会进入查询键，导致精确 branch 查询落空。
         f = [x.rstrip(".,;:!?") for x in _BR.findall(text)]
         f = [x for x in f if "/" in x and not x.endswith("/")]
-        return max(set(f), key=f.count) if f else ""
+        # Iterate the list, not a set: set order depends on PYTHONHASHSEED, so
+        # on a tie between equally frequent branches the winner varied across
+        # processes and precise branch lookups randomly missed. max() on the
+        # list is deterministic (first occurrence wins a tie).
+        return max(f, key=f.count) if f else ""
 
     def _get_said(self, text):
         """只取用户原话。assistant 的复述是模型自己编的, 原话才是事实。
