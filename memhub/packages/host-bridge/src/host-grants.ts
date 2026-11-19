@@ -124,12 +124,20 @@ export type HostGrantErrorCode =
 
 export class HostGrantError extends Error {
   readonly code: HostGrantErrorCode;
+  /** Structural, code-authored description of why validation failed.
+   *
+   * A field path with the expected constraint (for example
+   * `installations[0].allowedScopes[1]: not a valid scope`). Never store
+   * input: values the user wrote stay out of errors, the same boundary the
+   * constructor otherwise keeps. */
+  readonly reason?: string;
 
-  constructor(code: HostGrantErrorCode) {
+  constructor(code: HostGrantErrorCode, reason?: string) {
     // Never attach input, JSON parser errors, filesystem paths, or a raw cause.
-    super(code);
+    super(reason === undefined ? code : `${code}: ${reason}`);
     this.name = "HostGrantError";
     this.code = code;
+    this.reason = reason;
   }
 }
 
@@ -184,6 +192,14 @@ export class HostGrantStore {
   #storeId: string | undefined;
   #observedRevision = -1;
   #observedDigest: string | undefined;
+  #quarantineReason: string | undefined;
+
+  /** Why every grant operation fails closed, when the store on disk failed
+   * validation at `open`. `undefined` on a healthy store. The Runtime keeps
+   * serving with all hosts denied rather than crash-looping (#387). */
+  get quarantined(): string | undefined {
+    return this.#quarantineReason;
+  }
 
   private constructor(directory: string, options: HostGrantStoreOptions) {
     if (process.platform === "win32" || typeof process.getuid !== "function") {
@@ -231,19 +247,46 @@ export class HostGrantStore {
     });
   }
 
-  /** Normal startup: missing, unreadable, invalid, or old-format stores deny. */
+  /** Normal startup: an invalid store is quarantined, never a refusal.
+   *
+   * A store that does not parse used to reject this call, which the Runtime
+   * startup path awaits uncaught -- the service exited and the launcher
+   * restarts it, forever, while host grants are an optional capability
+   * (#387). The quarantined store starts and answers every operation with
+   * `host_grant_store_corrupt` (fail closed), so hosts are denied until the
+   * file is fixed or removed by hand. Unreadable, locked, or conflicting
+   * stores still refuse: only validated-broken data degrades. */
   static async open(
     directory: string,
     options: HostGrantStoreOptions = {},
   ): Promise<HostGrantStore> {
     return guarded(async () => {
       const store = new HostGrantStore(directory, options);
-      await store.#read();
-      return store;
+      try {
+        await store.#read();
+        return store;
+      } catch (error) {
+        if (
+          error instanceof HostGrantError &&
+          error.code === "host_grant_store_corrupt"
+        ) {
+          store.#quarantineReason =
+            error.reason ?? "the store on disk failed validation";
+          return store;
+        }
+        throw error;
+      }
     });
   }
 
+  #refuseQuarantined(): void {
+    if (this.#quarantineReason !== undefined) {
+      fail("host_grant_store_corrupt", this.#quarantineReason);
+    }
+  }
+
   async listInstallations(): Promise<readonly HostGrantReceipt[]> {
+    this.#refuseQuarantined();
     return guarded(async () =>
       Object.freeze((await this.#read()).installations.map(receipt)),
     );
@@ -252,6 +295,7 @@ export class HostGrantStore {
   async createInstallation(input: {
     hostId: string;
   }): Promise<IssuedHostCredential> {
+    this.#refuseQuarantined();
     if (!hasKeys(input, ["hostId"]) || !validHostId(input.hostId)) {
       fail("host_grant_invalid_input");
     }
@@ -286,6 +330,7 @@ export class HostGrantStore {
   async createPairing(input: {
     displayName: string;
   }): Promise<HostPairingReceipt> {
+    this.#refuseQuarantined();
     if (
       !hasKeys(input, ["displayName"]) ||
       !validDisplayName(input.displayName)
@@ -343,6 +388,7 @@ export class HostGrantStore {
 
   /** Atomically consumes a short code and returns the existing host credential once. */
   async exchangePairing(code: string): Promise<IssuedHostCredential> {
+    this.#refuseQuarantined();
     if (typeof code !== "string" || !/^\d{6}$/.test(code)) {
       fail("host_pairing_invalid");
     }
@@ -376,6 +422,7 @@ export class HostGrantStore {
 
   /** Initial approval or full replacement, never an implicit union of rights. */
   async approveGrants(input: HostGrantApproval): Promise<HostGrantReceipt> {
+    this.#refuseQuarantined();
     if (
       !hasKeys(input, [
         "installationId",
@@ -408,6 +455,7 @@ export class HostGrantStore {
 
   /** Revocation is terminal. Re-link by creating a new install-only identity. */
   async revoke(input: HostGrantMutation): Promise<HostGrantReceipt> {
+    this.#refuseQuarantined();
     const mutation = mutationInput(input);
     return this.#mutate((data) => {
       const item = currentInstallation(data, mutation);
@@ -421,6 +469,7 @@ export class HostGrantStore {
 
   /** Replaces just the secret and revision; preserves the exact approved rights. */
   async rotateSecret(input: HostGrantMutation): Promise<IssuedHostCredential> {
+    this.#refuseQuarantined();
     const mutation = mutationInput(input);
     return this.#mutate((data) => {
       const item = currentInstallation(data, mutation);
@@ -443,6 +492,7 @@ export class HostGrantStore {
   async authenticateInstallation(
     secret: string,
   ): Promise<VerifiedInstallationIdentity> {
+    this.#refuseQuarantined();
     if (
       typeof secret !== "string" ||
       secret.length !== 51 ||
@@ -519,7 +569,11 @@ export class HostGrantStore {
           continue;
         }
         checkPrivate(info, "file");
-        if (info.size > MAX_STORE_BYTES) fail("host_grant_store_corrupt");
+        if (info.size > MAX_STORE_BYTES)
+          fail(
+            "host_grant_store_corrupt",
+            `the store exceeds the maximum size of ${MAX_STORE_BYTES} bytes`,
+          );
         const data = parseStore(await handle.readFile("utf8"));
         this.#observe(data);
         return data;
@@ -818,7 +872,7 @@ function parseStore(raw: string): StoreData {
   try {
     data = JSON.parse(raw);
   } catch {
-    fail("host_grant_store_corrupt");
+    fail("host_grant_store_corrupt", "the store is not valid JSON");
   }
   if (
     isObject(data) &&
@@ -836,21 +890,42 @@ function parseStore(raw: string): StoreData {
     ]) ||
     !["schemaVersion", "storeId", "revision", "installations"].every((key) =>
       Object.hasOwn(data, key),
-    ) ||
-    data.schemaVersion !== 1 ||
-    !isUuid(data.storeId) ||
-    !isRevision(data.revision, 0) ||
-    !Array.isArray(data.installations) ||
-    data.installations.length > MAX_INSTALLATIONS ||
-    data.installations.length > data.revision
+    )
   )
-    fail("host_grant_store_corrupt");
+    fail(
+      "host_grant_store_corrupt",
+      "top-level keys are unexpected or incomplete (expected schemaVersion, storeId, revision, installations, pairings)",
+    );
+  if (data.schemaVersion !== 1)
+    fail("host_grant_store_corrupt", "schemaVersion must be 1");
+  if (!isUuid(data.storeId))
+    fail("host_grant_store_corrupt", "storeId must be a UUID");
+  if (!isRevision(data.revision, 0))
+    fail("host_grant_store_corrupt", "revision must be a non-negative integer");
+  if (!Array.isArray(data.installations))
+    fail("host_grant_store_corrupt", "installations must be an array");
+  if (data.installations.length > MAX_INSTALLATIONS)
+    fail(
+      "host_grant_store_corrupt",
+      `installations exceed the maximum of ${MAX_INSTALLATIONS}`,
+    );
+  if (data.installations.length > data.revision)
+    fail(
+      "host_grant_store_corrupt",
+      "installations cannot outnumber the store revision",
+    );
   const pairings = Object.hasOwn(data, "pairings") ? data.pairings : [];
-  if (!Array.isArray(pairings) || pairings.length > MAX_PAIRINGS)
-    fail("host_grant_store_corrupt");
+  if (!Array.isArray(pairings))
+    fail("host_grant_store_corrupt", "pairings must be an array");
+  if (pairings.length > MAX_PAIRINGS)
+    fail(
+      "host_grant_store_corrupt",
+      `pairings exceed the maximum of ${MAX_PAIRINGS}`,
+    );
   const ids = new Set<string>();
   const hashes = new Set<string>();
-  for (const item of data.installations) {
+  for (const [index, item] of data.installations.entries()) {
+    const where = `installations[${index}]`;
     if (
       !hasKeys(item, [
         "installationId",
@@ -860,21 +935,59 @@ function parseStore(raw: string): StoreData {
         "allowedTools",
         "allowedScopes",
         "secretHash",
-      ]) ||
-      !isUuid(item.installationId) ||
-      !validHostId(item.hostId) ||
-      !isRevision(item.revision, 1) ||
-      item.revision > data.revision ||
+      ])
+    )
+      fail(
+        "host_grant_store_corrupt",
+        `${where}: keys are unexpected or incomplete`,
+      );
+    if (!isUuid(item.installationId))
+      fail(
+        "host_grant_store_corrupt",
+        `${where}.installationId must be a UUID`,
+      );
+    if (!validHostId(item.hostId))
+      fail(
+        "host_grant_store_corrupt",
+        `${where}.hostId is not a valid host id`,
+      );
+    if (!isRevision(item.revision, 1))
+      fail(
+        "host_grant_store_corrupt",
+        `${where}.revision must be a positive integer`,
+      );
+    if (item.revision > data.revision)
+      fail(
+        "host_grant_store_corrupt",
+        `${where}.revision exceeds the store revision`,
+      );
+    if (
       typeof item.secretHash !== "string" ||
       item.secretHash.length !== 64 ||
-      !/^[0-9a-f]{64}$/.test(item.secretHash) ||
-      ids.has(item.installationId) ||
-      hashes.has(item.secretHash)
+      !/^[0-9a-f]{64}$/.test(item.secretHash)
     )
-      fail("host_grant_store_corrupt");
+      fail(
+        "host_grant_store_corrupt",
+        `${where}.secretHash must be a sha256 hex digest`,
+      );
+    if (ids.has(item.installationId))
+      fail(
+        "host_grant_store_corrupt",
+        `${where}.installationId is a duplicate`,
+      );
+    if (hashes.has(item.secretHash))
+      fail("host_grant_store_corrupt", `${where}.secretHash is a duplicate`);
     if (item.status === "approved") {
-      if (!validTools(item.allowedTools) || !validScopes(item.allowedScopes))
-        fail("host_grant_store_corrupt");
+      if (!validTools(item.allowedTools))
+        fail(
+          "host_grant_store_corrupt",
+          `${where}.allowedTools is not a valid tool list (expected entries from the om_* tool set)`,
+        );
+      if (!validScopes(item.allowedScopes))
+        fail(
+          "host_grant_store_corrupt",
+          `${where}.allowedScopes is not a valid scope list (expected all-apps, workspace:v1:<64hex>, or source:<id>)`,
+        );
     } else if (item.status === "install-only" || item.status === "revoked") {
       if (
         !Array.isArray(item.allowedTools) ||
@@ -882,17 +995,25 @@ function parseStore(raw: string): StoreData {
         !Array.isArray(item.allowedScopes) ||
         item.allowedScopes.length !== 0
       )
-        fail("host_grant_store_corrupt");
+        fail(
+          "host_grant_store_corrupt",
+          `${where}: only approved entries may carry tools or scopes`,
+        );
     } else {
-      fail("host_grant_store_corrupt");
+      fail(
+        "host_grant_store_corrupt",
+        `${where}.status must be approved, install-only, or revoked`,
+      );
     }
     ids.add(item.installationId);
     hashes.add(item.secretHash);
   }
   const pairingIds = new Set<string>();
   const activeCodeHashes = new Set<string>();
-  for (const pairing of pairings) {
-    if (!isObject(pairing)) fail("host_grant_store_corrupt");
+  for (const [index, pairing] of pairings.entries()) {
+    const where = `pairings[${index}]`;
+    if (!isObject(pairing))
+      fail("host_grant_store_corrupt", `${where} must be an object`);
     const pairingId = pairing.pairingId;
     const installationId = pairing.installationId;
     const hostId = pairing.hostId;
@@ -909,29 +1030,65 @@ function parseStore(raw: string): StoreData {
         "codeHash",
         "credential",
         "expiresAt",
-      ]) ||
-      !isUuid(pairingId) ||
-      pairingIds.has(pairingId) ||
-      !isUuid(installationId) ||
-      !validHostId(hostId) ||
-      !validDisplayName(displayName) ||
+      ])
+    )
+      fail(
+        "host_grant_store_corrupt",
+        `${where}: keys are unexpected or incomplete`,
+      );
+    if (!isUuid(pairingId))
+      fail("host_grant_store_corrupt", `${where}.pairingId must be a UUID`);
+    if (pairingIds.has(pairingId))
+      fail("host_grant_store_corrupt", `${where}.pairingId is a duplicate`);
+    if (!isUuid(installationId))
+      fail(
+        "host_grant_store_corrupt",
+        `${where}.installationId must be a UUID`,
+      );
+    if (!validHostId(hostId))
+      fail(
+        "host_grant_store_corrupt",
+        `${where}.hostId is not a valid host id`,
+      );
+    if (!validDisplayName(displayName))
+      fail(
+        "host_grant_store_corrupt",
+        `${where}.displayName is not a valid display name`,
+      );
+    if (
       typeof expiresAt !== "number" ||
       !Number.isSafeInteger(expiresAt) ||
-      expiresAt < 0 ||
+      expiresAt < 0
+    )
+      fail(
+        "host_grant_store_corrupt",
+        `${where}.expiresAt must be a non-negative integer timestamp`,
+      );
+    if (
       !data.installations.some(
         (item) =>
           item.installationId === installationId && item.hostId === hostId,
       )
     )
-      fail("host_grant_store_corrupt");
+      fail(
+        "host_grant_store_corrupt",
+        `${where}: no installation matches this pairing's installationId and hostId`,
+      );
+    if (typeof codeHash !== "string" || !/^[0-9a-f]{64}$/.test(codeHash))
+      fail(
+        "host_grant_store_corrupt",
+        `${where}.codeHash must be a sha256 hex digest`,
+      );
+    if (activeCodeHashes.has(codeHash))
+      fail("host_grant_store_corrupt", `${where}.codeHash is a duplicate`);
     if (
-      typeof codeHash !== "string" ||
-      !/^[0-9a-f]{64}$/.test(codeHash) ||
-      activeCodeHashes.has(codeHash) ||
       typeof credential !== "string" ||
       !/^omhg_v1_[A-Za-z0-9_-]{43}$/.test(credential)
     )
-      fail("host_grant_store_corrupt");
+      fail(
+        "host_grant_store_corrupt",
+        `${where}.credential must be an omhg_v1 host secret`,
+      );
     pairingIds.add(pairingId);
     activeCodeHashes.add(codeHash);
   }
@@ -953,8 +1110,8 @@ function hasCode(error: unknown, code: string): boolean {
   return isObject(error) && error.code === code;
 }
 
-function fail(code: HostGrantErrorCode): never {
-  throw new HostGrantError(code);
+function fail(code: HostGrantErrorCode, reason?: string): never {
+  throw new HostGrantError(code, reason);
 }
 
 async function guarded<T>(operation: () => Promise<T>): Promise<T> {

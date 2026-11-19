@@ -743,6 +743,22 @@ export async function createRuntimeService(
         recallRuntime,
         { syncHookAssetsDirectory: config.syncHookAssetsDirectory },
       );
+      // A grants file that failed validation no longer refuses startup (#387):
+      // the store is quarantined, every host operation fails closed, and this
+      // event is the one place the operator can see why without journal diving.
+      const quarantineReason = permissionOwner.hostGrantStore.quarantined;
+      if (quarantineReason !== undefined) {
+        await hostDiagnostics.log({
+          level: "error",
+          component: "host-bridge",
+          event: "host.grant_store_quarantined",
+          outcome: "refused",
+          details: {
+            reason: quarantineReason,
+            effect: "all host requests denied",
+          },
+        });
+      }
       const verifyHostRuntime = () => revalidateHostRuntime(config);
       const permissions = guardedPermissions(
         permissionOwner,
