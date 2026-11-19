@@ -667,3 +667,86 @@ def test_grant_writes_still_work_after_the_cutover_drops_the_link_table(library)
         candidate_kind=RootCandidateKind.DEFAULT,
     )
     assert store.revoke(user_id="local", source_id="cursor").revoked_at is not None
+
+
+def test_no_dirty_trigger_relies_on_insert_or_ignore():
+    """#105: an outer UPSERT overrides a trigger's OR IGNORE conflict clause."""
+    import one_memory.memory_visibility as visibility
+
+    statements = [statement for _table, statement in visibility._trigger_sql()]
+    assert len(statements) == 10
+    for statement in statements:
+        assert "INSERT OR IGNORE" not in statement.upper()
+        assert "ON CONFLICT(memory_id) DO NOTHING" in statement
+    assert {
+        visibility._trigger_name(statement) for statement in statements
+    } >= set(visibility._LEGACY_OR_IGNORE_TRIGGERS)
+
+
+def test_outer_upserts_do_not_override_dirty_trigger_conflicts():
+    """Every AFTER UPDATE dirty trigger must tolerate an already-dirty memory.
+
+    Stdlib-only: installs the real trigger bodies on a minimal schema so this
+    regression does not depend on the full Core write path.
+    """
+    import one_memory.memory_visibility as visibility
+
+    db = sqlite3.connect(":memory:")
+    db.executescript(
+        """
+        CREATE TABLE evidence (evidence_id TEXT PRIMARY KEY, source_id TEXT);
+        CREATE TABLE governed_memories (memory_id TEXT PRIMARY KEY, content_hash TEXT);
+        CREATE TABLE governed_memory_versions (memory_id TEXT PRIMARY KEY, rev INTEGER);
+        CREATE TABLE governed_memory_evidence (
+            memory_id TEXT, evidence_id TEXT, active INTEGER,
+            PRIMARY KEY (memory_id, evidence_id)
+        );
+        CREATE TABLE memory_task_outputs (memory_id TEXT PRIMARY KEY, out TEXT);
+        CREATE TABLE source_grants (source_id TEXT PRIMARY KEY);
+        CREATE TABLE memory_visibility_dirty (memory_id TEXT PRIMARY KEY);
+        """
+    )
+    for _table, statement in visibility._trigger_sql():
+        db.execute(statement)
+    db.execute("INSERT INTO memory_visibility_dirty VALUES ('m1')")
+    db.execute("INSERT INTO governed_memories VALUES ('m1', 'h1')")
+    db.execute("INSERT INTO governed_memory_versions VALUES ('m1', 1)")
+    db.execute("INSERT INTO memory_task_outputs VALUES ('m1', 'o1')")
+    db.execute("INSERT INTO governed_memory_evidence VALUES ('m1', 'e1', 1)")
+    db.execute("INSERT INTO evidence VALUES ('e1', 'cursor')")
+    db.execute("INSERT INTO source_grants VALUES ('cursor')")
+    db.commit()
+
+    # Each of these takes the UPDATE arm of an outer UPSERT while 'm1' is
+    # already in memory_visibility_dirty. On main this raises
+    # `UNIQUE constraint failed: memory_visibility_dirty.memory_id` for the
+    # governed_memories case (issue #105).
+    db.execute(
+        "INSERT INTO governed_memories(memory_id, content_hash) VALUES ('m1', 'h2') "
+        "ON CONFLICT(memory_id) DO UPDATE SET content_hash=excluded.content_hash"
+    )
+    db.execute(
+        "INSERT INTO governed_memory_evidence(memory_id, evidence_id, active) "
+        "VALUES ('m1', 'e1', 1) "
+        "ON CONFLICT(memory_id, evidence_id) DO UPDATE SET active=excluded.active"
+    )
+    db.execute(
+        "INSERT INTO governed_memory_versions(memory_id, rev) VALUES ('m1', 2) "
+        "ON CONFLICT(memory_id) DO UPDATE SET rev=excluded.rev"
+    )
+    db.execute(
+        "INSERT INTO memory_task_outputs(memory_id, out) VALUES ('m1', 'o2') "
+        "ON CONFLICT(memory_id) DO UPDATE SET out=excluded.out"
+    )
+    db.execute(
+        "INSERT INTO evidence(evidence_id, source_id) VALUES ('e1', 'cursor') "
+        "ON CONFLICT(evidence_id) DO UPDATE SET source_id=excluded.source_id"
+    )
+    db.execute(
+        "INSERT INTO source_grants(source_id) VALUES ('cursor') "
+        "ON CONFLICT(source_id) DO UPDATE SET source_id=excluded.source_id"
+    )
+    db.commit()
+    assert db.execute("SELECT memory_id FROM memory_visibility_dirty").fetchall() == [("m1",)]
+    assert db.execute("SELECT content_hash FROM governed_memories").fetchall() == [("h2",)]
+    db.close()

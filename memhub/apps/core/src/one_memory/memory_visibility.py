@@ -159,6 +159,22 @@ def pending(db: sqlite3.Connection, *, limit: int = 100) -> list[str]:
     ]
 
 
+#: Installed with `INSERT OR IGNORE` in older builds. SQLite keeps the first
+#: definition of a trigger forever under CREATE TRIGGER IF NOT EXISTS, so these
+#: have to be dropped explicitly on startup. Fixed list, not "every trigger":
+#: a failed CREATE inside install_triggers() rolls back the whole transaction
+#: (startup wraps it in BEGIN IMMEDIATE), but callers that invoke
+#: install_triggers() directly must not lose triggers that were already correct.
+_LEGACY_OR_IGNORE_TRIGGERS = (
+    "memory_visibility_dirty_on_link",
+    "memory_visibility_dirty_on_link_update",
+    "memory_visibility_dirty_on_memory",
+    "memory_visibility_dirty_on_memory_update",
+    "memory_visibility_dirty_on_outputs",
+    "memory_visibility_dirty_on_versions",
+)
+
+
 def _trigger_sql() -> list[tuple[str, str]]:
     """(table it is on, statement) for each trigger."""
     return [
@@ -190,8 +206,9 @@ def _trigger_sql() -> list[tuple[str, str]]:
         CREATE TRIGGER IF NOT EXISTS memory_visibility_dirty_on_link
         AFTER INSERT ON governed_memory_evidence
         BEGIN
-            INSERT OR IGNORE INTO memory_visibility_dirty (memory_id)
-            VALUES (NEW.memory_id);
+            INSERT INTO memory_visibility_dirty (memory_id)
+            VALUES (NEW.memory_id)
+            ON CONFLICT(memory_id) DO NOTHING;
         END;""",
         ),
         (
@@ -214,8 +231,9 @@ def _trigger_sql() -> list[tuple[str, str]]:
         CREATE TRIGGER IF NOT EXISTS memory_visibility_dirty_on_memory
         AFTER INSERT ON governed_memories
         BEGIN
-            INSERT OR IGNORE INTO memory_visibility_dirty (memory_id)
-            VALUES (NEW.memory_id);
+            INSERT INTO memory_visibility_dirty (memory_id)
+            VALUES (NEW.memory_id)
+            ON CONFLICT(memory_id) DO NOTHING;
         END;""",
         ),
         (
@@ -224,8 +242,9 @@ def _trigger_sql() -> list[tuple[str, str]]:
         CREATE TRIGGER IF NOT EXISTS memory_visibility_dirty_on_memory_update
         AFTER UPDATE ON governed_memories
         BEGIN
-            INSERT OR IGNORE INTO memory_visibility_dirty (memory_id)
-            VALUES (NEW.memory_id);
+            INSERT INTO memory_visibility_dirty (memory_id)
+            VALUES (NEW.memory_id)
+            ON CONFLICT(memory_id) DO NOTHING;
         END;""",
         ),
         (
@@ -234,8 +253,9 @@ def _trigger_sql() -> list[tuple[str, str]]:
         CREATE TRIGGER IF NOT EXISTS memory_visibility_dirty_on_versions
         AFTER INSERT ON governed_memory_versions
         BEGIN
-            INSERT OR IGNORE INTO memory_visibility_dirty (memory_id)
-            VALUES (NEW.memory_id);
+            INSERT INTO memory_visibility_dirty (memory_id)
+            VALUES (NEW.memory_id)
+            ON CONFLICT(memory_id) DO NOTHING;
         END;""",
         ),
         (
@@ -244,8 +264,9 @@ def _trigger_sql() -> list[tuple[str, str]]:
         CREATE TRIGGER IF NOT EXISTS memory_visibility_dirty_on_outputs
         AFTER INSERT ON memory_task_outputs
         BEGIN
-            INSERT OR IGNORE INTO memory_visibility_dirty (memory_id)
-            VALUES (NEW.memory_id);
+            INSERT INTO memory_visibility_dirty (memory_id)
+            VALUES (NEW.memory_id)
+            ON CONFLICT(memory_id) DO NOTHING;
         END;""",
         ),
         (
@@ -296,10 +317,15 @@ def install_triggers(db: sqlite3.Connection) -> None:
         str(row["name"])
         for row in cursor.execute("SELECT name FROM sqlite_master WHERE type='table'")
     }
-    # CREATE TRIGGER IF NOT EXISTS cannot repair the legacy definition. Replace
-    # this derived-cache trigger transactionally on every startup so old
-    # libraries get the row-level conflict handling without a schema migration.
-    cursor.execute("DROP TRIGGER IF EXISTS memory_visibility_dirty_on_link_update")
+    # CREATE TRIGGER IF NOT EXISTS cannot repair an installed definition.
+    # These six shipped with `INSERT OR IGNORE`, whose conflict clause SQLite
+    # overrides with the outer statement's policy (#66, #105). Replace them
+    # transactionally on every startup so upgraded libraries get row-level
+    # conflict handling without a schema migration. The other four were born
+    # in the explicit UPSERT form; dropping those too would only widen what a
+    # failed CREATE could take away.
+    for name in _LEGACY_OR_IGNORE_TRIGGERS:
+        cursor.execute(f"DROP TRIGGER IF EXISTS {name}")
     for table, statement in _trigger_sql():
         if table not in present:
             continue
