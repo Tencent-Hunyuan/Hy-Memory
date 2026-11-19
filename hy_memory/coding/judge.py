@@ -673,7 +673,12 @@ def _bounded_queries(queries: List[str]) -> List[str]:
 
 def _parse_scene_label(value: Any) -> Optional[str]:
     """解析三分类标签，并兼容旧二分类的 0/1 与 true/false 输出。"""
-    raw = str(value or "").strip().strip('"').strip("'").lower()
+    # \`value or ""\` would turn the legacy falsy markers 0 and False into an
+    # empty string, so they were rejected while 1/True parsed as "working".
+    # Normalize explicit 0/False to "0" before the string path.
+    if value is False or value == 0:
+        value = "0"
+    raw = str(value if value is not None else "").strip().strip('"').strip("'").lower()
     raw = raw.rstrip(",.，。")
     if raw in ("chat", "working", "coding"):
         return raw
