@@ -4,6 +4,7 @@ Agent Memory - 性能监控
 提供性能指标收集和统计
 """
 
+import math
 import time
 import functools
 from typing import Dict, List, Any, Optional, Callable
@@ -121,7 +122,10 @@ class MemoryMetrics:
             "min_ms": min(durations),
             "max_ms": max(durations),
             "p50_ms": sorted(durations)[len(durations) // 2],
-            "p95_ms": sorted(durations)[int(len(durations) * 0.95)] if len(durations) >= 20 else max(durations),
+            # nearest-rank: the p95 value is the ceil(0.95*n)-th element,
+            # i.e. index ceil(0.95*n) - 1. The old int(n*0.95) index returned
+            # the maximum for n=20 and the 96th value for n=100.
+            "p95_ms": sorted(durations)[max(0, math.ceil(len(durations) * 0.95) - 1)] if len(durations) >= 20 else max(durations),
         }
     
     def print_summary(self) -> None:
