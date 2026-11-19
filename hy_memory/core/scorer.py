@@ -53,7 +53,13 @@ class MemoryScorer:
             reference_time = datetime.now()
         
         # 1. 语义相似度分数（已由向量检索提供）
-        semantic = max(0.0, min(1.0, semantic_score))
+        # NaN compares False against every bound, so max/min would silently
+        # clamp it to 1.0 (a perfect score). Treat it as no similarity.
+        semantic = (
+            0.0
+            if math.isnan(semantic_score)
+            else max(0.0, min(1.0, semantic_score))
+        )
         
         # 2. 时间衰减分数
         recency = self._calc_recency_score(entry, reference_time)
@@ -157,9 +163,14 @@ class MemoryScorer:
         # 假设最大访问次数为 100
         max_count = 100
         
-        if access_count <= 0:
+        # A NaN access count satisfies neither ``<= 0`` nor ``> 0``; without
+        # this guard it reaches log() and then the NaN clamp below, yielding
+        # a spurious full access score.
+        if not isinstance(access_count, (int, float)) or math.isnan(
+            access_count
+        ) or access_count <= 0:
             return 0.0
-        
+
         score = math.log(access_count + 1) / math.log(max_count + 1)
         return max(0.0, min(1.0, score))
     
