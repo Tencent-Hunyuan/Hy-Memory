@@ -879,6 +879,11 @@ class MemoryWriter(WritePipeline):
             )
 
         try:
+            # Initialise before all branches: the "reuse episode" path does not
+            # close any previous episode, and must not raise UnboundLocalError
+            # when closed_episode_id is read below (that silently returned ""
+            # and fragmented sessions / dropped the episode log entry).
+            closed_episode_id = None
             if decision is not None:
                 episode_id = decision["episode_id"]
                 count = decision["memory_count"]
