@@ -168,6 +168,9 @@ class SqliteCache(CacheBase):
             self._conn = sqlite3.connect(self._db_path, check_same_thread=False)
             self._conn.row_factory = sqlite3.Row
             self._conn.execute("PRAGMA journal_mode=WAL;")
+            # Multiple cache instances can share one DB file (multi-worker).
+            # Wait for a competing writer's lock instead of failing immediately.
+            self._conn.execute("PRAGMA busy_timeout=5000;")
             self._conn.executescript(_CREATE_TABLES_SQL)
             self._migrate_pipeline_logs_columns()
             self._conn.commit()
@@ -520,25 +523,38 @@ class SqliteCache(CacheBase):
             def _store():
                 with self._lock:
                     now = datetime.now().isoformat()
-                    # UPSERT: 如果同一分钟已存在，合并数据
-                    existing = self._conn.execute(
-                        "SELECT data FROM system_metrics WHERE minute_ts = ?",
-                        (minute_ts,),
-                    ).fetchone()
-                    if existing:
-                        import json as _json
-                        old_data = _json.loads(existing["data"])
-                        merged = self._merge_metric_buckets(old_data, data)
-                        self._conn.execute(
-                            "UPDATE system_metrics SET data = ?, created_at = ? WHERE minute_ts = ?",
-                            (_json.dumps(merged, default=str), now, minute_ts),
+                    # The instance RLock only guards this object. Multiple
+                    # SqliteCache instances can share the DB file (multi-worker),
+                    # so take a DB-level write lock for the whole
+                    # read-merge-write. Without BEGIN IMMEDIATE two instances
+                    # read the same stale JSON and clobber each other, and the
+                    # INSERT branch races into a UNIQUE violation.
+                    self._conn.execute("BEGIN IMMEDIATE")
+                    try:
+                        existing = self._conn.execute(
+                            "SELECT data FROM system_metrics WHERE minute_ts = ?",
+                            (minute_ts,),
+                        ).fetchone()
+                        merged = (
+                            self._merge_metric_buckets(
+                                json.loads(existing["data"]), data
+                            )
+                            if existing
+                            else data
                         )
-                    else:
+                        # Single UPSERT statement: no separate INSERT/UPDATE
+                        # branch to race on.
                         self._conn.execute(
-                            "INSERT INTO system_metrics (minute_ts, data, created_at) VALUES (?, ?, ?)",
-                            (minute_ts, json.dumps(data, default=str), now),
+                            "INSERT INTO system_metrics (minute_ts, data, created_at) "
+                            "VALUES (?, ?, ?) "
+                            "ON CONFLICT(minute_ts) DO UPDATE SET "
+                            "data = excluded.data, created_at = excluded.created_at",
+                            (minute_ts, json.dumps(merged, default=str), now),
                         )
-                    self._conn.commit()
+                        self._conn.commit()
+                    except Exception:
+                        self._conn.rollback()
+                        raise
             await _run_in_sqlite_pool(_store)
         except Exception as e:
             logger.warning(f"store_metrics_minute failed: {e}")
