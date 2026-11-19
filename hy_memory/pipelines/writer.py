@@ -857,40 +857,82 @@ class MemoryWriter(WritePipeline):
             request.memory_at.timestamp() if request.memory_at
             else datetime.now().timestamp()
         )
-        try:
-            state = await self._cache.get_episode_state(key)
-            if state and state.get("episode_id"):
-                idle = now_ts - float(state.get("last_write_ts") or 0)
-                count = int(state.get("memory_count") or 0)
-                if 0 <= idle <= gap and count < cap:
-                    episode_id = state["episode_id"]
-                    count += n_new
-                else:
-                    # 上一个 episode 就此关闭 —— 它不会再有新内容进来，所以这是总结它的时机。
-                    # 只总结一次、无需把旧摘要喂回 LLM 做 merge（对比 rolling summary 的
-                    # 每 N 轮重写一遍）。
-                    self._schedule_episode_summary(request, state["episode_id"])
-                    episode_id, count = f"ep_{uuid.uuid4().hex[:16]}", n_new
-            else:
-                episode_id, count = f"ep_{uuid.uuid4().hex[:16]}", n_new
+        user_id = request.user_id or ""
+        agent_id = request.agent_id or "default_agent"
+        session_id = request.session_id or "default_session"
 
-            await self._cache.upsert_episode_state(
+        # Prefer a single atomic read-decide-write so concurrent writers don't
+        # clobber each other's memory_count or fragment the session. Backends
+        # that don't implement it (or a failure) fall back to the legacy path.
+        resolver = getattr(self._cache, "resolve_episode_state", None)
+        decision = None
+        if resolver is not None:
+            decision = await resolver(
                 key,
-                user_id=request.user_id or "",
-                agent_id=request.agent_id or "default_agent",
-                session_id=request.session_id or "default_session",
-                episode_id=episode_id,
-                last_write_ts=now_ts,
-                memory_count=count,
+                user_id=user_id,
+                agent_id=agent_id,
+                session_id=session_id,
+                now_ts=now_ts,
+                gap=gap,
+                cap=cap,
+                n_new=n_new,
             )
+
+        try:
+            # Initialise before all branches: the "reuse episode" path does not
+            # close any previous episode, and must not raise UnboundLocalError
+            # when closed_episode_id is read below (that silently returned ""
+            # and fragmented sessions / dropped the episode log entry).
+            closed_episode_id = None
+            if decision is not None:
+                episode_id = decision["episode_id"]
+                count = decision["memory_count"]
+                reused = decision["reused"]
+                idle_s = decision["idle_s"]
+                closed_episode_id = decision.get("closed_episode_id")
+            else:
+                # Legacy fallback: get -> decide -> upsert (non-atomic).
+                state = await self._cache.get_episode_state(key)
+                if state and state.get("episode_id"):
+                    idle = now_ts - float(state.get("last_write_ts") or 0)
+                    count = int(state.get("memory_count") or 0)
+                    if 0 <= idle <= gap and count < cap:
+                        episode_id = state["episode_id"]
+                        count += n_new
+                    else:
+                        closed_episode_id = state["episode_id"]
+                        episode_id, count = f"ep_{uuid.uuid4().hex[:16]}", n_new
+                else:
+                    closed_episode_id = None
+                    episode_id, count = f"ep_{uuid.uuid4().hex[:16]}", n_new
+                reused = bool(state and state.get("episode_id") == episode_id)
+                idle_s = (
+                    now_ts - float(state.get("last_write_ts") or 0)
+                    if state else None
+                )
+                await self._cache.upsert_episode_state(
+                    key,
+                    user_id=user_id,
+                    agent_id=agent_id,
+                    session_id=session_id,
+                    episode_id=episode_id,
+                    last_write_ts=now_ts,
+                    memory_count=count,
+                )
+
+            if decision is None and closed_episode_id is not None:
+                # 上一个 episode 就此关闭 —— 它不会再有新内容进来，所以这是总结它的时机。
+                # 只总结一次、无需把旧摘要喂回 LLM 做 merge（对比 rolling summary 的
+                # 每 N 轮重写一遍）。
+                self._schedule_episode_summary(request, closed_episode_id)
+            elif decision is not None and decision.get("closed_episode_id"):
+                self._schedule_episode_summary(request, decision["closed_episode_id"])
+
             await self._log_episode(
                 request,
                 episode_id=episode_id,
-                reused=(state or {}).get("episode_id") == episode_id,
-                idle_s=(
-                    now_ts - float((state or {}).get("last_write_ts") or 0)
-                    if state else None
-                ),
+                reused=reused,
+                idle_s=idle_s,
                 count=count,
                 n_new=n_new,
                 gap=gap,

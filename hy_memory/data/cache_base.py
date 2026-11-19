@@ -172,3 +172,27 @@ class CacheBase(ABC):
     ) -> bool:
         """写入/更新 episode 状态。默认 no-op。"""
         return False
+
+    async def resolve_episode_state(
+        self,
+        episode_key: str,
+        *,
+        user_id: str,
+        agent_id: str,
+        session_id: str,
+        now_ts: float,
+        gap: float,
+        cap: int,
+        n_new: int,
+    ) -> Optional[Dict[str, Any]]:
+        """Atomically resolve which episode a write belongs to and update state.
+
+        The read-decide-write sequence must happen inside a single critical
+        section; otherwise concurrent writers read the same stale state and
+        overwrite each other, losing counts and fragmenting episodes.
+
+        Returns a dict with episode_id / memory_count / reused /
+        closed_episode_id / idle_s, or None when the backend does not support
+        the atomic operation (caller then falls back to get/upsert).
+        """
+        return None

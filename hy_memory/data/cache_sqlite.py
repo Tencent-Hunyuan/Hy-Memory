@@ -20,6 +20,7 @@ import logging
 import os
 import sqlite3
 import threading
+import uuid
 from datetime import datetime
 from typing import Optional, List, Dict, Any
 
@@ -647,6 +648,98 @@ class SqliteCache(CacheBase):
         except Exception as e:
             logger.warning(f"upsert_episode_state failed: {e}")
             return False
+
+    def _decide_episode(
+        self,
+        row: Optional[sqlite3.Row],
+        *,
+        now_ts: float,
+        gap: float,
+        cap: int,
+        n_new: int,
+    ) -> Dict[str, Any]:
+        """Pure decision from a state row; used inside the atomic critical section."""
+        closed_episode_id = None
+        if row and row["episode_id"]:
+            idle = now_ts - float(row["last_write_ts"] or 0)
+            count = int(row["memory_count"] or 0)
+            if 0 <= idle <= gap and count < cap:
+                episode_id = row["episode_id"]
+                count += n_new
+                reused = True
+            else:
+                closed_episode_id = row["episode_id"]
+                episode_id = f"ep_{uuid.uuid4().hex[:16]}"
+                count = n_new
+                reused = False
+            idle_s = now_ts - float(row["last_write_ts"] or 0)
+        else:
+            episode_id = f"ep_{uuid.uuid4().hex[:16]}"
+            count = n_new
+            reused = False
+            idle_s = None
+        return {
+            "episode_id": episode_id,
+            "memory_count": count,
+            "reused": reused,
+            "closed_episode_id": closed_episode_id,
+            "idle_s": idle_s,
+        }
+
+    async def resolve_episode_state(
+        self,
+        episode_key: str,
+        *,
+        user_id: str,
+        agent_id: str,
+        session_id: str,
+        now_ts: float,
+        gap: float,
+        cap: int,
+        n_new: int,
+    ) -> Optional[Dict[str, Any]]:
+        """Atomically resolve + persist the episode for a write.
+
+        The whole SELECT -> decide -> UPSERT sequence runs under a single
+        self._lock acquisition, so concurrent writers in this process cannot
+        read the same stale state and overwrite each other's counts. This is
+        the check-then-act race that previously lost memory_count and split
+        one session into many episode_ids under 20 concurrent writes.
+        """
+        try:
+            def _resolve() -> Dict[str, Any]:
+                with self._lock:
+                    row = self._conn.execute(
+                        "SELECT episode_id, last_write_ts, memory_count "
+                        "FROM episode_state WHERE episode_key = ?",
+                        (episode_key,),
+                    ).fetchone()
+                    decision = self._decide_episode(
+                        row, now_ts=now_ts, gap=gap, cap=cap, n_new=n_new
+                    )
+                    self._conn.execute(
+                        """
+                        INSERT INTO episode_state (
+                            episode_key, user_id, agent_id, session_id,
+                            episode_id, last_write_ts, memory_count, updated_at
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                        ON CONFLICT(episode_key) DO UPDATE SET
+                            episode_id = excluded.episode_id,
+                            last_write_ts = excluded.last_write_ts,
+                            memory_count = excluded.memory_count,
+                            updated_at = excluded.updated_at
+                        """,
+                        (episode_key, user_id, agent_id, session_id,
+                         decision["episode_id"], float(now_ts),
+                         int(decision["memory_count"]), datetime.now().isoformat()),
+                    )
+                    self._conn.commit()
+                    return decision
+
+            return await _run_in_sqlite_pool(_resolve)
+        except Exception as e:
+            logger.warning(f"resolve_episode_state failed: {e}")
+            return None
 
     @staticmethod
     def _merge_metric_buckets(old: dict, new: dict) -> dict:
