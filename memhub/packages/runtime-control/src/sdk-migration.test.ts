@@ -128,6 +128,51 @@ it("reports an unreadable migration status as deferred", async () => {
   });
 });
 
+it("retries a status probe that never ran Core instead of freezing right away", async () => {
+  let attempts = 0;
+  const result = await runSdkMigration({
+    dataDir: "/data",
+    core,
+    runtimeBuild: "20",
+    probeRetryDelayMs: 0,
+    execute: vi.fn(async (_core, args: string[]) => {
+      if (args[0] !== "sdk-migration-status") throw new Error("unexpected");
+      attempts += 1;
+      // A fresh unpack may briefly make the Core binary unexecutable.
+      if (attempts < 3) throw new Error("spawn /core/one-memory ENOENT");
+      return {
+        exitCode: 0,
+        document: { authority: "sdk", state: "not_required" },
+      };
+    }),
+    fence: noFence,
+  });
+
+  expect(result).toEqual({ state: "not_required" });
+  expect(attempts).toBe(3);
+});
+
+it("freezes the home only after the status probe retries are exhausted", async () => {
+  let attempts = 0;
+  const result = await runSdkMigration({
+    dataDir: "/data",
+    core,
+    runtimeBuild: "20",
+    probeRetryDelayMs: 0,
+    execute: vi.fn(async () => {
+      attempts += 1;
+      throw new Error("spawn /core/one-memory EACCES");
+    }),
+    fence: noFence,
+  });
+
+  expect(result).toEqual({
+    state: "deferred",
+    code: "sdk_migration_status_unavailable",
+  });
+  expect(attempts).toBe(3);
+});
+
 it("cycles the runtime when the status is unreadable so no pre-upgrade Runtime keeps serving", async () => {
   const fenced: string[] = [];
   const result = await runSdkMigration({
