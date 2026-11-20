@@ -6,7 +6,7 @@ Agent Memory - 记忆评分
 
 import math
 from typing import List, Optional
-from datetime import datetime
+from datetime import datetime, timezone
 
 from ..models import MemoryEntry, MemoryScore
 from ..config import RecallConfig
@@ -53,7 +53,13 @@ class MemoryScorer:
             reference_time = datetime.now()
         
         # 1. 语义相似度分数（已由向量检索提供）
-        semantic = max(0.0, min(1.0, semantic_score))
+        # NaN compares False against every bound, so max/min would silently
+        # clamp it to 1.0 (a perfect score). Treat it as no similarity.
+        semantic = (
+            0.0
+            if math.isnan(semantic_score)
+            else max(0.0, min(1.0, semantic_score))
+        )
         
         # 2. 时间衰减分数
         recency = self._calc_recency_score(entry, reference_time)
@@ -130,8 +136,19 @@ class MemoryScorer:
         event_time = self._get_event_time(entry)
         if event_time is None:
             return 0.5  # 默认中等分数
+
+        # score() defaults reference_time to a naive datetime.now(), but event
+        # times coming from history_store / embed_service may be timezone-aware.
+        # Subtracting naive from aware (or vice versa) raises TypeError and
+        # aborts scoring for that memory. Normalize: treat a naive value as UTC
+        # so both sides share a tz basis, without changing the decay formula.
+        if (reference_time.tzinfo is None) != (event_time.tzinfo is None):
+            if reference_time.tzinfo is None:
+                reference_time = reference_time.replace(tzinfo=timezone.utc)
+            else:
+                event_time = event_time.replace(tzinfo=timezone.utc)
         days_passed = (reference_time - event_time).days
-        
+
         if days_passed <= 0:
             return 1.0
         
@@ -157,9 +174,14 @@ class MemoryScorer:
         # 假设最大访问次数为 100
         max_count = 100
         
-        if access_count <= 0:
+        # A NaN access count satisfies neither ``<= 0`` nor ``> 0``; without
+        # this guard it reaches log() and then the NaN clamp below, yielding
+        # a spurious full access score.
+        if not isinstance(access_count, (int, float)) or math.isnan(
+            access_count
+        ) or access_count <= 0:
             return 0.0
-        
+
         score = math.log(access_count + 1) / math.log(max_count + 1)
         return max(0.0, min(1.0, score))
     
@@ -235,13 +257,24 @@ class MemoryScorer:
         
         权重会自动归一化
         """
+        # ``or`` would treat an explicitly supplied ``0.0`` as missing and
+        # silently keep the old weight, so callers could not disable a single
+        # scoring dimension. Only ``None`` means "leave this weight unchanged".
         weights = [
-            semantic_weight or self.config.semantic_weight,
-            recency_weight or self.config.recency_weight,
-            importance_weight or self.config.importance_weight,
-            access_weight or self.config.access_weight,
+            self.config.semantic_weight
+            if semantic_weight is None
+            else semantic_weight,
+            self.config.recency_weight
+            if recency_weight is None
+            else recency_weight,
+            self.config.importance_weight
+            if importance_weight is None
+            else importance_weight,
+            self.config.access_weight
+            if access_weight is None
+            else access_weight,
         ]
-        
+
         # 归一化
         total = sum(weights)
         if total > 0:
