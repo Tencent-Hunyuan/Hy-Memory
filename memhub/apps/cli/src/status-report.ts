@@ -373,6 +373,7 @@ export function renderStatusText(
     ...(report.runtime.log_file
       ? [
           `升级迁移没有完成（错误码：${report.runtime.code}），MemHub 不会启动。`,
+          `可运行 memhub start 重试升级迁移；成功后自动解冻并启动。`,
           `请把迁移日志附在 GitHub 反馈里发给我们：${report.runtime.log_file}`,
           `反馈地址：${report.runtime.issues_url}`,
         ]

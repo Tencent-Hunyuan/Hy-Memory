@@ -21,6 +21,10 @@ import {
 } from "./service-ownership.js";
 
 const MAX_OUTPUT_BYTES = 1024 * 1024;
+/** Times the unreadable status is probed before the home is frozen. */
+const STATUS_PROBE_ATTEMPTS = 3;
+/** Backoff between probes: 500 ms, then 1 s. */
+const STATUS_PROBE_RETRY_DELAY_MS = 500;
 
 export interface SdkMigrationResult {
   /** `complete`: already on SDK authority; leftovers were repaired. */
@@ -59,6 +63,11 @@ export interface SdkMigrationOptions {
   onProgress?: (step: string) => void;
   /** Who is migrating; stamped on every line of the migration log. */
   caller?: SdkMigrationCaller;
+  /**
+   * Backoff between retries of a status probe that never ran Core (spawn
+   * error, unreadable output). Tests pass 0 to keep them fast.
+   */
+  probeRetryDelayMs?: number;
   /**
    * The Runtime this upgrade replaced, read from its install manifest before
    * `current` moved. Unknown (`null`) falls back to what an earlier failed
@@ -220,14 +229,33 @@ export async function runSdkMigration(
     },
   });
   let statusFailure = "";
-  const status = await execute(
-    core,
-    ["sdk-migration-status", "--json"],
-    options.dataDir,
-  ).catch((error: unknown) => {
-    statusFailure = migrationErrorCode(error, "sdk_migration_status_failed");
-    return null;
-  });
+  let status: SdkMigrationCommandResult | null = null;
+  let probeAttempts = 1;
+  // A probe that never ran Core (spawn error) or produced unreadable output
+  // says nothing about the migration state; briefly retry before freezing the
+  // home for what may be a transient exec race on a fresh install. A probe
+  // where Core ran and answered (even with a failure) stands as it is.
+  for (let attempt = 1; attempt <= STATUS_PROBE_ATTEMPTS; attempt += 1) {
+    probeAttempts = attempt;
+    if (attempt > 1) {
+      await new Promise((resolve) =>
+        setTimeout(
+          resolve,
+          (options.probeRetryDelayMs ?? STATUS_PROBE_RETRY_DELAY_MS) *
+            (attempt - 1),
+        ),
+      );
+    }
+    status = await execute(
+      core,
+      ["sdk-migration-status", "--json"],
+      options.dataDir,
+    ).catch((error: unknown) => {
+      statusFailure = migrationErrorCode(error, "sdk_migration_status_failed");
+      return null;
+    });
+    if (status !== null) break;
+  }
   await log({
     event: "migration.status_probed",
     outcome: status !== null && status.exitCode === 0 ? "succeeded" : "failed",
@@ -237,6 +265,7 @@ export async function runSdkMigration(
       authority: status?.document.authority ?? null,
       state: status?.document.state ?? null,
       ...(statusFailure ? { reason: statusFailure } : {}),
+      ...(probeAttempts > 1 ? { attempts: probeAttempts } : {}),
     },
   });
   if (status === null || status.exitCode !== 0) {

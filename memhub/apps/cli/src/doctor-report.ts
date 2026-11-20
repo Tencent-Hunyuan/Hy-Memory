@@ -79,7 +79,7 @@ export function renderDoctorText(document: DoctorDocument): string {
       : migration
         ? [
             `升级迁移没有完成（错误码：${migration.code}），MemHub 不会启动。`,
-            `下一步：把迁移日志附在 GitHub 反馈里发给我们：${migration.details?.log_file}`,
+            `下一步：运行 memhub start 重试升级迁移（成功后自动解冻）；如仍失败，把迁移日志附在 GitHub 反馈里发给我们：${migration.details?.log_file}`,
             `反馈地址：${migration.details?.issues_url}`,
           ]
         : ["下一步：打开 MemHub 的“帮助与诊断”查看并处理异常。"]),
