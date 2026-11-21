@@ -14,7 +14,7 @@ import pytest
 from hy_memory.client import HyMemoryClient
 from hy_memory.config import MemoryConfig
 from hy_memory.data.vector_store_qdrant import QdrantVectorStore
-from hy_memory.models.memory import MemoryLayer
+from hy_memory.models.memory import MemoryLayer, MemoryNode
 
 qdrant_models = pytest.importorskip("qdrant_client.models")
 
@@ -413,6 +413,101 @@ def test_schema_ready_writer_marks_empty_text_in_native_payload_state():
         payload[QdrantVectorStore._BM25_STATE_FIELD]
         == QdrantVectorStore._BM25_STATE_EMPTY
     )
+
+
+class _UpsertFakeQdrant(_FakeQdrant):
+    def __init__(self):
+        super().__init__()
+        self.upserted = []
+
+    def upsert(self, collection_name, points):
+        del collection_name
+        self.upserted.extend(points)
+
+
+def _write_node(index=0):
+    return MemoryNode(
+        node_id=f"bm25-degrade-node-{index}",
+        user_id="test-user",
+        agent_id="test-agent",
+        session_id="test-session",
+        layer=MemoryLayer.L2_FACT,
+        content=f"write path degradation probe {index}",
+        embedding=[1.0, 0.0, 0.0, float(index)],
+    )
+
+
+def test_write_degrades_to_dense_when_encoder_is_unavailable(monkeypatch):
+    # Regression for #455: with the IDF sparse schema present but FastEmbed
+    # missing, a write used to raise "BM25 encoder is unavailable" and store
+    # nothing. It must degrade to a dense-only write instead.
+    def unavailable(_text):
+        raise RuntimeError("BM25 encoder is unavailable")
+
+    monkeypatch.setattr(
+        "hy_memory.pipelines._retrieval.bm25_fastembed.encode_doc",
+        unavailable,
+    )
+    store = _store(_FakeQdrant())
+    store._bm25_schema_ready = True
+    payload = {
+        "layer": MemoryLayer.L2_FACT.value,
+        "search_text": "my cat is called Tom",
+    }
+
+    vector = store._build_vector_field(payload, [1.0, 0.0])
+
+    assert vector == [1.0, 0.0]
+    # No coverage marker: the point stays 'missing' for the next upgrade run.
+    assert QdrantVectorStore._BM25_STATE_FIELD not in payload
+
+
+def test_write_degrades_when_encoder_fails_mid_encode(monkeypatch):
+    # Regression for #455: a present-but-failing encoder (model download or
+    # load failure) must not fail the write either.
+    def broken(_text):
+        raise RuntimeError("BM25 document encoding failed")
+
+    monkeypatch.setattr(
+        "hy_memory.pipelines._retrieval.bm25_fastembed.encode_doc",
+        broken,
+    )
+    store = _store(_FakeQdrant())
+    store._bm25_schema_ready = True
+    payload = {
+        "layer": MemoryLayer.L2_FACT.value,
+        "search_text": "my cat is called Tom",
+    }
+
+    vector = store._build_vector_field(payload, [1.0, 0.0])
+
+    assert vector == [1.0, 0.0]
+    assert QdrantVectorStore._BM25_STATE_FIELD not in payload
+
+
+@pytest.mark.asyncio
+async def test_upsert_succeeds_when_encoder_is_unavailable(monkeypatch):
+    # Regression for #455, end to end: upsert through the store must store the
+    # memory dense-only instead of raising when the encoder is unavailable.
+    def unavailable(_text):
+        raise RuntimeError("BM25 encoder is unavailable")
+
+    monkeypatch.setattr(
+        "hy_memory.pipelines._retrieval.bm25_fastembed.encode_doc",
+        unavailable,
+    )
+    client = _UpsertFakeQdrant()
+    store = _store(client)
+    store._bm25_schema_ready = True
+
+    node = _write_node()
+    stored_id = await store.upsert(node)
+
+    assert stored_id == node.node_id
+    assert len(client.upserted) == 1
+    point = client.upserted[0]
+    assert point.vector == list(node.embedding)  # dense-only, no sparse dict
+    assert QdrantVectorStore._BM25_STATE_FIELD not in (point.payload or {})
 
 
 @pytest.mark.asyncio

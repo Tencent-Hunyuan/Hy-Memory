@@ -864,6 +864,12 @@ class QdrantVectorStore(VectorStoreBase):
         - sparse schema 已就绪：返回 {"": dense, "bm25": SparseVector(...)}，sparse 由
           FastEmbed BM25 对 search_text 编码；空/零 token 文本只写 SDK 私有
           payload coverage 状态，不构造 sparse。
+        - 编码器不可用/失败（RuntimeError）：降级为 dense-only 写入，且**不写**
+          coverage 状态（点保持 missing，留给下一次 upgrade_qdrant_bm25() 回填），
+          保证**新增内存的写入**不依赖可选的词法编码器（见 #455）。注意：
+          update_payload/update_payload_batch 维持 #452 的严格拒绝语义（变更
+          lexical 后编码失败时拒绝提交，避免旧 sparse 与新内容不一致），由
+          测试锁定。维护路径（upgrade_bm25 → encode_docs）不受影响，仍严格抛错。
 
         跳过 L1_RAW：原始对话层不被任何召回路径消费（reader 召回 L0/L2/L3/L4，
         提取后又降 SHADOW，System2 也只取 L2/L4），给它编 sparse 纯浪费写入/存储。
@@ -879,7 +885,15 @@ class QdrantVectorStore(VectorStoreBase):
         from qdrant_client.models import SparseVector
 
         text = self._bm25_text(payload)
-        sp = bm25_fastembed.encode_doc(text) if text else None
+        try:
+            sp = bm25_fastembed.encode_doc(text) if text else None
+        except RuntimeError as exc:
+            logger.warning(
+                "[qdrant] sparse BM25 skipped for this write: %s; "
+                "point stays missing for the next BM25 upgrade run",
+                exc,
+            )
+            return embedding
         if not sp:
             payload[self._BM25_STATE_FIELD] = self._BM25_STATE_EMPTY
             return embedding
