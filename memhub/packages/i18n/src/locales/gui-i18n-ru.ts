@@ -2247,4 +2247,8 @@ export const russianMessages: Record<MessageKey, string> = {
   "migration.unknown": "неизвестно",
   "migration.yes": "да",
   "migration.no": "нет",
+  "core.portInUse.byRuntime":
+    "Порт {port} занят MemHub Core этого каталога данных (возможно, он ещё запускается). Дождитесь его готовности, сначала остановите его (memhub stop / перезапустите системную службу) или измените ONE_MEMORY_PORT.",
+  "core.portInUse.foreign":
+    "Порт {port} занят другим процессом, а не MemHub Core этого каталога данных. Найдите занимающий его процесс или измените ONE_MEMORY_PORT.",
 };

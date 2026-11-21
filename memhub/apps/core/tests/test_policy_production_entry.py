@@ -23,14 +23,14 @@ def test_production_serve_passes_only_supported_app_options(monkeypatch, tmp_pat
         captured.update(kwargs)
         return marker
 
-    def run(application, **kwargs):
-        assert application is marker
-        assert kwargs == {
-            "host": "127.0.0.1",
-            "port": 12345,
-            "reload": False,
-            "access_log": False,
-        }
+    def fake_server(config, **_kwargs):
+        captured["config"] = config
+
+        class FakeServer:
+            def run(self, *, sockets):
+                captured["sockets"] = sockets
+
+        return FakeServer()
 
     monkeypatch.setattr(cli, "load_settings", lambda: settings)
     monkeypatch.setattr(
@@ -41,9 +41,18 @@ def test_production_serve_passes_only_supported_app_options(monkeypatch, tmp_pat
     monkeypatch.setattr(log_file, "start_logging_to_file", lambda _: None)
     monkeypatch.setattr(runtime, "parent_pid", lambda: None)
     monkeypatch.setattr(api, "create_app", factory)
-    monkeypatch.setattr(uvicorn, "run", run)
+    # serve() binds its own sockets and hands them to uvicorn.Server.run();
+    # patching uvicorn.run would leave the real server serving forever.
+    monkeypatch.setattr(uvicorn, "Server", fake_server)
     cli.serve()
-    assert captured == {"manage_runtime": True}
+    assert captured["manage_runtime"] is True
+    config = captured["config"]
+    assert config.app is marker
+    assert config.host == "127.0.0.1"
+    assert config.port == 12345
+    assert config.reload is False
+    assert config.access_log is False
+    assert captured["sockets"]
     assert startup_order == [f"configure_hy:{tmp_path}", "create_app"]
 
 
@@ -61,14 +70,14 @@ def test_maintenance_serve_does_not_own_the_runtime(monkeypatch, tmp_path):
         captured.update(kwargs)
         return marker
 
-    def run(application, **kwargs):
-        assert application is marker
-        assert kwargs == {
-            "host": "127.0.0.1",
-            "port": 12346,
-            "reload": False,
-            "access_log": False,
-        }
+    def fake_server(config, **_kwargs):
+        captured["config"] = config
+
+        class FakeServer:
+            def run(self, *, sockets):
+                captured["sockets"] = sockets
+
+        return FakeServer()
 
     monkeypatch.setattr(cli, "load_settings", lambda: settings)
     monkeypatch.setattr(
@@ -79,7 +88,9 @@ def test_maintenance_serve_does_not_own_the_runtime(monkeypatch, tmp_path):
     monkeypatch.setattr(log_file, "start_logging_to_file", lambda _: None)
     monkeypatch.setattr(runtime, "parent_pid", lambda: None)
     monkeypatch.setattr(api, "create_app", factory)
-    monkeypatch.setattr(uvicorn, "run", run)
+    # serve() binds its own sockets and hands them to uvicorn.Server.run();
+    # patching uvicorn.run would leave the real server serving forever.
+    monkeypatch.setattr(uvicorn, "Server", fake_server)
 
     entered = []
 
@@ -98,5 +109,12 @@ def test_maintenance_serve_does_not_own_the_runtime(monkeypatch, tmp_path):
 
     cli.serve(maintenance=True)
 
-    assert captured == {"manage_runtime": False}
+    assert captured["manage_runtime"] is False
+    config = captured["config"]
+    assert config.app is marker
+    assert config.host == "127.0.0.1"
+    assert config.port == 12346
+    assert config.reload is False
+    assert config.access_log is False
+    assert captured["sockets"]
     assert entered == ["lock", "unlock"]

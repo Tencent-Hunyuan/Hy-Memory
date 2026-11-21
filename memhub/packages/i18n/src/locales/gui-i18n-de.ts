@@ -2293,4 +2293,8 @@ export const germanMessages: Record<MessageKey, string> = {
   "migration.unknown": "unbekannt",
   "migration.yes": "ja",
   "migration.no": "nein",
+  "core.portInUse.byRuntime":
+    "Port {port} wird vom MemHub Core dieses Datenverzeichnisses belegt (möglicherweise noch beim Start). Warten Sie, bis er bereit ist, stoppen Sie ihn vorher (memhub stop / Systemdienst neu starten) oder ändern Sie ONE_MEMORY_PORT.",
+  "core.portInUse.foreign":
+    "Port {port} wird von einem anderen Prozess belegt, nicht vom MemHub Core dieses Datenverzeichnisses. Finden Sie den belegenden Prozess oder ändern Sie ONE_MEMORY_PORT.",
 };

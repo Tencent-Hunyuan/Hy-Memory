@@ -2282,4 +2282,8 @@ export const portugueseMessages: Record<MessageKey, string> = {
   "migration.unknown": "desconhecido",
   "migration.yes": "sim",
   "migration.no": "não",
+  "core.portInUse.byRuntime":
+    "A porta {port} está ocupada pelo MemHub Core deste diretório de dados (talvez ainda esteja iniciando). Aguarde ele ficar pronto, interrompa-o antes (memhub stop / reinicie o serviço do sistema) ou altere ONE_MEMORY_PORT.",
+  "core.portInUse.foreign":
+    "A porta {port} está ocupada por outro processo, não pelo MemHub Core deste diretório de dados. Encontre o processo que a ocupa ou altere ONE_MEMORY_PORT.",
 };

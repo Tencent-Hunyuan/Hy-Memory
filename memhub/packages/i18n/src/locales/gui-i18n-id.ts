@@ -2245,4 +2245,8 @@ export const indonesianMessages: Record<MessageKey, string> = {
   "migration.unknown": "tidak diketahui",
   "migration.yes": "ya",
   "migration.no": "tidak",
+  "core.portInUse.byRuntime":
+    "Port {port} sedang digunakan oleh MemHub Core milik direktori data ini (mungkin masih dalam proses mulai). Tunggu hingga siap, hentikan lebih dulu (memhub stop / mulai ulang layanan sistem), atau ubah ONE_MEMORY_PORT.",
+  "core.portInUse.foreign":
+    "Port {port} digunakan oleh proses lain, bukan MemHub Core milik direktori data ini. Temukan proses yang menanganinya atau ubah ONE_MEMORY_PORT.",
 };

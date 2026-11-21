@@ -2227,4 +2227,8 @@ export const japaneseMessages: Record<MessageKey, string> = {
   "migration.unknown": "不明",
   "migration.yes": "はい",
   "migration.no": "いいえ",
+  "core.portInUse.byRuntime":
+    "ポート {port} はこのデータディレクトリの MemHub Core が使用しています（起動中の可能性があります）。準備完了を待つか、先に停止する（memhub stop / システムサービスを再起動）か、ONE_MEMORY_PORT を変更してください。",
+  "core.portInUse.foreign":
+    "ポート {port} はこのデータディレクトリの MemHub Core 以外のプロセスが使用しています。占有しているプロセスを特定するか、ONE_MEMORY_PORT を変更してください。",
 };

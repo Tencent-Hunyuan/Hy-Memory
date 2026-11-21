@@ -2182,4 +2182,8 @@ export const koreanMessages: Record<MessageKey, string> = {
   "migration.unknown": "알 수 없음",
   "migration.yes": "예",
   "migration.no": "아니요",
+  "core.portInUse.byRuntime":
+    "포트 {port}를 이 데이터 디렉터리의 MemHub Core가 사용 중입니다(아직 시작 중일 수 있습니다). 준비될 때까지 기다리거나 먼저 중지(memhub stop / 시스템 서비스 재시작)하거나 ONE_MEMORY_PORT를 변경하세요.",
+  "core.portInUse.foreign":
+    "포트 {port}를 이 데이터 디렉터리의 MemHub Core가 아닌 다른 프로세스가 사용 중입니다. 점유한 프로세스를 찾거나 ONE_MEMORY_PORT를 변경하세요.",
 };

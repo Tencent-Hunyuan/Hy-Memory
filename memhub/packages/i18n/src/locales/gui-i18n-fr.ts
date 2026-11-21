@@ -2319,4 +2319,8 @@ export const frenchMessages: Record<MessageKey, string> = {
   "migration.unknown": "inconnu",
   "migration.yes": "oui",
   "migration.no": "non",
+  "core.portInUse.byRuntime":
+    "Le port {port} est occupé par le MemHub Core de ce répertoire de données (il est peut-être encore en cours de démarrage). Attendez qu'il soit prêt, arrêtez-le d'abord (memhub stop / redémarrez le service système) ou changez ONE_MEMORY_PORT.",
+  "core.portInUse.foreign":
+    "Le port {port} est occupé par un autre processus, pas par le MemHub Core de ce répertoire de données. Identifiez le processus concerné ou changez ONE_MEMORY_PORT.",
 };

@@ -7,6 +7,10 @@ import {
   callsSpanishMessages,
 } from "./gui-i18n-calls.js";
 import {
+  coreRefusalChineseMessages,
+  coreRefusalSpanishMessages,
+} from "./gui-i18n-core-refusal.js";
+import {
   currentChineseMessages,
   currentSpanishMessages,
 } from "./gui-i18n-current.js";
@@ -155,6 +159,11 @@ export const guiCatalogs: readonly Catalog[] = [
     spanish: callsSpanishMessages,
   },
   {
+    name: "coreRefusal",
+    chinese: coreRefusalChineseMessages,
+    spanish: coreRefusalSpanishMessages,
+  },
+  {
     name: "language",
     chinese: languageChineseMessages,
     spanish: languageSpanishMessages,
@@ -205,6 +214,7 @@ export const chineseMessages = merged.chinese as typeof guideChineseMessages &
   typeof applicationsChineseMessages &
   typeof memoryChineseMessages &
   typeof callsChineseMessages &
+  typeof coreRefusalChineseMessages &
   typeof languageChineseMessages &
   typeof migrationChineseMessages &
   typeof workbenchChineseMessages &

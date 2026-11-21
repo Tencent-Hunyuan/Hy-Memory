@@ -1,3 +1,4 @@
+import { coreRefusalEnglishMessages } from "./gui-i18n-core-refusal.js";
 import { currentEnglishMessages } from "./gui-i18n-current.js";
 import { embeddingSwitchEnglishMessages } from "./gui-i18n-embedding-switch.js";
 import { modeEnglishMessages } from "./gui-i18n-mode.js";
@@ -2072,4 +2073,5 @@ export const englishMessages = {
   ...currentEnglishMessages,
   ...embeddingSwitchEnglishMessages,
   ...modeEnglishMessages,
+  ...coreRefusalEnglishMessages,
 } as const;
