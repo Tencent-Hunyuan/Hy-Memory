@@ -89,6 +89,7 @@ class _LocalQdrantOwner:
         )
         self._lifecycle_lock = threading.Lock()
         self._closed = False
+        self._close_future: Optional[concurrent.futures.Future] = None
         try:
             self._client = self._executor.submit(factory).result()
         except BaseException:
@@ -126,14 +127,21 @@ class _LocalQdrantOwner:
             if client is not None:
                 client.close()
 
+        # 并发 close 必须是屏障：后来的调用方等待同一个 in-flight 关闭完成，
+        # 而不是看到 _closed 就立即返回（否则本地 Qdrant 的存储目录锁还未释放）。
         with self._lifecycle_lock:
-            if self._closed:
-                return
-            self._closed = True
-            future = self._executor.submit(close_owned_client)
+            if self._close_future is None:
+                if self._closed:
+                    # 工厂构造失败的实例：executor 已关闭，无可关闭资源，静默返回。
+                    return
+                self._closed = True
+                self._close_future = self._executor.submit(close_owned_client)
+        future = self._close_future
         try:
-            future.result()
+            if future is not None:
+                future.result()
         finally:
+            # shutdown 幂等，所有调用方都能安全执行这一步。
             self._executor.shutdown(wait=True, cancel_futures=True)
 
 
@@ -169,6 +177,9 @@ class QdrantVectorStore(VectorStoreBase):
         # This lock prevents duplicate upgrades within this store instance;
         # cross-process exclusion remains the caller's maintenance-window duty.
         self._bm25_upgrade_lock = asyncio.Lock()
+        # close 的屏障：并发/嵌套调用收敛为同一次真实关闭，
+        # 所有调用方都等到本地客户端真正释放后才返回（见 #454）。
+        self._close_lock = asyncio.Lock()
         self._sparse_name = "bm25"
         self._tag_index_ready = False
         self._tag_index_init_lock = threading.Lock()
@@ -2011,10 +2022,11 @@ class QdrantVectorStore(VectorStoreBase):
             return 0
 
     async def close(self) -> None:
-        """关闭客户端"""
-        client, self._client = self._client, None
-        if client is not None:
-            await _run_in_vdb_pool(client.close)
+        """关闭客户端；并发调用是屏障，全部等到真实关闭完成后才返回"""
+        async with self._close_lock:
+            client, self._client = self._client, None
+            if client is not None:
+                await _run_in_vdb_pool(client.close)
 
     # ================================================================
     # Keyword Search (Full-text)
