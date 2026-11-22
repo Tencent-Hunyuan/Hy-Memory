@@ -590,6 +590,20 @@ class Extractor:
                     info = {}
                 else:
                     info = parsed
+                    # Some models answer the extraction contract with the legacy
+                    # plural key ("memories") or a "text" field per item. The
+                    # writer only reads "memory" / "content", so normalise here
+                    # instead of silently extracting nothing. Existing keys win;
+                    # the alias is only copied when the canonical key is absent.
+                    if not info.get("memory") and info.get("memories") is not None:
+                        info["memory"] = info["memories"]
+                        logger.info("[extractor] normalised 'memories' -> 'memory'")
+                    for _items in (info.get("memory"), info.get("intentions")):
+                        if not isinstance(_items, list):
+                            continue
+                        for _item in _items:
+                            if isinstance(_item, dict) and not _item.get("content") and _item.get("text"):
+                                _item["content"] = _item["text"]
             else:
                 info = {}
 
