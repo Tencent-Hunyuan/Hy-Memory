@@ -20,7 +20,12 @@ dependencies = [
     "python-dotenv",
     "pyyaml",
     "chromadb>=1.5.9",
-    "kuzu",
+    # kuzu 目前只发布到 cp313。它在代码里是懒加载的（graph_store_kuzu 里按需
+    # import，enable_graph 默认 False），纯向量用法不需要它；但它是硬依赖，
+    # 3.14 上会回退到 sdist 现场编译并失败，连 pip install 都装不上。
+    # 上限让 3.14 拿到可用的基础功能，图存储在那时需要用户自己装 kuzu
+    # （initialize() 会给出明确提示）。
+    "kuzu; python_version < '3.14'",
     "langdetect",
     "scikit-learn",
     "tiktoken",
@@ -45,7 +50,7 @@ all = [
     "qdrant-client",
     "fastembed",
     "faiss-cpu",
-    "kuzu",
+    "kuzu; python_version < '3.14'",
     "neo4j",
     "aiomysql",
     "psycopg[binary]>=3.1,<4",

@@ -467,10 +467,17 @@ class KuzuGraphStore(GraphStoreBase):
         """
         try:
             import kuzu
-        except ImportError:
+        except ImportError as exc:
+            # pyproject 用 marker 把 kuzu 限制在 3.14 以下（上游还没有该版本的
+            # wheel，否则连 pip install 都会在 sdist 编译阶段失败）。所以
+            # 「没装 kuzu」不再等于「用户漏装了一个普通依赖」，提示要给到可执行的
+            # 替换路径，否则 3.14 用户照原提示装 kuzu 会再撞一次编译错误。
             raise ImportError(
-                "kuzu is required. Install with: pip install kuzu"
-            )
+                "kuzu is required for the kuzu graph store but is not "
+                "installed. Install with: pip install kuzu. Upstream ships no "
+                "wheel for Python 3.14 yet; on that version use the neo4j "
+                "backend (pip install \"hy-memory[graph]\") or Python <= 3.13."
+            ) from exc
 
         db_path = Path(self._db_path)
         # Kuzu >= 0.11 自行管理数据库文件，不接受已存在的空目录
