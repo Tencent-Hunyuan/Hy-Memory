@@ -2178,11 +2178,15 @@ class KuzuGraphStore(GraphStoreBase):
 
         # add_edge 建的是双向边，所以只查正向即可覆盖两个方向；
         # 无向去重用 frozenset(pair) 做 key。
+        # 与下面的 source_filter 一样走参数：relation_type 来自抽取结果，是
+        # 可变文本，拼进 Cypher 会被撇号打断（异常被吞掉 → 静默返回空边集）。
         rtype_filter = ""
+        rtype_params: Dict[str, Any] = {}
         if relation_types:
-            _quoted = ", ".join(f"'{t}'" for t in relation_types if t)
-            if _quoted:
-                rtype_filter = f"AND r.relation_type IN [{_quoted}]"
+            _types = [t for t in relation_types if t]
+            if _types:
+                rtype_filter = "AND list_contains($relation_types, r.relation_type)"
+                rtype_params["relation_types"] = _types
         source_conditions = []
         if include_sources:
             source_conditions.append("list_contains($include_sources, b.source)")
@@ -2208,7 +2212,7 @@ class KuzuGraphStore(GraphStoreBase):
                        b.status, b.layer
                 LIMIT {int(max_edges) * 2};
                 """,
-                {"ids": list(node_ids), **source_params},
+                {"ids": list(node_ids), **source_params, **rtype_params},
             )
             for row in (rows or []):
                 src, tgt = row[0], row[1]
@@ -2304,7 +2308,12 @@ class KuzuGraphStore(GraphStoreBase):
         all_expanded = []
         frontier = list(anchor_ids)
 
-        ik_filter = f"AND m.isolation_key = '{isolation_key}'" if isolation_key else ""
+        # isolation_key 是租户边界，必须当参数绑定：拼进 Cypher 字符串时，
+        # 撇号会让整条语句变成语法错误（异常被下面的 except 吞掉 → 静默返回
+        # 空），而 `x' OR '1'='1` 这类值会把 WHERE 变成恒真，把别的租户的
+        # 节点展开给调用方。Neo4j 版本一直用 $ik，两个后端在这里必须一致。
+        ik_filter = "AND m.isolation_key = $ik" if isolation_key else ""
+        params_base: Dict[str, Any] = {"ik": isolation_key} if isolation_key else {}
 
         for current_hop in range(1, hop + 1):
             if not frontier or len(all_expanded) >= max_nodes:
@@ -2322,7 +2331,7 @@ class KuzuGraphStore(GraphStoreBase):
                         RETURN DISTINCT m.node_id, m.content, m.layer, m.confidence
                         LIMIT {int(max_nodes)};
                         """,
-                        {"aid": aid},
+                        {"aid": aid, **params_base},
                     )
                     for row in (rows or []):
                         nid = row[0]
@@ -2349,7 +2358,7 @@ class KuzuGraphStore(GraphStoreBase):
                         RETURN DISTINCT m.node_id, m.content, m.layer, m.confidence, t.name
                         LIMIT {int(max_nodes)};
                         """,
-                        {"aid": aid},
+                        {"aid": aid, **params_base},
                     )
                     for row in (rows or []):
                         nid = row[0]
