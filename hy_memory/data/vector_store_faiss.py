@@ -16,6 +16,8 @@ import asyncio
 import concurrent.futures
 import json
 import logging
+import os
+import tempfile
 import threading
 import numpy as np
 
@@ -37,6 +39,33 @@ def _run_in_vdb_pool(func, *args, **kwargs):
     import functools
     call = functools.partial(func, *args, **kwargs) if args or kwargs else func
     return run_in_executor_guarded(_vdb_executor, call)
+
+
+def _temp_path(directory: Path, name: str) -> Path:
+    """同目录下的唯一临时文件名，供一次保存独占写入。"""
+    fd, path = tempfile.mkstemp(prefix=f".{name}.", suffix=".tmp", dir=str(directory))
+    os.close(fd)
+    return Path(path)
+
+
+def _fsync_file(path: Path) -> None:
+    """把不是由 Python 写出的文件刷到磁盘（faiss 自己写的 index）。"""
+    with open(path, "rb+") as f:
+        os.fsync(f.fileno())
+
+
+def _fsync_dir(directory: Path) -> None:
+    """让 rename 本身持久化；Windows 没有目录句柄，跳过。"""
+    if os.name != "posix":
+        return
+    try:
+        fd = os.open(str(directory), os.O_RDONLY)
+    except OSError:
+        return
+    try:
+        os.fsync(fd)
+    finally:
+        os.close(fd)
 
 
 class FaissVectorStore(VectorStoreBase):
@@ -82,10 +111,19 @@ class FaissVectorStore(VectorStoreBase):
                     saved = json.load(f)
                 self._data = saved.get("data", {})
                 self._idx_to_id = {int(k): v for k, v in saved.get("idx_to_id", {}).items()}
-                self._next_idx = saved.get("next_idx", 0)
+                self._next_idx = self._restore_next_idx(saved.get("next_idx", 0))
                 logger.info(
                     f"FAISS index loaded from {index_path}, "
                     f"points={self._index.ntotal}"
+                )
+            elif index_path.exists() or payload_path.exists():
+                # 只写了一半的 pair：既有的那份仍有数据，不能当作空库重建，
+                # 否则下一次 _persist() 会用空索引覆盖掉它。
+                raise RuntimeError(
+                    f"FAISS collection '{self._collection_name}' is incomplete in "
+                    f"{persist_dir}: {index_path.name} and {payload_path.name} must "
+                    f"both exist. Restore the missing file, or remove both to start "
+                    f"from an empty collection."
                 )
             else:
                 # 创建新索引 (使用 IndexFlatIP，余弦相似度需先归一化)
@@ -99,8 +137,58 @@ class FaissVectorStore(VectorStoreBase):
     # 持久化
     # ================================================================
 
+    def _restore_next_idx(self, saved_next_idx: Any) -> int:
+        """把 ``_next_idx`` 对齐到索引真实长度。
+
+        FAISS 总是把新向量追加在 ``ntotal`` 位置，而本类把它当作内部 id 写进
+        ``_idx_to_id``。因此 ``_next_idx == index.ntotal`` 是必须成立的不变量：
+        两者不一致说明 index 与 payload 来自不同的两次保存，此时直接沿用
+        payload 的 ``next_idx`` 会让后续写入的 id 与实际位置错位，检索永久失准。
+        """
+        saved_next_idx = int(saved_next_idx or 0)
+        ntotal = int(self._index.ntotal)
+        if saved_next_idx == ntotal:
+            return ntotal
+
+        if saved_next_idx < ntotal:
+            # index 比 payload 新（保存顺序即如此）：多出的向量没有任何
+            # payload 指向它们，检索会自然跳过，只需把 id 追平避免复用。
+            logger.warning(
+                f"FAISS pair from different saves: index holds {ntotal} vectors "
+                f"but the payload records {saved_next_idx}; continuing from {ntotal}"
+            )
+            return ntotal
+
+        # payload 比 index 新：这些条目在后端根本没有向量，无法被检索命中；
+        # 保留它们会让内存视图与索引永久不一致，因此按未提交处理。
+        orphaned = [
+            point_id for point_id, entry in self._data.items()
+            if int(entry.get("idx", -1)) >= ntotal
+        ]
+        for point_id in orphaned:
+            self._data.pop(point_id, None)
+        self._idx_to_id = {
+            idx: point_id for idx, point_id in self._idx_to_id.items() if idx < ntotal
+        }
+        logger.warning(
+            f"FAISS pair from different saves: the payload records {saved_next_idx} "
+            f"points but the index holds {ntotal}; dropped {len(orphaned)} point(s) "
+            f"with no vector and continuing from {ntotal}"
+        )
+        return ntotal
+
     def _persist(self) -> None:
-        """持久化索引和 payload 到磁盘"""
+        """成对发布 index 与 payload，不覆盖已提交的那一对。
+
+        两个文件都先写到同目录下的临时文件并刷盘，最后才用 ``os.replace``
+        换到正式名字。``os.replace`` 是原子的（POSIX 与 Windows 都是），所以
+        进程被杀、磁盘写满或 JSON 序列化失败时，上一次成功保存的 pair 依然
+        完整可读，而不是留下一个截断的 index 或一个空文件。
+
+        先发布 index 再发布 payload 是有意的：若进程在两次 rename 之间退出，
+        剩下的组合里只有「没有 payload 指向的向量」（检索直接忽略），而反过来
+        会出现「payload 指向索引之外的位置」。
+        """
         import faiss
 
         persist_dir = Path(self.config.vector_store.persist_directory)
@@ -108,15 +196,38 @@ class FaissVectorStore(VectorStoreBase):
 
         index_path = persist_dir / f"{self._collection_name}.faiss"
         payload_path = persist_dir / f"{self._collection_name}.json"
-
-        faiss.write_index(self._index, str(index_path))
         saved = {
             "data": self._data,
             "idx_to_id": {str(k): v for k, v in self._idx_to_id.items()},
             "next_idx": self._next_idx,
         }
-        with open(payload_path, "w", encoding="utf-8") as f:
-            json.dump(saved, f, ensure_ascii=False)
+
+        index_tmp: Optional[Path] = None
+        payload_tmp: Optional[Path] = None
+        try:
+            index_tmp = _temp_path(persist_dir, index_path.name)
+            faiss.write_index(self._index, str(index_tmp))
+            _fsync_file(index_tmp)
+
+            payload_tmp = _temp_path(persist_dir, payload_path.name)
+            with open(payload_tmp, "w", encoding="utf-8") as f:
+                json.dump(saved, f, ensure_ascii=False)
+                f.flush()
+                os.fsync(f.fileno())
+
+            os.replace(index_tmp, index_path)
+            index_tmp = None
+            os.replace(payload_tmp, payload_path)
+            payload_tmp = None
+            _fsync_dir(persist_dir)
+        finally:
+            for leftover in (index_tmp, payload_tmp):
+                if leftover is None:
+                    continue
+                try:
+                    leftover.unlink()
+                except OSError:
+                    pass
 
     @staticmethod
     def _normalize(vec: List[float]) -> np.ndarray:
