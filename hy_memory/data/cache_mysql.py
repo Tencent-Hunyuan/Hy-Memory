@@ -447,8 +447,17 @@ class MysqlCache(CacheBase):
                 conditions.append("request_id = %s")
                 params.append(request_id)
             if user_id:
-                conditions.append("user_id = %s")
-                params.append(user_id)
+                from ..utils.pipeline_observability import split_namespace_user
+                namespace, uid = split_namespace_user(user_id)
+                if namespace:
+                    conditions.append(
+                        "((namespace = %s AND user_id = %s)"
+                        " OR (namespace = '' AND user_id = %s))"
+                    )
+                    params.extend([namespace, uid, user_id])
+                else:
+                    conditions.append("user_id = %s")
+                    params.append(uid)
             if step:
                 conditions.append("step = %s")
                 params.append(step)
