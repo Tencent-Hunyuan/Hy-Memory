@@ -3,6 +3,7 @@
 from collections.abc import Iterator
 from contextlib import contextmanager
 from contextvars import ContextVar, Token
+from typing import Optional
 
 _model_call_stage: ContextVar[str] = ContextVar(
     "hy_memory_model_call_stage",
@@ -15,7 +16,7 @@ def current_model_call_stage() -> str:
 
 
 @contextmanager
-def model_call_stage(stage: str | None) -> Iterator[None]:
+def model_call_stage(stage: Optional[str]) -> Iterator[None]:
     normalized = (stage or "other").strip().lower() or "other"
     token: Token[str] = _model_call_stage.set(normalized)
     try:
