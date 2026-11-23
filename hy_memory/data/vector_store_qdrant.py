@@ -339,14 +339,14 @@ class QdrantVectorStore(VectorStoreBase):
         logger.debug(f"VectorStore initialized (Qdrant sync client), collection={self._collection_name}")
 
     @staticmethod
-    def _modifier_value(value: Any) -> str | None:
+    def _modifier_value(value: Any) -> Optional[str]:
         if value is None:
             return None
         normalized = getattr(value, "value", value)
         return str(normalized).strip().lower()
 
     @staticmethod
-    def _supports_vector_schema_api(version: str | None) -> bool:
+    def _supports_vector_schema_api(version: Optional[str]) -> bool:
         if not version:
             return False
         match = re.fullmatch(r"v?(\d+)\.(\d+)(?:\.\d+)?", version.strip())
