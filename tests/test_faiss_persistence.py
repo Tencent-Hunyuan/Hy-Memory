@@ -13,7 +13,9 @@ means the two can never come from different generations.
 
 import asyncio
 import json
+import os
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -66,6 +68,41 @@ def _ids(store) -> set[str]:
 
 def _container(tmp_path, store) -> Path:
     return tmp_path / "faiss_data" / f"{store._collection_name}.omfaiss"
+
+
+@pytest.mark.parametrize(("os_name", "writable"), [("nt", True), ("posix", False)])
+def test_fsync_file_uses_platform_appropriate_access(
+    tmp_path, monkeypatch, os_name, writable
+):
+    path = tmp_path / "staged-index"
+    original = b"staged FAISS index bytes"
+    path.write_bytes(original)
+    opened = []
+    synced = []
+
+    def observe_open(file, mode):
+        handle = open(file, mode)
+        opened.append((handle.fileno(), handle.writable()))
+        return handle
+
+    def observe_fsync(fd):
+        synced.append(fd)
+        os.fsync(fd)
+
+    monkeypatch.setattr(faiss_store, "open", observe_open, raising=False)
+    monkeypatch.setattr(
+        faiss_store, "os", SimpleNamespace(name=os_name, fsync=observe_fsync)
+    )
+    # Windows cannot fsync a read-only handle. For the simulated POSIX case
+    # on Windows, observe the call without issuing that unsupported syscall.
+    if os.name == "nt" and not writable:
+        monkeypatch.setattr(faiss_store.os, "fsync", synced.append)
+
+    faiss_store._fsync_file(path)
+
+    assert len(synced) == 1
+    assert opened == [(synced[0], writable)]
+    assert path.read_bytes() == original
 
 
 def test_a_failed_index_write_keeps_the_previous_generation(tmp_path, monkeypatch):

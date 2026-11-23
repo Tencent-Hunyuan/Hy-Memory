@@ -56,7 +56,10 @@ def _backup_path(path: Path) -> Path:
 
 
 def _fsync_file(path: Path) -> None:
-    with open(path, "rb") as handle:
+    # Windows' FlushFileBuffers requires a writable handle. Keep read-only
+    # access on POSIX, and never truncate the staged file on either platform.
+    mode = "rb+" if os.name == "nt" else "rb"
+    with open(path, mode) as handle:
         os.fsync(handle.fileno())
 
 
