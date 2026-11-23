@@ -2178,11 +2178,15 @@ class KuzuGraphStore(GraphStoreBase):
 
         # add_edge 建的是双向边，所以只查正向即可覆盖两个方向；
         # 无向去重用 frozenset(pair) 做 key。
+        # 与下面的 source_filter 一样走参数：relation_type 来自抽取结果，是
+        # 可变文本，拼进 Cypher 会被撇号打断（异常被吞掉 → 静默返回空边集）。
         rtype_filter = ""
+        rtype_params: Dict[str, Any] = {}
         if relation_types:
-            _quoted = ", ".join(f"'{t}'" for t in relation_types if t)
-            if _quoted:
-                rtype_filter = f"AND r.relation_type IN [{_quoted}]"
+            _types = [t for t in relation_types if t]
+            if _types:
+                rtype_filter = "AND list_contains($relation_types, r.relation_type)"
+                rtype_params["relation_types"] = _types
         source_conditions = []
         if include_sources:
             source_conditions.append("list_contains($include_sources, b.source)")
@@ -2208,7 +2212,7 @@ class KuzuGraphStore(GraphStoreBase):
                        b.status, b.layer
                 LIMIT {int(max_edges) * 2};
                 """,
-                {"ids": list(node_ids), **source_params},
+                {"ids": list(node_ids), **source_params, **rtype_params},
             )
             for row in (rows or []):
                 src, tgt = row[0], row[1]

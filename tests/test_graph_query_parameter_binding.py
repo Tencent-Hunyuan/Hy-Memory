@@ -1,4 +1,7 @@
-"""Kuzu 的 expand_with_tags 必须把 isolation_key 当参数绑定，而不是拼进 Cypher。
+"""Kuzu 里凡是「值」都必须当查询参数绑定，而不是拼进 Cypher 字符串。
+
+覆盖两处此前仍在拼字符串的过滤条件：``expand_with_tags`` 的 isolation_key、
+``get_related_edges`` 的 relation_types。
 
 两个后果都是实测过的：
 
@@ -100,6 +103,72 @@ def test_isolation_key_with_an_apostrophe_still_expands(tmp_path):
                 [odd.node_id], hop=1, isolation_key=odd.get_isolation_key(),
             )
             assert [item["node_id"] for item in out] == [odd_sibling.node_id]
+        finally:
+            await store.close()
+
+    asyncio.run(run())
+
+
+def test_relation_type_filter_handles_a_value_with_an_apostrophe(tmp_path):
+    """relation_type 是抽取出来的文本，带撇号时不能用拼字符串过滤。"""
+
+    async def run():
+        store = await _store(tmp_path)
+        try:
+            first = _node("carol", "note")
+            second = _node("carol", "follow-up")
+            for node in (first, second):
+                await store.upsert_memory_node(node)
+            assert await store.add_edge(
+                first.node_id, second.node_id, "RELATED_TO",
+                properties={"relation_type": "o'brien-case"},
+            )
+
+            unfiltered = await store.get_related_edges([first.node_id])
+            assert [edge["relation_type"] for edge in unfiltered] == ["o'brien-case"]
+
+            filtered = await store.get_related_edges(
+                [first.node_id], relation_types=["o'brien-case"],
+            )
+            assert [edge["relation_type"] for edge in filtered] == ["o'brien-case"]
+
+            other = await store.get_related_edges(
+                [first.node_id], relation_types=["something-else"],
+            )
+            assert other == []
+        finally:
+            await store.close()
+
+    asyncio.run(run())
+
+
+def test_relation_type_filter_handles_a_value_with_an_apostrophe(tmp_path):
+    """relation_type 是抽取出来的文本，带撇号时不能用拼字符串过滤。"""
+
+    async def run():
+        store = await _store(tmp_path)
+        try:
+            first = _node("carol", "note")
+            second = _node("carol", "follow-up")
+            for node in (first, second):
+                await store.upsert_memory_node(node)
+            assert await store.add_edge(
+                first.node_id, second.node_id, "RELATED_TO",
+                properties={"relation_type": "o'brien-case"},
+            )
+
+            unfiltered = await store.get_related_edges([first.node_id])
+            assert [edge["relation_type"] for edge in unfiltered] == ["o'brien-case"]
+
+            filtered = await store.get_related_edges(
+                [first.node_id], relation_types=["o'brien-case"],
+            )
+            assert [edge["relation_type"] for edge in filtered] == ["o'brien-case"]
+
+            other = await store.get_related_edges(
+                [first.node_id], relation_types=["something-else"],
+            )
+            assert other == []
         finally:
             await store.close()
 
