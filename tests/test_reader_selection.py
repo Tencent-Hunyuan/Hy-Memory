@@ -32,15 +32,14 @@ def test_reader_difference_is_keyword_recall_only():
     assert HybridReadPipeline.VERSION == "hybrid"
     assert LegacyReadPipeline.ENABLE_KEYWORD_RECALL is False
     assert HybridReadPipeline.ENABLE_KEYWORD_RECALL is True
-    runtime_metadata = {
-        "__module__", "__doc__", "__abstractmethods__", "_abc_impl",
-    }
-    assert set(LegacyReadPipeline.__dict__) - runtime_metadata == {
-        "VERSION", "ENABLE_KEYWORD_RECALL",
-    }
-    assert set(HybridReadPipeline.__dict__) - runtime_metadata == {
-        "VERSION", "ENABLE_KEYWORD_RECALL",
-    }
+    # 只钉公开属性：CPython 3.13 起类的 __dict__ 里多了 __static_attributes__、
+    # __firstlineno__ 这类解释器记账字段（后续版本还会增删），逐项列举运行时元数据
+    # 会让这条用例在声明的 python>=3.9 区间里只对某几个版本绿。
+    def public_attrs(cls):
+        return {name for name in vars(cls) if not name.startswith("_")}
+
+    assert public_attrs(LegacyReadPipeline) == {"VERSION", "ENABLE_KEYWORD_RECALL"}
+    assert public_attrs(HybridReadPipeline) == {"VERSION", "ENABLE_KEYWORD_RECALL"}
 
 
 class _KeywordStore:

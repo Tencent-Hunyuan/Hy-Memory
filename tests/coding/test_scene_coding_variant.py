@@ -176,7 +176,13 @@ class TestPromptContent:
 @pytest.fixture
 def chain():
     with tempfile.TemporaryDirectory() as d:
-        yield HyCodeMem(os.path.join(d, "chain"))
+        store = HyCodeMem(os.path.join(d, "chain"))
+        try:
+            yield store
+        finally:
+            # Windows 下未关闭的 SQLite 句柄会让 TemporaryDirectory 清理抛
+            # PermissionError (WinError 32)，把用例变成 error。
+            store.close()
 
 
 class TestChainText:
@@ -215,14 +221,17 @@ class TestChainObserve:
         # agent 修改文件后不一定立即提交，因此不能只依赖 commit diff。
         with tempfile.TemporaryDirectory() as d:
             H = HyCodeMem(os.path.join(d, "c"))   # repo_root=None
-            n = H.observe(
-                HyMemoryClient._chain_text(
-                    _edit_msgs("On branch feat/q4, set mult.",
-                               "mult = 255.0\n", "mult = 360.0\n")),
-                meta={"branch": "feat/q4"},
-            )
-            assert n >= 1
-            assert H.stats()["threads"] == 1
+            try:
+                n = H.observe(
+                    HyMemoryClient._chain_text(
+                        _edit_msgs("On branch feat/q4, set mult.",
+                                   "mult = 255.0\n", "mult = 360.0\n")),
+                    meta={"branch": "feat/q4"},
+                )
+                assert n >= 1
+                assert H.stats()["threads"] == 1
+            finally:
+                H.close()
 
     def test_multiple_versions_land_on_one_thread(self, chain):
         # ★ 这层存在的理由: 同一处代码被改了几版, 每版的原话 + 真实 patch 都留着。
@@ -489,44 +498,59 @@ class TestChainOwnerIsolation:
         with tempfile.TemporaryDirectory() as d:
             p = os.path.join(d, "ch")
             HA = HyCodeMem(p, owner="userA|repo1")
-            HA.observe(HyMemoryClient._chain_text(
-                self._edit("On branch feat/q4, A 改的", "x = 1\n", "x = 2\n")),
-                meta={"branch": "feat/q4"})
-            # 同一个库文件、同一个分支、同一个文件名
             HB = HyCodeMem(p, owner="userB|repo1")
-            HB.observe(HyMemoryClient._chain_text(
-                self._edit("On branch feat/q4, B 改的", "y = 1\n", "y = 2\n")),
-                meta={"branch": "feat/q4"})
+            try:
+                HA.observe(HyMemoryClient._chain_text(
+                    self._edit("On branch feat/q4, A 改的", "x = 1\n", "x = 2\n")),
+                    meta={"branch": "feat/q4"})
+                # 同一个库文件、同一个分支、同一个文件名
+                HB.observe(HyMemoryClient._chain_text(
+                    self._edit("On branch feat/q4, B 改的", "y = 1\n", "y = 2\n")),
+                    meta={"branch": "feat/q4"})
 
-            blkA, _ = HA.decorate([dict(self._FACT[0])], instruction="q")
-            blkB, _ = HB.decorate([dict(self._FACT[0])], instruction="q")
-            assert "x = 2" in blkA and "y = 2" not in blkA, "A 读到了 B 的 diff"
-            assert "y = 2" in blkB and "x = 2" not in blkB, "B 读到了 A 的 diff"
+                blkA, _ = HA.decorate([dict(self._FACT[0])], instruction="q")
+                blkB, _ = HB.decorate([dict(self._FACT[0])], instruction="q")
+                assert "x = 2" in blkA and "y = 2" not in blkA, "A 读到了 B 的 diff"
+                assert "y = 2" in blkB and "x = 2" not in blkB, "B 读到了 A 的 diff"
+            finally:
+                HA.close()
+                HB.close()
 
     def test_empty_owner_is_not_a_public_pool(self):
         # 空 owner 只匹配空 owner，否则旧的空 owner 数据会错误读取所有新写入。
         with tempfile.TemporaryDirectory() as d:
             p = os.path.join(d, "ch")
             H1 = HyCodeMem(p, owner="u1|r1")
-            H1.observe(HyMemoryClient._chain_text(
-                self._edit("On branch feat/q4, u1 改的", "x = 1\n", "x = 2\n")),
-                meta={"branch": "feat/q4"})
             H0 = HyCodeMem(p)      # owner=''
-            blk, used = H0.decorate([dict(self._FACT[0])], instruction="q")
-            assert blk == "" and used == []
+            try:
+                H1.observe(HyMemoryClient._chain_text(
+                    self._edit("On branch feat/q4, u1 改的", "x = 1\n", "x = 2\n")),
+                    meta={"branch": "feat/q4"})
+                blk, used = H0.decorate([dict(self._FACT[0])], instruction="q")
+                assert blk == "" and used == []
+            finally:
+                H1.close()
+                H0.close()
 
     def test_stats_scoped_to_owner_by_default(self):
         with tempfile.TemporaryDirectory() as d:
             p = os.path.join(d, "ch")
-            for o, var in (("u1|r1", "a"), ("u2|r1", "b")):
-                H = HyCodeMem(p, owner=o)
-                H.observe(HyMemoryClient._chain_text(
-                    self._edit(f"On branch feat/q4, {o}", f"{var} = 1\n", f"{var} = 2\n")),
-                    meta={"branch": "feat/q4"})
-            H = HyCodeMem(p, owner="u1|r1")
-            # 默认只数自己的 —— 灌库自检靠这个数, 报全库会整体偏大
-            assert H.stats()["threads"] == 1
-            assert H.stats(all_owners=True)["threads"] == 2
+            opened = []
+            try:
+                for o, var in (("u1|r1", "a"), ("u2|r1", "b")):
+                    H = HyCodeMem(p, owner=o)
+                    opened.append(H)
+                    H.observe(HyMemoryClient._chain_text(
+                        self._edit(f"On branch feat/q4, {o}", f"{var} = 1\n", f"{var} = 2\n")),
+                        meta={"branch": "feat/q4"})
+                H = HyCodeMem(p, owner="u1|r1")
+                opened.append(H)
+                # 默认只数自己的 —— 灌库自检靠这个数, 报全库会整体偏大
+                assert H.stats()["threads"] == 1
+                assert H.stats(all_owners=True)["threads"] == 2
+            finally:
+                for store in opened:
+                    store.close()
 
 
 # ════════════════════════════════════════════════════════════════════
@@ -546,11 +570,14 @@ class TestEditFailureGate:
 
     def _observe(self, tmpdir, tail, tag):
         H = HyCodeMem(os.path.join(tmpdir, tag))
-        t = HyMemoryClient._chain_text([
-            _FakeMsg("user", "On branch feat/q4, 改 mult"),
-            _FakeMsg("tool", self._EDIT + "\n" + tail, tool_name="bash"),
-        ])
-        return H.observe(t, meta={"branch": "feat/q4"})
+        try:
+            t = HyMemoryClient._chain_text([
+                _FakeMsg("user", "On branch feat/q4, 改 mult"),
+                _FakeMsg("tool", self._EDIT + "\n" + tail, tool_name="bash"),
+            ])
+            return H.observe(t, meta={"branch": "feat/q4"})
+        finally:
+            H.close()
 
     @pytest.mark.parametrize("tail,tag", [
         ("Traceback (most recent call last):\n  File \"<stdin>\"\nAssertionError", "as"),
