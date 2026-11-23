@@ -4,14 +4,14 @@ Agent Memory V2 - Intention Detector (意图检测 Agent)
 V2 设计文档 §3.4 + §4.1:
 
   检测用户对话中的前瞻性意图 (Prospective Memory)。
-  L6 层: 记住"将来要做什么"。
+  L7 层 (INTENTION): 记住"将来要做什么"。
 
   两种触发类型:
   1. TIME_BASED: 时间触发 (如 "下周一提醒我")
   2. EVENT_BASED: 事件触发 (如 "下次聊到旅行时")
 
   意图检测用于:
-  1. Write Path (System 1): 轻量检测，快速写入 L6 Intention Queue
+  1. Write Path (System 1): 轻量检测，快速写入 L7 Intention Queue
   2. Read Path: 检查当前对话是否触发了已有意图
   3. System 2: 深度分析意图细节，设置触发条件
 
