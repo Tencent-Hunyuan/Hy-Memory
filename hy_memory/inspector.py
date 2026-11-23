@@ -25,9 +25,33 @@ HY Memory - MemoryInspector 调试/审计工具类
 """
 
 import asyncio
+from datetime import datetime
 from typing import Any, Dict, List, Optional
 
 from .utils.async_executor import await_concurrent_future_guarded
+
+
+def _log_time_key(log: Dict[str, Any]) -> tuple:
+    """把一条 pipeline log 排到它「发生的时刻」上。
+
+    ``event_at_ms`` 是 step 发生时刻，但它对补列之前写入的历史行是 0（见
+    ``cache_sqlite._migrate_pipeline_logs_columns``）。直接拿 0 当键会让这些行
+    排到所有新行**前面**，与「缺省回落 created_at」的约定正好相反 —— 一次
+    search 的 trace 里 READ_REQUEST 会跑到 RECALL 后面几步的后面去。
+
+    因此：有 event_at_ms 用它；没有就解析 created_at；两者都拿不到时排到最后，
+    保持入参顺序稳定（list.sort 是稳定排序）。
+    """
+    event_ms = log.get("event_at_ms") or 0
+    if event_ms:
+        return (float(event_ms), "")
+    created = log.get("created_at") or ""
+    if created:
+        try:
+            return (datetime.fromisoformat(created).timestamp() * 1000.0, created)
+        except (TypeError, ValueError):
+            pass
+    return (float("inf"), created)
 
 
 class MemoryInspector:
@@ -280,7 +304,7 @@ class MemoryInspector:
         read_logs = [log for log in all_logs if (log.get("step") or "").startswith(self._READ_STEP_PREFIX)]
 
         # 按 event_at_ms 升序（step 发生时刻，最准）；缺省回落 created_at 保持稳定
-        read_logs.sort(key=lambda log: (log.get("event_at_ms") or 0, log.get("created_at") or ""))
+        read_logs.sort(key=_log_time_key)
 
         import json as _json
         parsed_logs: List[Dict[str, Any]] = []
