@@ -21,6 +21,7 @@ from one_memory.api import create_app
 from one_memory.config import Settings
 from one_memory.imports.grants import SourceGrantStore
 from one_memory.imports.jobs import ImportJobStore
+from one_memory.imports.models import MAX_VERBATIM_CHARACTERS
 from one_memory.imports.runner import ImportRunner
 from one_memory.imports.sources.registry import build_source_catalog
 from one_memory.live_capture import CaptureOutcome, capture_hook
@@ -708,3 +709,61 @@ def test_a_bad_payload_or_a_failing_hand_off_stays_silent(tmp_path, monkeypatch)
     monkeypatch.setattr("sys.stdin", StringIO("{not json"))
     assert cli.run(["capture", "workbuddy"], output=StringIO()) == 0
     assert cli.run(["capture", "elsewhere"], output=StringIO()) == 2
+
+
+def test_an_oversized_prompt_is_truncated_instead_of_failing_the_capture(tmp_path) -> None:
+    """8 MB is accepted at the HTTP gate; a turn over 1M chars must still stage.
+
+    `capture_handoff.MAX_PAYLOAD_BYTES` lets the hook hand over up to 8 MB, but
+    `EvidenceInput.verbatim` stops at `MAX_VERBATIM_CHARACTERS`. A single paste
+    between the two used to raise `ValidationError` straight out of the hook.
+    """
+    home = Home(tmp_path)
+    home.grant("workbuddy")
+    oversized = "x" * (MAX_VERBATIM_CHARACTERS + 5)
+    prompt = {
+        "hook_event_name": "UserPromptSubmit",
+        "session_id": "sess-1",
+        "prompt": oversized,
+    }
+
+    assert home.capture("workbuddy", prompt) is CaptureOutcome.STAGED
+
+    ((role, verbatim, _message_id),) = _staged(home.database)
+    assert role == "user"
+    assert len(verbatim) <= MAX_VERBATIM_CHARACTERS
+    assert "truncated: original 1000005 chars" in verbatim
+
+
+def test_an_oversized_transcript_line_is_truncated_instead_of_failing_the_capture(
+    tmp_path,
+) -> None:
+    """The Stop lane reads the host transcript and builds EvidenceInput itself."""
+    home = Home(tmp_path)
+    root = home.grant("workbuddy")
+    transcript = root / "sess.jsonl"
+    transcript.write_text(
+        json.dumps(
+            {
+                "type": "message",
+                "id": "msg-user",
+                "sessionId": "sess-1",
+                "role": "user",
+                "content": [
+                    {"type": "input_text", "text": "x" * (MAX_VERBATIM_CHARACTERS + 5)},
+                ],
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    stop = {"hook_event_name": "Stop", "session_id": "sess-1"}
+
+    assert home.capture("workbuddy", {**stop, "transcript_path": str(transcript)}) is (
+        CaptureOutcome.STAGED
+    )
+
+    ((role, verbatim, _message_id),) = _staged(home.database)
+    assert role == "user"
+    assert len(verbatim) <= MAX_VERBATIM_CHARACTERS
+    assert "truncated: original 1000005 chars" in verbatim

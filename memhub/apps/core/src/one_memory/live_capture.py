@@ -49,6 +49,7 @@ from one_memory.imports.models import (
     EvidenceRecord,
     OriginMetadata,
     WrittenBy,
+    clamp_verbatim,
     materialize_write_input,
 )
 from one_memory.imports.sources.claude_code import parse_claude_code_record
@@ -181,7 +182,7 @@ def _hook_inputs(source_id: str, payload: dict[str, object]) -> list[EvidenceInp
             role=role,
             written_by=written_by,
             created_at=observed,
-            verbatim=verbatim,
+            verbatim=clamp_verbatim(verbatim),
             origin_meta={EvidenceOrigin.HOOK: OriginMetadata()},
         )
         for role, written_by, verbatim, message_id in _messages(source_id, payload)
@@ -599,7 +600,7 @@ def _capture_transcript(
                     role=row.role,
                     written_by=row.written_by,
                     created_at=row.created_at,
-                    verbatim=row.verbatim,
+                    verbatim=clamp_verbatim(row.verbatim),
                     origin_meta={EvidenceOrigin.FILE: OriginMetadata()},
                 )
             )
