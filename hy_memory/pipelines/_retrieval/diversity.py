@@ -274,7 +274,12 @@ def blend_rrf_into_scores(
         return items
     rrf_by = {f["node_id"]: float(f.get("rrf_score") or 0.0) for f in fused}
     max_rrf = max(rrf_by.values()) or 1.0
-    max_add = max(float(h.get(score_key) or 0.0) for h in items) or 1.0
+    max_add = max(float(h.get(score_key) or 0.0) for h in items)
+    # The RRF term is a *positive* scale. ``or 1.0`` only covered an all-zero
+    # pool: an all-negative pool kept a negative max_add, which flipped the
+    # sign of the blend and pushed the best-RRF item to the bottom at blend=1.
+    if max_add <= 0.0:
+        max_add = 1.0
     b = max(0.0, min(1.0, float(blend)))
     for h in items:
         nid = h.get("node_id")
