@@ -15,6 +15,24 @@ MAX_RAW_META_BYTES = 65_536
 Identifier = Annotated[str, Field(min_length=1, max_length=512)]
 
 
+def clamp_verbatim(text: str) -> str:
+    """Keep one pathological record from violating EvidenceInput's limit.
+
+    A single pasted dump larger than MAX_VERBATIM_CHARACTERS used to fail
+    validation, retry, and then wedge the whole history import on the same
+    record. Keep the head and make the truncation explicit and actionable.
+
+    Every lane that builds an EvidenceInput from source text has to clamp with
+    this one function, not a copy of it: identity is hashed from `verbatim`, so
+    two lanes that truncate differently would file the same turn twice.
+    """
+    if len(text) <= MAX_VERBATIM_CHARACTERS:
+        return text
+    marker = f"\n…[truncated: original {len(text)} chars]"
+    keep = max(0, MAX_VERBATIM_CHARACTERS - len(marker))
+    return text[:keep] + marker
+
+
 def identity_text(value: str) -> str:
     """The shared normalization every lane hashes into an Evidence identity.
 
