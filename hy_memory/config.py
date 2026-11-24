@@ -69,7 +69,7 @@ def _get_env_bool(key: str, default: bool) -> bool:
     value = os.getenv(key)
     if value is None:
         return default
-    return value.lower() in ("true", "1", "yes", "on")
+    return value.strip().lower() in ("true", "1", "yes", "on")
 
 
 def _default_data_dir() -> str:
