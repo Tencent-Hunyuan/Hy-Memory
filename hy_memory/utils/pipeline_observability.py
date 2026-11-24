@@ -91,7 +91,7 @@ _STEP_TIMING_KEY = {
 
 def is_pipeline_trace_enabled() -> bool:
     """是否将 pipeline step 写入 cache（SQLite pipeline_logs），供 Inspector 使用。"""
-    return os.getenv("MEMORY_PIPELINE_TRACE_ENABLED", "true").lower() in (
+    return os.getenv("MEMORY_PIPELINE_TRACE_ENABLED", "true").strip().lower() in (
         "true",
         "1",
         "yes",
@@ -110,7 +110,7 @@ def is_pipeline_log_enabled() -> bool:
 
 def is_memory_operations_enabled() -> bool:
     """是否将知识库变动写入 memory_operations 审计表。默认关闭（false）。"""
-    return os.getenv("MEMORY_MEMORY_OPERATIONS_ENABLED", "false").lower() in (
+    return os.getenv("MEMORY_MEMORY_OPERATIONS_ENABLED", "false").strip().lower() in (
         "true",
         "1",
         "yes",
