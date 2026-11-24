@@ -25,9 +25,44 @@ HY Memory - MemoryInspector 调试/审计工具类
 """
 
 import asyncio
+from datetime import datetime
 from typing import Any, Dict, List, Optional
 
 from .utils.async_executor import await_concurrent_future_guarded
+
+
+def _log_time_key(log: Dict[str, Any]) -> tuple:
+    """把一条 pipeline log 排到它「发生的时刻」上。
+
+    ``event_at_ms`` 是 step 发生时刻，但它对补列之前写入的历史行是 0（见
+    ``cache_sqlite._migrate_pipeline_logs_columns``）。直接拿 0 当键会让这些行
+    排到所有新行**前面**，与「缺省回落 created_at」的约定正好相反 —— 一次
+    search 的 trace 里 READ_REQUEST 会跑到 RECALL 后面几步的后面去。
+
+    因此：有 event_at_ms 用它；没有就解析 created_at；两者都拿不到时排到最后，
+    保持入参顺序稳定（list.sort 是稳定排序）。
+    """
+    event_ms = log.get("event_at_ms") or 0
+    if event_ms:
+        return (float(event_ms), "")
+    created = log.get("created_at")
+    if created:
+        try:
+            if isinstance(created, datetime):
+                moment = created
+            else:
+                # Python 3.9/3.10 的 fromisoformat 只认 "YYYY-MM-DDTHH:MM:SS"：
+                # 不认 "Z" 后缀、也不认空格分隔。这两种写法在外部写入的历史
+                # 行里都会出现，直接交给它会让整组行退化成「解析失败」。
+                moment = datetime.fromisoformat(
+                    str(created).replace("Z", "+00:00").replace(" ", "T", 1)
+                )
+            return (moment.timestamp() * 1000.0, str(created))
+        except (TypeError, ValueError):
+            pass
+    # 键的第二项统一成字符串：缺失值若留 None，与别的行的 "" 比较会抛
+    # TypeError（sort 直接崩），而它们本来就该并列排最后。
+    return (float("inf"), str(created))
 
 
 class MemoryInspector:
@@ -280,7 +315,7 @@ class MemoryInspector:
         read_logs = [log for log in all_logs if (log.get("step") or "").startswith(self._READ_STEP_PREFIX)]
 
         # 按 event_at_ms 升序（step 发生时刻，最准）；缺省回落 created_at 保持稳定
-        read_logs.sort(key=lambda log: (log.get("event_at_ms") or 0, log.get("created_at") or ""))
+        read_logs.sort(key=_log_time_key)
 
         import json as _json
         parsed_logs: List[Dict[str, Any]] = []
