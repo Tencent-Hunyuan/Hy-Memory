@@ -49,9 +49,19 @@ def bounded_keyword_ties(fetch, top_k):
         if float(points[-1].score) < boundary:
             return sorted(points, key=content_key)[:top_k]
         if limit >= cap:
+            higher = [p for p in points if float(p.score) > boundary]
+            if not higher:
+                # The whole lookahead is one tie group.  Omitting it would
+                # turn a valid query into an empty result; fall back to the
+                # same ID-independent semantic order used by the other paths.
+                logger.warning(
+                    "[keyword-ties] entirely tied at score=%s after %s points; "
+                    "using semantic tie order", boundary, cap,
+                )
+                return sorted(points, key=content_key)[:top_k]
             logger.warning(
                 "[keyword-ties] truncated tie at score=%s after %s points; "
                 "returning only strictly higher scores", boundary, cap,
             )
-            return sorted((p for p in points if float(p.score) > boundary), key=content_key)[:top_k]
+            return sorted(higher, key=content_key)[:top_k]
         limit = min(2 * limit - 1, cap)
