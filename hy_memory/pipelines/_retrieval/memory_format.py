@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime
 import re
 from typing import Any, Dict, Iterable, Optional
 
@@ -14,7 +14,14 @@ def format_memory_time(value: Any) -> str:
     if isinstance(value, datetime):
         dt = value
     elif isinstance(value, (int, float)):
-        dt = datetime.fromtimestamp(float(value), tz=timezone.utc)
+        # 调用方存进来的是 int(naive_datetime.timestamp())（session_episode.py:284、
+        # :318，_graph/rerank.py:816、:896），与 datetime 分支指向同一个瞬间。
+        # 按 UTC 渲染会让同一条记忆在 capsule 的 Timeline 里显示成前一天 ——
+        # UTC+8 的 2026-01-01 00:30 会渲染成 "2025-12-31 16:30:00 UTC"，而同一块
+        # Memories 里那条记忆渲染成 "2026-01-01 00:30:00"。按本地时间渲染，与
+        # naive datetime 分支（本仓库约定 naive = 本地，见 reconciler._as_aware）
+        # 保持同一口径。
+        dt = datetime.fromtimestamp(float(value))
     else:
         raw = str(value).strip()
         try:
