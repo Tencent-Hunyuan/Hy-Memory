@@ -17,6 +17,7 @@ V2 设计文档 §3.1:
 """
 
 import json
+import math
 from typing import Dict, Any, Optional, List
 from dataclasses import dataclass, field
 import logging
@@ -254,6 +255,11 @@ class EmotionAnalyzer:
 
     @staticmethod
     def _clamp(value: float, min_v: float, max_v: float) -> float:
+        if math.isnan(value):
+            # Every comparison with NaN is False, so the old expression
+            # returned max_v and turned an unparseable LLM score into the
+            # strongest possible emotion. Fall back to the neutral value.
+            return 0.0 if min_v <= 0.0 <= max_v else min_v
         return max(min_v, min(max_v, value))
 
     @staticmethod
