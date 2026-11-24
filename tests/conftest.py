@@ -10,6 +10,8 @@ from pathlib import Path
 
 import pytest
 
+from hy_memory.config import parse_dotenv
+
 
 # 加载 .env 文件（如果存在，向上逐级查找）
 def _load_env():
@@ -17,15 +19,12 @@ def _load_env():
     for _ in range(5):
         candidate = cur / ".env"
         if candidate.exists():
-            with open(candidate, encoding="utf-8") as f:
-                for line in f:
-                    line = line.strip()
-                    if not line or line.startswith("#") or "=" not in line:
-                        continue
-                    k, _, v = line.partition("=")
-                    k, v = k.strip(), v.strip()
-                    if k and k not in os.environ:
-                        os.environ[k] = v
+            # 与运行时共用同一个解析器：`.env.example` 用的是行尾注释写法，
+            # 自己再写一遍 `partition("=")` 会把注释一起带进值里。
+            values = parse_dotenv(candidate.read_text(encoding="utf-8"))
+            for key, value in values.items():
+                if key not in os.environ:
+                    os.environ[key] = value
             return
         cur = cur.parent
 

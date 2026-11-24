@@ -11,6 +11,50 @@ from typing import Optional, Dict, Any, Callable, List
 from pathlib import Path
 
 
+#: 行尾注释：空白之后的 `#` 起到注释作用，`value#x` 里的 `#` 仍是值的一部分
+#: （与 python-dotenv 一致）。
+_DOTENV_INLINE_COMMENT = re.compile(r"\s+#.*$")
+
+
+def _dotenv_value(raw: str) -> str:
+    """解析 `KEY=` 右侧的原始片段，去掉注释与包裹引号。"""
+    stripped = raw.strip()
+    if not stripped:
+        return ""
+    # `KEY=   # 说明` 只有注释没有值：`.env.example` 里空默认值的写法就是这一种。
+    # 要求等号后有空白才这样判定，`KEY=#secret` 那种紧贴的 `#` 仍算值。
+    if raw[:1].isspace() and stripped.startswith("#"):
+        return ""
+    if stripped[:1] in ("'", '"'):
+        quote = stripped[0]
+        end = stripped.find(quote, 1)
+        rest = stripped[end + 1:].strip() if end != -1 else None
+        # 引号闭合且其后只有注释：引号内原样返回，注释只在引号外切
+        if rest is not None and (not rest or rest.startswith("#")):
+            return stripped[1:end]
+    return _DOTENV_INLINE_COMMENT.sub("", stripped).rstrip()
+
+
+def parse_dotenv(text: str) -> Dict[str, str]:
+    """把 `.env` 文本解析成键值对。
+
+    与 `python-dotenv` 的约定一致：整行 `#` 注释被忽略，行尾由空白引出的
+    `# 注释` 被剥掉 —— `MEMORY_PIPELINE_TRACE_ENABLED=true   # 说明` 读到的是
+    `true`，而不是带着注释的整个尾部。`.env.example` 正是这种行尾注释的写法，
+    用户按它"复制为 .env"后取消注释的那一行必须能生效。
+    """
+    values: Dict[str, str] = {}
+    for line in text.splitlines():
+        line = line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, _, raw_value = line.partition("=")
+        key = key.strip()
+        if key:
+            values[key] = _dotenv_value(raw_value)
+    return values
+
+
 def _load_dotenv():
     """加载 .env 文件（如果存在），向上逐级查找"""
     # 从当前文件向上逐级查找 .env
@@ -25,18 +69,11 @@ def _load_dotenv():
     if env_path is None:
         return
     with open(env_path, encoding="utf-8") as f:
-        for line in f:
-            line = line.strip()
-            if not line or line.startswith("#"):
-                continue
-            if "=" not in line:
-                continue
-            key, _, value = line.partition("=")
-            key = key.strip()
-            value = value.strip()
-            # 不覆盖已存在的环境变量
-            if key and key not in os.environ:
-                os.environ[key] = value
+        values = parse_dotenv(f.read())
+    # 不覆盖已存在的环境变量
+    for key, value in values.items():
+        if key not in os.environ:
+            os.environ[key] = value
 
 
 _load_dotenv()
