@@ -289,6 +289,23 @@ def _filter_normal_results_by_score(
     ]
 
 
+def _reranked_pool_sort_key(item: Dict[str, Any]) -> Tuple[float, str]:
+    """Sort key for the post-rerank pool: score descending, then node id.
+
+    ``_local_rerank_score`` is always set by the caller before sorting, but a
+    reranker score of ``0.0`` is valid and must not be confused with a missing
+    one. The previous inline ``-(score or -inf)`` collapsed a genuine zero to
+    ``-inf`` and pushed it behind negative scores, so truncating the pool to
+    top-K kept strictly worse items. This is the same "zero is not absent"
+    rule as ``_resolve_normal_min_score`` above.
+    """
+    score = item.get("_local_rerank_score")
+    return (
+        -float(score) if score is not None else float("inf"),
+        str(item.get("node_id") or ""),
+    )
+
+
 # ========================================================================
 # Pipeline
 # ========================================================================
@@ -3235,10 +3252,7 @@ class BaseReadPipeline(ReadPipeline):
                                     for item in selected_pool
                                     if str(item.get("node_id") or "") in scores_by_id
                                 ),
-                                key=lambda item: (
-                                    -float(item.get("_local_rerank_score") or float("-inf")),
-                                    str(item.get("node_id") or ""),
-                                ),
+                                key=_reranked_pool_sort_key,
                             )
                             if hierarchy_bundle is None:
                                 normal_results = hierarchy_fallback
