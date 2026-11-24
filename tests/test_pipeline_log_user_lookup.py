@@ -109,3 +109,28 @@ def test_step_filter_composes_with_a_namespaced_user_id(tmp_path):
             await cache.close()
 
     asyncio.run(run())
+
+
+def test_mysql_builds_the_same_predicate_with_matching_placeholders():
+    """mysql 分支不能被漏改：条件文本与占位符顺序必须同步。
+
+    不连数据库，只捕获 _fetchall 收到的 SQL 与参数——占位符顺序错了在真实
+    MySQL 上会静默查出别人的行，靠读代码不容易发现。
+    """
+    from hy_memory.data.cache_mysql import MysqlCache
+
+    cache = MysqlCache(MemoryConfig())
+    captured = {}
+
+    async def fake_fetchall(sql, args=None):
+        captured["sql"] = sql
+        captured["args"] = list(args or [])
+        return []
+
+    cache._fetchall = fake_fetchall
+    asyncio.run(cache.get_pipeline_logs(user_id="proj__u1"))
+
+    assert "(namespace = %s AND user_id = %s)" in captured["sql"]
+    assert "OR (namespace = '' AND user_id = %s)" in captured["sql"]
+    # namespace、拆出来的 uid、原始串（兼容旧行），最后是 limit
+    assert captured["args"] == ["proj", "u1", "proj__u1", 100]

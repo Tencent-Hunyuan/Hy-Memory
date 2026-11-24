@@ -440,6 +440,13 @@ class MysqlCache(CacheBase):
         step: Optional[str] = None,
         limit: int = 100,
     ) -> List[Dict[str, Any]]:
+        """查询 pipeline 中间结果日志。
+
+        user_id 与写入侧同口径：按第一个 "__" 拆出 namespace 再匹配。写入把
+        ``proj__u1`` 落成 ``namespace='proj', user_id='u1'``，所以直接拿原始串
+        比 user_id 恒不命中。旧库中未经拆分的历史行仍是 ``namespace=''`` +
+        完整 user_id，一并放行。
+        """
         try:
             conditions = []
             params = []
