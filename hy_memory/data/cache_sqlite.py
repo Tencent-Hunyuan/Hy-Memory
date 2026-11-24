@@ -387,8 +387,15 @@ class SqliteCache(CacheBase):
         查询 pipeline 中间结果日志。
 
         支持按 request_id / user_id / step 过滤，至少指定一个。
+
+        user_id 与写入侧同口径：按第一个 "__" 拆出 namespace 再匹配。写入把
+        ``proj__u1`` 落成 ``namespace='proj', user_id='u1'``，所以直接拿原始串
+        比 user_id 恒不命中——带 namespace 的 user_id 曾经永远查不到自己的日志。
+        旧库中未经拆分的历史行仍是 ``namespace='' + 完整 user_id``，一并放行。
         """
         try:
+            from ..utils.pipeline_observability import split_namespace_user
+
             def _query():
                 with self._lock:
                     conditions = []
@@ -397,8 +404,16 @@ class SqliteCache(CacheBase):
                         conditions.append("request_id = ?")
                         params.append(request_id)
                     if user_id:
-                        conditions.append("user_id = ?")
-                        params.append(user_id)
+                        namespace, uid = split_namespace_user(user_id)
+                        if namespace:
+                            conditions.append(
+                                "((namespace = ? AND user_id = ?)"
+                                " OR (namespace = '' AND user_id = ?))"
+                            )
+                            params.extend([namespace, uid, user_id])
+                        else:
+                            conditions.append("user_id = ?")
+                            params.append(uid)
                     if step:
                         conditions.append("step = ?")
                         params.append(step)
