@@ -685,8 +685,20 @@ class VectorStoreBase(ABC):
         """
         tag_index 专用的确定性 point_id。
         同 (user_id, tag) 永远生成同一 UUID，upsert 天然幂等。
+
+        A plain ``::`` join is ambiguous when either field itself contains
+        ``::``: ("a::b", "c") and ("a", "b::c") produced the same UUID.  Both
+        fields are caller-controlled, so a later upsert could silently replace
+        another user's tag vector, and deleting one pair removed the other's
+        point.  Prefix the user_id length for those inputs to make the split
+        unambiguous.  Delimiter-free pairs keep the original key so their
+        existing points are not orphaned.
         """
-        return str(uuid.uuid5(uuid.NAMESPACE_URL, f"tag_index::{user_id}::{tag}"))
+        if "::" in user_id or "::" in tag:
+            key = f"tag_index::v2::{len(user_id)}::{user_id}::{tag}"
+        else:
+            key = f"tag_index::{user_id}::{tag}"
+        return str(uuid.uuid5(uuid.NAMESPACE_URL, key))
 
     @staticmethod
     def _build_search_text(content: Any, tags: Any = None) -> str:
