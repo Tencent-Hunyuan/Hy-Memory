@@ -50,10 +50,16 @@ def rrf_fuse(
         w = float(weights.get(channel_name, 1.0))
         if w == 0 or not hits:
             continue
+        # RRF semantics: each channel contributes at most once per document,
+        # using its best (lowest) rank. A channel that returns the same node_id
+        # more than once must not inflate the score by the duplicate count or
+        # overwrite the rank with a worse one.
+        seen_in_channel = set()
         for rank, hit in enumerate(hits, start=1):
             nid = hit.get("node_id")
-            if not nid:
+            if not nid or nid in seen_in_channel:
                 continue
+            seen_in_channel.add(nid)
             contrib = w / (k + rank)
             entry = acc.get(nid)
             if entry is None:
@@ -71,7 +77,9 @@ def rrf_fuse(
                     entry["node"] = hit.get("node")
             entry["rrf_score"] += contrib
             entry["rrf_rank_by_channel"][channel_name] = rank
-            entry["per_channel_score"][channel_name] = float(hit.get("score", 0.0))
+            # Per-channel score is observation-only; a None value must not
+            # abort the whole fusion (mirrors reconcile_retrieval.py).
+            entry["per_channel_score"][channel_name] = float(hit.get("score", 0.0) or 0.0)
 
     fused = list(acc.values())
     fused.sort(key=lambda x: x["rrf_score"], reverse=True)
