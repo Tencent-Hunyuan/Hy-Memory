@@ -259,7 +259,6 @@ class EmotionAnalyzer:
     @staticmethod
     def _parse_json(text: str) -> Dict[str, Any]:
         """从 LLM 输出中解析 JSON"""
-        import re
         text = text.strip()
         if "```json" in text:
             text = text.split("```json")[1].split("```")[0].strip()
@@ -268,10 +267,15 @@ class EmotionAnalyzer:
         try:
             return json.loads(text)
         except json.JSONDecodeError:
-            match = re.search(r'\{[\s\S]*\}', text)
-            if match:
+            # A greedy regex spans the first '{' to the last '}'. Trailing
+            # prose with another object then forms an invalid blob and the
+            # whole analysis is dropped. Decode just the first object.
+            start = text.find("{")
+            if start != -1:
                 try:
-                    return json.loads(match.group())
+                    parsed, _ = json.JSONDecoder().raw_decode(text[start:])
+                    if isinstance(parsed, dict):
+                        return parsed
                 except json.JSONDecodeError:
                     pass
         return {}
