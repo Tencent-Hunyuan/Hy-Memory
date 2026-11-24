@@ -37,7 +37,11 @@ _LEX_WEIGHT = 0.05
 # 1/e/6 之后和 "6e-1" 无从区分。数值分支放在字母分支前面，否则 "1e-6" 的 e 会先被
 # 字母分支吃掉。
 _LATIN = re.compile(r"\d+(?:\.\d+)?(?:e[-+]?\d+)?|[a-z]+")
-_CJK = re.compile(r"[一-鿿]+")
+# Cover the whole CJK range used elsewhere in the retrieval stack
+# (see pipelines/_retrieval/lemmatize.py::_CJK_PATTERN): basic block,
+# Extension A, and compatibility ideographs. The old basic-only range silently
+# dropped rare / traditional / variant characters from the lexical index.
+_CJK = re.compile(r"[一-鿿㐀-䶿豈-﫿]+")
 
 _warned = False
 
