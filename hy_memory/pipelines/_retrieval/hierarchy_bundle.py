@@ -632,14 +632,23 @@ async def build_hierarchy_bundle_candidate(
         math.ceil(max(2, int(member_pool)) / len(selections)),
     )
     member_ids_by_topic: Dict[str, List[str]] = {}
-    for selection in selections:
-        subtree_members = list(subtree_cache.get(selection.node.topic_id, set()))
-        subtree_members.sort(key=lambda memory_id: (
+
+    def _member_rank(memory_id: str) -> tuple:
+        # cosine() 用 None 表示「缺向量或维度不符」，而 0.0 是合法的相似度
+        # （正交向量）。`or -1.0` 把 0.0 也折成 -1.0，于是真正正交的成员排到
+        # 负相似度成员之后，在 [:per_node_pool] 截断时被优先丢掉 —— 被留下的是
+        # 相关性更差的成员。同文件 score_of() 用的是 `if value is not None`。
+        similarity = cosine(query_embedding, embeddings.get(memory_id) or [])
+        return (
             0 if memory_id in anchor_order else 1,
             anchor_order.get(memory_id, len(anchor_order)),
-            -(cosine(query_embedding, embeddings.get(memory_id) or []) or -1.0),
+            -(similarity if similarity is not None else -1.0),
             memory_id,
-        ))
+        )
+
+    for selection in selections:
+        subtree_members = list(subtree_cache.get(selection.node.topic_id, set()))
+        subtree_members.sort(key=_member_rank)
         member_ids_by_topic[selection.node.topic_id] = subtree_members[:per_node_pool]
     union_member_ids = _round_robin_unique(
         list(member_ids_by_topic.values()), limit=max(2, int(member_pool)),
