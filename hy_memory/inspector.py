@@ -45,13 +45,24 @@ def _log_time_key(log: Dict[str, Any]) -> tuple:
     event_ms = log.get("event_at_ms") or 0
     if event_ms:
         return (float(event_ms), "")
-    created = log.get("created_at") or ""
+    created = log.get("created_at")
     if created:
         try:
-            return (datetime.fromisoformat(created).timestamp() * 1000.0, created)
+            if isinstance(created, datetime):
+                moment = created
+            else:
+                # Python 3.9/3.10 的 fromisoformat 只认 "YYYY-MM-DDTHH:MM:SS"：
+                # 不认 "Z" 后缀、也不认空格分隔。这两种写法在外部写入的历史
+                # 行里都会出现，直接交给它会让整组行退化成「解析失败」。
+                moment = datetime.fromisoformat(
+                    str(created).replace("Z", "+00:00").replace(" ", "T", 1)
+                )
+            return (moment.timestamp() * 1000.0, str(created))
         except (TypeError, ValueError):
             pass
-    return (float("inf"), created)
+    # 键的第二项统一成字符串：缺失值若留 None，与别的行的 "" 比较会抛
+    # TypeError（sort 直接崩），而它们本来就该并列排最后。
+    return (float("inf"), str(created))
 
 
 class MemoryInspector:
