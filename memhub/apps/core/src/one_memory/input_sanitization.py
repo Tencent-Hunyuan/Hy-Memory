@@ -11,7 +11,9 @@ _PRIVATE_KEY = re.compile(
 )
 _AUTHORIZATION = re.compile(
     r"(?i)\b(Authorization\s*:\s*(?:Bearer|Basic|Token|ApiKey))"
-    r"\s+[A-Za-z0-9._~+/=-]{8,}"
+    # Any non-space, non-quote run: a real token may hold `!`, `$`, `*`, `%`
+    # or `(`, and the narrow charset let those headers through untouched.
+    r"\s+[^\s\"']{8,}"
 )
 _CLI_SECRET = re.compile(
     r"(?i)(--(?:password|passwd|token|api[-_]?key|apikey|appkey|secret))"
