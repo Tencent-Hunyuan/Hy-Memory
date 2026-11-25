@@ -95,3 +95,19 @@ def test_many_unterminated_key_headers_are_scanned_once() -> None:
 
     assert time.monotonic() - started < 2
     assert sanitized == f"x {REDACTED_SECRET}"
+
+
+def test_redacts_an_authorization_value_that_holds_punctuation() -> None:
+    value = (
+        "Authorization: Bearer abc!defghijk12345\n"
+        "Authorization: Token abc$defghijk1234\n"
+        "curl -H 'Authorization: Bearer abc*defghijk12345' https://example.org\n"
+    )
+
+    sanitized = sanitize_model_input(value)
+
+    assert sanitized.count(REDACTED_SECRET) == 3
+    assert "abc!defghijk12345" not in sanitized
+    assert "abc$defghijk1234" not in sanitized
+    assert "abc*defghijk12345" not in sanitized
+    assert f"curl -H 'Authorization: Bearer {REDACTED_SECRET}' https://example.org" in sanitized
