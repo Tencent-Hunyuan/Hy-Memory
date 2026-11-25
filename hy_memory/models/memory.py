@@ -479,13 +479,19 @@ class MemoryNode:
         def parse_dt(v):
             if v is None:
                 return None
-            if isinstance(v, datetime):
-                return v
-            if isinstance(v, (int, float)):
-                return datetime.fromtimestamp(v)
-            if isinstance(v, str):
-                return datetime.fromisoformat(v)
-            return None
+            try:
+                if isinstance(v, datetime):
+                    return v
+                if isinstance(v, (int, float)):
+                    return datetime.fromtimestamp(v)
+                if isinstance(v, str):
+                    return datetime.fromisoformat(v)
+                return None
+            except (ValueError, TypeError, OSError, OverflowError):
+                # 脏 payload（外部导入/手工写入的坏字符串、超范围 epoch）降级 None，
+                # 与 _parse_dt / _collect_intentions / _epoch_seconds 的容错口径一致，
+                # 不让一条坏值打挂整批反序列化。
+                return None
 
         def parse_enum(enum_cls, v, default):
             if v is None:
@@ -637,13 +643,19 @@ class SchemaNode(MemoryNode):
         def parse_dt(v):
             if v is None:
                 return None
-            if isinstance(v, datetime):
-                return v
-            if isinstance(v, (int, float)):
-                return datetime.fromtimestamp(v)
-            if isinstance(v, str):
-                return datetime.fromisoformat(v)
-            return None
+            try:
+                if isinstance(v, datetime):
+                    return v
+                if isinstance(v, (int, float)):
+                    return datetime.fromtimestamp(v)
+                if isinstance(v, str):
+                    return datetime.fromisoformat(v)
+                return None
+            except (ValueError, TypeError, OSError, OverflowError):
+                # 脏 payload（外部导入/手工写入的坏字符串、超范围 epoch）降级 None，
+                # 与 _parse_dt / _collect_intentions / _epoch_seconds 的容错口径一致，
+                # 不让一条坏值打挂整批反序列化。
+                return None
         schema_status = SchemaStatus.FORMING
         if data.get("schema_status"):
             try:
@@ -712,13 +724,19 @@ class IntentionNode(MemoryNode):
         def parse_dt(v):
             if v is None:
                 return None
-            if isinstance(v, datetime):
-                return v
-            if isinstance(v, (int, float)):
-                return datetime.fromtimestamp(v)
-            if isinstance(v, str):
-                return datetime.fromisoformat(v)
-            return None
+            try:
+                if isinstance(v, datetime):
+                    return v
+                if isinstance(v, (int, float)):
+                    return datetime.fromtimestamp(v)
+                if isinstance(v, str):
+                    return datetime.fromisoformat(v)
+                return None
+            except (ValueError, TypeError, OSError, OverflowError):
+                # 脏 payload（外部导入/手工写入的坏字符串、超范围 epoch）降级 None，
+                # 与 _parse_dt / _collect_intentions / _epoch_seconds 的容错口径一致，
+                # 不让一条坏值打挂整批反序列化。
+                return None
         trigger_type = TriggerType.EVENT_BASED
         if data.get("trigger_type"):
             try:
@@ -802,13 +820,19 @@ class KnowledgeGap:
         def parse_dt(v):
             if v is None:
                 return None
-            if isinstance(v, datetime):
-                return v
-            if isinstance(v, (int, float)):
-                return datetime.fromtimestamp(v)
-            if isinstance(v, str):
-                return datetime.fromisoformat(v)
-            return None
+            try:
+                if isinstance(v, datetime):
+                    return v
+                if isinstance(v, (int, float)):
+                    return datetime.fromtimestamp(v)
+                if isinstance(v, str):
+                    return datetime.fromisoformat(v)
+                return None
+            except (ValueError, TypeError, OSError, OverflowError):
+                # 脏 payload（外部导入/手工写入的坏字符串、超范围 epoch）降级 None，
+                # 与 _parse_dt / _collect_intentions / _epoch_seconds 的容错口径一致，
+                # 不让一条坏值打挂整批反序列化。
+                return None
         gap_type = GapType.PROFILE_INCOMPLETE
         if data.get("gap_type"):
             try:
@@ -857,13 +881,19 @@ class LifeStage:
         def parse_dt(v):
             if v is None:
                 return None
-            if isinstance(v, datetime):
-                return v
-            if isinstance(v, (int, float)):
-                return datetime.fromtimestamp(v)
-            if isinstance(v, str):
-                return datetime.fromisoformat(v)
-            return None
+            try:
+                if isinstance(v, datetime):
+                    return v
+                if isinstance(v, (int, float)):
+                    return datetime.fromtimestamp(v)
+                if isinstance(v, str):
+                    return datetime.fromisoformat(v)
+                return None
+            except (ValueError, TypeError, OSError, OverflowError):
+                # 脏 payload（外部导入/手工写入的坏字符串、超范围 epoch）降级 None，
+                # 与 _parse_dt / _collect_intentions / _epoch_seconds 的容错口径一致，
+                # 不让一条坏值打挂整批反序列化。
+                return None
         return cls(
             name=data.get("name", ""),
             start_time=parse_dt(data.get("start_time")),
@@ -903,13 +933,19 @@ class TemporalEvent:
         def parse_dt(v):
             if v is None:
                 return None
-            if isinstance(v, datetime):
-                return v
-            if isinstance(v, (int, float)):
-                return datetime.fromtimestamp(v)
-            if isinstance(v, str):
-                return datetime.fromisoformat(v)
-            return None
+            try:
+                if isinstance(v, datetime):
+                    return v
+                if isinstance(v, (int, float)):
+                    return datetime.fromtimestamp(v)
+                if isinstance(v, str):
+                    return datetime.fromisoformat(v)
+                return None
+            except (ValueError, TypeError, OSError, OverflowError):
+                # 脏 payload（外部导入/手工写入的坏字符串、超范围 epoch）降级 None，
+                # 与 _parse_dt / _collect_intentions / _epoch_seconds 的容错口径一致，
+                # 不让一条坏值打挂整批反序列化。
+                return None
         return cls(
             event_id=data.get("event_id", ""),
             event_description=data.get("event_description", ""),
@@ -1199,13 +1235,16 @@ class MemoryMetadata:
         def parse_datetime(value):
             if value is None:
                 return None
-            if isinstance(value, datetime):
-                return value
-            if isinstance(value, (int, float)):
-                return datetime.fromtimestamp(value)
-            if isinstance(value, str):
-                return datetime.fromisoformat(value)
-            return None
+            try:
+                if isinstance(value, datetime):
+                    return value
+                if isinstance(value, (int, float)):
+                    return datetime.fromtimestamp(value)
+                if isinstance(value, str):
+                    return datetime.fromisoformat(value)
+                return None
+            except (ValueError, TypeError, OSError, OverflowError):
+                return None
 
         layer = data.get("layer", MemoryLayer.L1_RAW)
         if isinstance(layer, str):
