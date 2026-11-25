@@ -3,6 +3,7 @@
 import os
 import uuid
 from concurrent.futures import ThreadPoolExecutor
+from dataclasses import replace
 from datetime import datetime
 
 import pytest
@@ -65,7 +66,7 @@ def test_experiences_scope_sources_order_and_roundtrip(repositories):
     repo = create()
     repo.upsert_experience(memory("one", workspace_id="repo", branch="main", source="cli"))
     repo.upsert_experience(memory("two", workspace_id="repo", branch=None, source="web"))
-    repo.upsert_experience(memory("three", workspace_id="elsewhere", branch="main"))
+    repo.upsert_experience(replace(memory("three", workspace_id="elsewhere", branch="main"), task="another task"))
     got = repo.get_experience("one", "u1")
     assert got.to_dict() == memory("one", workspace_id="repo", branch="main", source="cli").to_dict()
     assert repo.get_experience("one", "another-user") is None

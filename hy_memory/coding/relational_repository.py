@@ -479,9 +479,11 @@ class RelationalMemoryRepository(MemoryRepository):
     def list_user_tasks(self, user_id: str, limit: int) -> List[str]:
         with self._lock:
             assert self._conn is not None
+            # 同一 task 常落在多条 experience 上，不去重会把 LIMIT 名额吃光，
+            # prompt 里只剩一个任务名。按 task 分组，组序取组内最新 updated_at。
             cur = self._execute(
                 "SELECT task FROM coding_memory_meta WHERE user_id = ? "
-                "ORDER BY updated_at DESC LIMIT ?",
+                "GROUP BY task ORDER BY MAX(updated_at) DESC LIMIT ?",
                 (user_id, limit),
             )
             return [r["task"] for r in cur.fetchall()]
