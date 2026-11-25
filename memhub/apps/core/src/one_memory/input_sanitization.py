@@ -28,7 +28,9 @@ _KNOWN_TOKEN = re.compile(
     r"github_pat_[A-Za-z0-9_]{20,}|AKID[A-Za-z0-9]{12,})\b"
 )
 _URL_CREDENTIAL = re.compile(
-    r"(?P<scheme>https?://)(?P<user>[^/\s:@]+):(?P<password>[^/\s@]+)@",
+    # Any scheme, not just http(s): a database or broker URL carries the
+    # same `user:password@` block in a DATABASE_URL / REDIS_URL style value.
+    r"(?P<scheme>[A-Za-z][A-Za-z0-9+.\-]*://)(?P<user>[^/\s:@]*):(?P<password>[^/\s@]+)@",
     re.IGNORECASE,
 )
 

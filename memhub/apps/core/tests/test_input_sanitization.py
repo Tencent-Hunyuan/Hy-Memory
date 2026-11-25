@@ -95,3 +95,18 @@ def test_many_unterminated_key_headers_are_scanned_once() -> None:
 
     assert time.monotonic() - started < 2
     assert sanitized == f"x {REDACTED_SECRET}"
+
+
+def test_redacts_credentials_in_urls_of_any_scheme() -> None:
+    value = (
+        "DATABASE_URL=postgres://alice:s3cr3t-pass@db.internal:5432/app\n"
+        "MONGODB_URI=mongodb+srv://alice:s3cr3t-pass@cluster0.example.net/db\n"
+        "BROKER=amqp://alice:s3cr3t-pass@mq.internal:5672/\n"
+        "REDIS_URL=redis://:s3cr3t-pass@cache.internal:6379/0\n"
+    )
+
+    sanitized = sanitize_model_input(value)
+
+    assert sanitized.count(REDACTED_SECRET) == 4
+    assert "s3cr3t-pass" not in sanitized
+    assert f"DATABASE_URL=postgres://alice:{REDACTED_SECRET}@db.internal:5432/app" in sanitized
