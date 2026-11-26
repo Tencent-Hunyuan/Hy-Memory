@@ -246,7 +246,13 @@ class Neo4jGraphStore(GraphStoreBase):
             "ver": getattr(node, 'version', 1) or 1,
             "conf": node.confidence,
             "ac": getattr(node, 'access_count', 0) or 0,
-            "cat": (getattr(node, 'created_at', None) or datetime.now()).isoformat(),
+            # created_at 列由读侧映射回 memory_at，所以必须写记忆时间：
+            # MemoryNode 没有 created_at 字段，取不到就回落到写入时间。
+            "cat": (
+                node.memory_at
+                or getattr(node, 'gmt_created', None)
+                or datetime.now()
+            ).isoformat(),
             "vf": (node.valid_from or datetime.now()).isoformat(),
             "vu": node.valid_until.isoformat() if node.valid_until else None,
             "laat": getattr(node, 'last_accessed_at', None),
