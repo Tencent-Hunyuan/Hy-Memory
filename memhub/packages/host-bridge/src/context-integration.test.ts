@@ -26,6 +26,14 @@ import {
   renderSkillContent,
 } from "./recall-installer.js";
 
+// A /context round trip is allowed to take `timeout_ms + 1000` inside the
+// broker, and the client helpers fill that up to HOST_CONTEXT_TIMEOUT_MS, so a
+// legitimate lookup can outlive vitest's 5s default. On a loaded runner the
+// fixture (three writes, two listens) then tips a passing assertion over the
+// per-test budget — see run 44341072396, where two unrelated cases failed on
+// 5000ms and the broker was never at fault. Size the file from the protocol.
+vi.setConfig({ testTimeout: HOST_CONTEXT_TIMEOUT_MS + 4000 });
+
 const cleanups: Array<() => Promise<void>> = [];
 afterEach(async () => {
   for (const cleanup of cleanups.splice(0).reverse()) await cleanup();
@@ -105,7 +113,13 @@ async function fixture(
   now?: () => number,
 ) {
   const root = await mkdtemp(path.join(os.tmpdir(), "om-context-"));
-  cleanups.push(() => rm(root, { recursive: true, force: true }));
+  // The broker writes its "stopped" discovery one last time on the way out, so
+  // a file can land between rm()'s readdir and its rmdir. Without the retry
+  // that race surfaces as ENOTEMPTY, which vitest reports as a *second*
+  // failure of the test that just ran and hides the real one.
+  cleanups.push(() =>
+    rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }),
+  );
   const store = await HostGrantStore.initialize(path.join(root, "grants"));
   const issued = await store.createInstallation({ hostId });
   const grant = tools.length
