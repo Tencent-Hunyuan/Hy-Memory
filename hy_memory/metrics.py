@@ -369,12 +369,16 @@ class MetricsCollector:
 
     @staticmethod
     def _is_bucket_empty(bucket: Dict) -> bool:
-        return (
-            bucket["sys1_started"] == 0
-            and bucket["sys2_started"] == 0
-            and bucket["vdb_ops"] == 0
-            and bucket["graph_ops"] == 0
+        # 跨分钟结束的请求只会在新桶里累加 completed/failed 与 timing（started 记在
+        # 上一分钟的桶里），所以这些字段任何一项非零都算"有活动"，不能丢。
+        counters = (
+            "sys1_started", "sys1_completed", "sys1_failed",
+            "sys2_started", "sys2_completed", "sys2_failed",
+            "vdb_ops", "graph_ops",
         )
+        if any(bucket[name] for name in counters):
+            return False
+        return not bucket["sys1_timing_sums"] and not bucket["sys2_timing_sums"]
 
     def _maybe_rotate_bucket(self) -> None:
         """如果当前分钟已过，翻转 bucket（在 _mu 锁内调用）"""
