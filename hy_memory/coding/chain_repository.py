@@ -117,7 +117,11 @@ class RelationalChainRepository:
                     # 新增函数时第 1 版的 diff 落在外层函数的区间里, 第 2 版起才归到自己。
                     # 名字必须取窄的那个 —— 注入块的链标签 `└ <symbol>` 是 agent
                     # 区分"这条历史属于哪个函数"的唯一线索, 取成外层函数就等于没标。
-                    keep = symbol if (hi - lo) < (line_end - line_start) else (sym2 or symbol)
+                    # 归并后两者都是空才留空 —— 更窄的那侧没认出符号时, 不能把
+                    # 已有的符号抹掉(非空优先)。
+                    keep = (
+                        symbol if (hi - lo) < (line_end - line_start) else sym2
+                    ) or sym2 or symbol
                     self._execute(
                         "UPDATE thread SET lo=?, hi=?, symbol=?, updated_at=? WHERE id=?",
                         (min(line_start, lo), max(line_end, hi), keep, time.time(), tid))
