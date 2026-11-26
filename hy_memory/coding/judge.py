@@ -710,7 +710,13 @@ def _parse_scene_json(text: str) -> Optional[Dict[str, Any]]:
         return {"scene": scene} if scene else None
     scene = _parse_scene_label(obj.get("scene"))
     if scene is None and "is_coding" in obj:
-        scene = "working" if bool(obj.get("is_coding")) else "chat"
+        # 模型常把布尔写成字符串（"false"/"0"），裸 bool("false") 是 True ——
+        # 先过一遍 _parse_scene_label，认不出的才退回真值。
+        _label = _parse_scene_label(obj.get("is_coding"))
+        if _label is not None:
+            scene = _label
+        else:
+            scene = "working" if bool(obj.get("is_coding")) else "chat"
     if scene is None:
         return None
     return {**obj, "scene": scene}
