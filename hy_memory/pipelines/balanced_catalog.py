@@ -145,11 +145,14 @@ def extract_forget_targets(marker_text: str) -> List[str]:
             target,
         ):
             atomic_target = re.sub(
-                r"^(?:请)?忘记(?:我|我的|本人)?", "", atomic_target,
+                r"^(?:用户.{0,30}?(?:请|要求|让).{0,20}?忘记"
+                r"(?:我|我的|本人|自己|其|他们|她|他)?"
+                r"|(?:请)?忘记(?:我|我的|本人)?)",
+                "", atomic_target,
             ).strip()
             atomic_target = re.sub(
                 r"(?i)\s+from your memory\.?$", "", atomic_target,
-            ).strip(" .")
+            ).strip(" .。")
             atomic_target = re.sub(
                 r"(?i)^(?:their|the user's)\s+preference\s+for\s+",
                 "", atomic_target,
@@ -187,17 +190,48 @@ def _forget_terms(text: str) -> set[str]:
     return output
 
 
+_CJK_RUN_RE = re.compile(r"[\u4e00-\u9fff]+")
+
+
+def _cjk_anchors(text: str) -> set[str]:
+    """Overlapping bigrams over each CJK run; a lone character stays one anchor.
+
+    Chinese is written without spaces, so ``_forget_terms`` returns nothing for
+    a Chinese target and the full-anchor matcher had no way to compare it with
+    the content.  Bigrams give it an overlap measure without a word segmenter.
+    """
+    output = set()
+    for run in _CJK_RUN_RE.findall(str(text or "")):
+        if len(run) == 1:
+            output.add(run)
+        else:
+            output.update(run[index:index + 2] for index in range(len(run) - 1))
+    return output
+
+
+def _required_overlap(anchors: set[str]) -> int:
+    """How many anchors a text must share: all of them for a short target."""
+    return len(anchors) if len(anchors) <= 3 else max(
+        3, (len(anchors) * 3 + 4) // 5,
+    )
+
+
 def text_matches_forget_targets(text: str, targets: Iterable[str]) -> bool:
     """Full-anchor matcher shared with direct-forget; weak overlap is rejected."""
     text_terms = _forget_terms(text)
+    text_cjk: Optional[set[str]] = None
     for target in targets:
         anchors = _forget_terms(target)
-        if not anchors:
+        if anchors:
+            if len(anchors & text_terms) >= _required_overlap(anchors):
+                return True
             continue
-        needed = len(anchors) if len(anchors) <= 3 else max(
-            3, (len(anchors) * 3 + 4) // 5,
-        )
-        if len(anchors & text_terms) >= needed:
+        cjk = _cjk_anchors(target)
+        if not cjk:
+            continue
+        if text_cjk is None:
+            text_cjk = _cjk_anchors(text)
+        if len(cjk & text_cjk) >= _required_overlap(cjk):
             return True
     return False
 
