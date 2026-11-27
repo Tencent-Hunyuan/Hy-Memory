@@ -236,6 +236,69 @@ def _node_timestamp(node: Any) -> Optional[int]:
             return None
 
 
+def _order_timestamp(value: Any) -> Optional[float]:
+    """Epoch seconds for a datetime or an epoch number, whatever its tzinfo.
+
+    A bank can hold naive ``memory_at`` values (written with ``datetime.now()``)
+    next to aware ones (read back from an ISO payload that spells an offset).
+    Python refuses to order the two, so ``sort`` / ``min`` / ``max`` used to
+    raise ``TypeError`` and the capsule was never built.  Epoch seconds put both
+    on one absolute axis — the same normalization ``pipelines/_retrieval
+    /strength.py`` uses.
+    """
+    if value is None or isinstance(value, bool):
+        return None
+    if isinstance(value, datetime):
+        try:
+            return value.timestamp()
+        except (OSError, OverflowError, ValueError):
+            return None
+    if isinstance(value, (int, float)):
+        return float(value)
+    return None
+
+
+def _raw_order_key(node: Any) -> tuple:
+    """Order raw nodes by event time, falling back to creation time."""
+    stamp = _order_timestamp(getattr(node, "memory_at", None))
+    created = _order_timestamp(getattr(node, "gmt_created", None))
+    if stamp is None:
+        stamp = created
+    return (
+        float("-inf") if stamp is None else stamp,
+        float("-inf") if created is None else created,
+        str(getattr(node, "node_id", "") or ""),
+    )
+
+
+def _earliest_memory_at(nodes: List[Any]) -> Optional[datetime]:
+    """The earliest ``memory_at`` as the datetime it came as (naive or aware)."""
+    best: Optional[datetime] = None
+    best_stamp: Optional[float] = None
+    for node in nodes:
+        value = getattr(node, "memory_at", None)
+        stamp = _order_timestamp(value)
+        if stamp is None:
+            continue
+        if best_stamp is None or stamp < best_stamp:
+            best, best_stamp = value, stamp
+    return best
+
+
+def _latest_memory_at(nodes: List[Any]) -> Optional[datetime]:
+    """The latest ``memory_at`` as the datetime it came as (naive or aware)."""
+    best: Optional[datetime] = None
+    best_stamp: Optional[float] = None
+    for node in nodes:
+        value = getattr(node, "memory_at", None)
+        stamp = _order_timestamp(value)
+        if stamp is None:
+            continue
+        if best_stamp is None or stamp > best_stamp:
+            best, best_stamp = value, stamp
+    return best
+
+
 def _series_episode_label(facts: List[Any], episode_count: int, session_count: int) -> tuple[str, str]:
     """Build small navigational text without copying any member L2 body."""
     tag_sets = []
@@ -592,7 +655,7 @@ async def finalize_dynamic_episode_capsules(
             if (n.session_id or "default_session") == session_id
         ]
     raw_nodes = [n for n in session_nodes if n.layer == MemoryLayer.L1_RAW]
-    raw_nodes.sort(key=lambda n: (n.memory_at or n.gmt_created, n.gmt_created, n.node_id))
+    raw_nodes.sort(key=_raw_order_key)
     unique_raw_nodes, seen = [], set()
     for node in raw_nodes:
         normalized = re.sub(r"\s+", " ", (node.content or "").strip())
@@ -709,7 +772,7 @@ async def finalize_dynamic_episode_capsules(
             "is_latest": False,
         })
 
-    timestamp = min((n.memory_at for n in raw_nodes if n.memory_at), default=None)
+    timestamp = _earliest_memory_at(raw_nodes)
     timestamp_text = timestamp.strftime("%Y-%m-%d %H:%M:%S") if timestamp else "unknown"
     rendered = _render_messages(messages)
     prompt_tokens = completion_tokens = 0
@@ -1120,7 +1183,7 @@ async def finalize_session_episode(
     eid = session_episode_id(user_id, agent_id or "default_agent", session_id)
     session_nodes = [n for n in nodes if (n.session_id or "default_session") == session_id]
     raw_nodes = [n for n in session_nodes if n.layer == MemoryLayer.L1_RAW]
-    raw_nodes.sort(key=lambda n: (n.memory_at or n.gmt_created, n.gmt_created, n.node_id))
+    raw_nodes.sort(key=_raw_order_key)
     # A runner can be interrupted after the service commits a chunk but before its
     # local checkpoint advances. Resume then sends the same raw conversation again
     # under a new node id. Collapse exact content replays before prompting, so retry
@@ -1177,7 +1240,7 @@ async def finalize_session_episode(
         }
 
     conversation = "\n\n".join((n.content or "").strip() for n in raw_nodes if (n.content or "").strip())
-    timestamp = min((n.memory_at for n in raw_nodes if n.memory_at), default=None)
+    timestamp = _earliest_memory_at(raw_nodes)
     timestamp_text = (
         timestamp.strftime("%Y-%m-%d %H:%M:%S") if timestamp else "unknown"
     )
@@ -1381,13 +1444,7 @@ async def _store(
 
     # 摘要的事件时间取该 episode 最后一条记忆的时间，让时间过滤把它归到讨论发生的时点，
     # 而不是"总结这一刻"。
-    memory_at = datetime.now()
-    times = [
-        getattr(n, "memory_at", None) for n in (nodes or [])
-        if getattr(n, "memory_at", None)
-    ]
-    if times:
-        memory_at = max(times)
+    memory_at = _latest_memory_at(nodes or []) or datetime.now()
 
     # 沿用 episode 内记忆的 tag，让主题词也能召回到这条摘要
     tags: List[str] = []
