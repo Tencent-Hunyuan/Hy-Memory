@@ -367,7 +367,9 @@ def apply_post_bge_fusion_reserve(
     )
     victim_index = min(
         range(len(current)),
-        key=lambda index: scores_by_id[str(current[index].get("node_id") or "")],
+        key=lambda index: scores_by_id.get(
+            str(current[index].get("node_id") or ""), float("-inf"),
+        ),
     )
     victim = current[victim_index]
     victim_terms = set(lemmatize_for_bm25(item_content(victim)).split())
@@ -407,7 +409,10 @@ def apply_post_bge_fusion_reserve(
         "_local_rerank_score": scores_by_id[chosen_id],
     }
     current.sort(
-        key=lambda item: scores_by_id[str(item.get("node_id") or "")], reverse=True,
+        key=lambda item: scores_by_id.get(
+            str(item.get("node_id") or ""), float("-inf"),
+        ),
+        reverse=True,
     )
     return current[:limit], {
         "enabled": True,
