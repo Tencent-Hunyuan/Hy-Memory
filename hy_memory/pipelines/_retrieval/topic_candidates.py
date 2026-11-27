@@ -639,11 +639,14 @@ def apply_topic_overlay(
             continue
         victim_index = min(
             range(len(current)),
-            key=lambda index: scores_by_id[str(current[index].get("node_id") or "")],
+            key=lambda index: scores_by_id.get(
+                str(current[index].get("node_id") or ""), float("-inf"),
+            ),
         )
         victim = current[victim_index]
         victim_id = str(victim.get("node_id") or "")
-        if scores_by_id[node_id] <= scores_by_id[victim_id]:
+        victim_score = scores_by_id.get(victim_id, float("-inf"))
+        if scores_by_id[node_id] <= victim_score:
             continue
         current[victim_index] = {**item, "_local_rerank_score": scores_by_id[node_id]}
         current_ids.discard(victim_id)
@@ -652,10 +655,13 @@ def apply_topic_overlay(
             **{key: value for key, value in candidate.items() if key != "item"},
             "admitted": node_id, "displaced": victim_id,
             "admitted_bge": scores_by_id[node_id],
-            "displaced_bge": scores_by_id[victim_id],
+            "displaced_bge": victim_score,
         })
     current.sort(
-        key=lambda item: scores_by_id[str(item.get("node_id") or "")], reverse=True,
+        key=lambda item: scores_by_id.get(
+            str(item.get("node_id") or ""), float("-inf"),
+        ),
+        reverse=True,
     )
     return current[:limit], {"enabled": True, "applied": applied, "slots": slots}
 
@@ -852,12 +858,15 @@ def apply_topic_graph_candidates(
             continue
         victim_index = min(
             range(len(current)),
-            key=lambda index: scores_by_id[str(current[index].get("node_id") or "")],
+            key=lambda index: scores_by_id.get(
+                str(current[index].get("node_id") or ""), float("-inf"),
+            ),
         )
         victim = current[victim_index]
         victim_id = str(victim.get("node_id") or "")
+        victim_score = scores_by_id.get(victim_id, float("-inf"))
         tolerance = relation_bge_tolerance if candidate["relation_phrase_match"] > 0 else 0.0
-        if scores_by_id[node_id] + tolerance <= scores_by_id[victim_id]:
+        if scores_by_id[node_id] + tolerance <= victim_score:
             continue
         current[victim_index] = {**item, "_local_rerank_score": scores_by_id[node_id]}
         current_ids.discard(victim_id)
@@ -866,7 +875,7 @@ def apply_topic_graph_candidates(
             **{key: value for key, value in candidate.items() if key != "item"},
             "admitted": node_id, "displaced": victim_id,
             "admitted_bge": scores_by_id[node_id],
-            "displaced_bge": scores_by_id[victim_id],
+            "displaced_bge": victim_score,
             "bge_tolerance": tolerance,
         }
         accepted, reason = graph_decision_is_product_safe(query, subjects, decision)
@@ -880,7 +889,10 @@ def apply_topic_graph_candidates(
             "policy": "product_safe_topic_graph_v1",
         }
     current.sort(
-        key=lambda item: scores_by_id[str(item.get("node_id") or "")], reverse=True,
+        key=lambda item: scores_by_id.get(
+            str(item.get("node_id") or ""), float("-inf"),
+        ),
+        reverse=True,
     )
     return current[:limit], {
         "enabled": True, "applied": True, "decisions": decisions,
