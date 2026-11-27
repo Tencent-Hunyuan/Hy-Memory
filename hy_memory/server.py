@@ -105,6 +105,36 @@ def _get_client():
     return _client
 
 
+def _memory_at_arg(body: Dict, kwargs: Dict) -> None:
+    """Coerce an optional ``memory_at`` into kwargs; drop it when unreadable.
+
+    The SDK writes ``memory_at`` as epoch seconds (``_epoch_seconds``) and reads
+    all three representations back (``MemoryNode.from_dict`` takes a datetime,
+    ISO text or an epoch number), so the HTTP routes accept the same set.
+    """
+    if "memory_at" not in body:
+        return
+    raw = body["memory_at"]
+    if isinstance(raw, datetime):
+        kwargs["memory_at"] = raw
+        return
+    if raw is None or isinstance(raw, bool):
+        return
+    if isinstance(raw, (int, float)):
+        try:
+            kwargs["memory_at"] = datetime.fromtimestamp(raw)
+        except (OverflowError, OSError, ValueError):
+            return
+        return
+    text = str(raw).strip()
+    if not text:
+        return
+    try:
+        kwargs["memory_at"] = datetime.fromisoformat(text.replace("Z", "+00:00"))
+    except ValueError:
+        return
+
+
 def _language_arg(handler: BaseHTTPRequestHandler, body: Dict, kwargs: Dict) -> bool:
     """Validate optional ``language`` and add it to kwargs; False after a 400 reply."""
     if body.get("language") in (None, ""):
@@ -449,12 +479,7 @@ class MemoryHTTPHandler(BaseHTTPRequestHandler):
             if key in body:
                 kwargs[key] = body[key]
 
-        # memory_at
-        if body.get("memory_at"):
-            try:
-                kwargs["memory_at"] = datetime.fromisoformat(body["memory_at"])
-            except Exception:
-                pass
+        _memory_at_arg(body, kwargs)
         # language: explicit prompt / memory language (see HyMemoryClient.add)
         if not _language_arg(self, body, kwargs):
             return
@@ -479,11 +504,7 @@ class MemoryHTTPHandler(BaseHTTPRequestHandler):
         for key in ("user_id", "agent_id", "session_id", "metadata"):
             if key in body:
                 kwargs[key] = body[key]
-        if body.get("memory_at"):
-            try:
-                kwargs["memory_at"] = datetime.fromisoformat(body["memory_at"])
-            except Exception:
-                pass
+        _memory_at_arg(body, kwargs)
         if not _language_arg(self, body, kwargs):
             return
 
