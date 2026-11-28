@@ -184,10 +184,18 @@ class KVStore:
         ttl = ttl if ttl is not None else self.config.default_ttl
         
         if self.config.backend == "memory":
-            # 检查大小限制
-            if len(self._memory_store) >= self.config.max_size:
+            # 检查大小限制：先清过期项，仍然溢出就按写入顺序淘汰最旧的键。
+            # 只清过期项时，没有 TTL 的写入会让 max_size 完全失效（表无限增长）。
+            if (
+                self.config.max_size > 0
+                and full_key not in self._memory_store
+                and len(self._memory_store) >= self.config.max_size
+            ):
                 self._evict_expired()
-            
+                overflow = len(self._memory_store) - self.config.max_size + 1
+                if overflow > 0:
+                    self._evict_oldest(overflow)
+
             expires_at = None
             if ttl > 0:
                 expires_at = datetime.now() + timedelta(seconds=ttl)
@@ -315,6 +323,19 @@ class KVStore:
             self.set(key, value, ttl)
         return True
     
+    def _evict_oldest(self, count: int) -> int:
+        """按写入顺序淘汰最旧的键（dict 保序），返回实际淘汰数量。"""
+        if self.config.backend != "memory" or count <= 0:
+            return 0
+
+        removed = 0
+        for key in list(self._memory_store.keys()):
+            if removed >= count:
+                break
+            del self._memory_store[key]
+            removed += 1
+        return removed
+
     def _evict_expired(self) -> int:
         """清理过期键"""
         if self.config.backend != "memory":
