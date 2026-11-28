@@ -58,3 +58,25 @@ def test_get_recent_for_user_escapes_like_wildcards(tmp_path):
         return [row["isolation_key"] for row in rows]
 
     assert asyncio.run(_run()) == ["u_1:default_agent"]
+
+
+def test_get_recent_for_user_is_case_sensitive(tmp_path):
+    """isolation_key is a tenancy boundary: the user "Alice" is not "alice"."""
+
+    async def _run():
+        store = _store(tmp_path)
+        await store.initialize()
+        try:
+            for index, key in enumerate(["alice:a1", "Alice:a1"]):
+                await store.record_add(
+                    memory_id=f"m{index}",
+                    content="x",
+                    layer="l1_raw",
+                    isolation_key=key,
+                )
+            rows = await store.get_recent_for_user("alice", limit=10)
+        finally:
+            await store.close()
+        return [row["isolation_key"] for row in rows]
+
+    assert asyncio.run(_run()) == ["alice:a1"]
