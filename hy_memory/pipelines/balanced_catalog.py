@@ -400,6 +400,8 @@ def normalize_catalog_selection(
             output[domain].append(index)
             if len(output[domain]) >= max_per_domain or len(used) >= max_total:
                 break
+        if len(used) >= max_total:
+            break
     return output
 
 

@@ -656,3 +656,19 @@ def test_schema_compaction_excludes_catalog(monkeypatch):
     ))
     assert result["scanned"] == 0
     assert result["merged"] == 0
+
+
+def test_normalize_catalog_selection_respects_max_total():
+    """max_total 达到上限后必须停止选入。
+
+    原来 `len(used) >= max_total` 的 break 只跳出当前 domain 的内层循环，
+    外层 domain 循环继续往 used 里加，总量上限形同虚设。
+    """
+    from hy_memory.pipelines.balanced_catalog import CATALOG_DOMAINS
+
+    raw = {domain: [1, 2, 3, 4, 5, 6] for domain in CATALOG_DOMAINS}
+    out = normalize_catalog_selection(
+        raw, candidate_count=20, max_per_domain=4, max_total=5,
+    )
+    total = sum(len(values) for values in out.values())
+    assert total == 5, f"max_total=5 但选中了 {total} 项: {out}"
