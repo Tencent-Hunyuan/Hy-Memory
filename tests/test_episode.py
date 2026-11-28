@@ -727,3 +727,32 @@ def test_series_memory_at_round_trips_local_wall_clock(monkeypatch):
     finally:
         monkeypatch.delenv("TZ", raising=False)
         _time.tzset()
+
+
+class TestEpisodeWordOverlapCJK:
+    """_word_overlap 只认 ASCII 词时，中文事实会从 episode 分段里整条消失。"""
+
+    def test_word_overlap_chinese_matches(self):
+        from hy_memory.agent.episode_summary import _word_overlap
+
+        assert _word_overlap("用户每天早上六点起床跑步", "跑步计划：晨跑安排") > 0.0
+
+    def test_word_overlap_chinese_no_match_is_zero(self):
+        from hy_memory.agent.episode_summary import _word_overlap
+
+        assert _word_overlap("用户喜欢川菜", "每周三次健身房力量训练") == 0.0
+
+    def test_chinese_fact_without_exact_provenance_still_assigned(self):
+        from types import SimpleNamespace
+
+        from hy_memory.agent.episode_summary import _assign_facts_to_segments
+
+        fact = SimpleNamespace(
+            content="用户每天早上六点起床跑步",
+            custom={"source_raw_memory_ids": ["m2"]},
+        )
+        segments = [
+            {"title": "跑步计划", "summary": "晨跑安排", "source_raw_memory_ids": ["m1"]},
+        ]
+        out = _assign_facts_to_segments([fact], segments)
+        assert out[0] == [fact], f"中文事实未被分配到任何分段: {out}"
