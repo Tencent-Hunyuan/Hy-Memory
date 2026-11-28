@@ -5815,10 +5815,15 @@ class HyMemoryClient:
             val = n.memory_at if n.memory_at is not None else n.gmt_created
             if val is None:
                 val = getattr(n, "valid_from", None)
+            if isinstance(val, datetime):
+                # memory_at 来自调用方、写链路不归一化时区：aware（如
+                # "2026-01-01T10:00:00+08:00"）与 naive 的 gmt_created/
+                # datetime.min 直接比较会抛 TypeError，先统一成 naive 再比。
+                if val.tzinfo is not None:
+                    val = val.astimezone().replace(tzinfo=None)
+                return val
             if val is None:
                 return datetime.min
-            if isinstance(val, datetime):
-                return val
             return datetime.min
 
         nodes.sort(key=_sort_key, reverse=reverse)
