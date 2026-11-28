@@ -88,3 +88,23 @@ def test_every_list_and_dict_payload_field_roundtrips():
             f"{key} 类型不对: expected {type(value).__name__}, got {type(got).__name__}"
         )
         assert got == value, f"{key} 内容不一致: expected {value!r}, got {got!r}"
+
+
+def test_empty_string_agent_id_survives_roundtrip():
+    """agent_id="" / session_id="" 是用户级记忆的真实值，往返后不能变成 None。
+
+    读侧把所有 "" 一律还原成 None 时，get_isolation_key 会拼出 "u::None::..."，
+    后续按隔离键过滤的写入与检索全部错位。
+    """
+    node = MemoryNode(content="synthetic", user_id="u1", agent_id="", session_id="")
+    back = _roundtrip(node)
+    assert back.agent_id == "", f"agent_id 被还原成 {back.agent_id!r}"
+    assert back.session_id == "", f"session_id 被还原成 {back.session_id!r}"
+    assert back.get_isolation_key() == node.get_isolation_key()
+
+
+def test_none_time_fields_still_restore_to_none():
+    """时间字段的 None 在写侧存成 ""，读回必须仍是 None（历史数据兼容）。"""
+    node = MemoryNode(content="synthetic", user_id="u1", memory_at=None)
+    back = _roundtrip(node)
+    assert back.memory_at is None

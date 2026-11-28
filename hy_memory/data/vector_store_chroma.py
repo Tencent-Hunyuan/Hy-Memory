@@ -931,13 +931,22 @@ class ChromaVectorStore(VectorStoreBase):
             "supersedes", "superseded_by",
             "evidence_chain", "custom",
         }
+        # 这些字符串字段的 "" 是真实值（如 agent_id="" 表示用户级记忆），
+        # 不能还原成 None 占位——否则 get_isolation_key 会拼出 "u::None::..."。
+        # None 占位还原（写侧 None -> ""）只对下面集合之外的字段生效：
+        # 时间/数值字段 None 写成 ""，读回 None 才不会变 1970。
+        str_value_fields = {
+            "node_id", "isolation_key", "user_id", "agent_id", "session_id",
+            "source", "episode_id", "layer", "content", "search_text",
+            "status", "source_type", "source_session_id",
+        }
         for k, v in meta.items():
             if k in json_fields and isinstance(v, str):
                 try:
                     payload[k] = json.loads(v)
                 except (json.JSONDecodeError, ValueError):
                     payload[k] = v
-            elif isinstance(v, str) and v == "":
+            elif isinstance(v, str) and v == "" and k not in str_value_fields:
                 # 可能是 None 的占位
                 payload[k] = None
             else:
