@@ -117,6 +117,11 @@ class HistoryStore:
             self._conn.row_factory = sqlite3.Row
             # 开启 WAL 模式，提高并发读写性能
             self._conn.execute("PRAGMA journal_mode=WAL;")
+            # SQLite 的 LIKE 默认只对 ASCII 不区分大小写，`alice:%` 会连
+            # `Alice:agent` 一起命中。isolation_key 是租户边界，前缀查询必须
+            # 大小写敏感才能满足 get_recent_for_user 的"只匹配这个 user"。
+            # 该连接上只有前缀查询用 LIKE，索引仍然可用。
+            self._conn.execute("PRAGMA case_sensitive_like = ON;")
 
             self._conn.execute(_CREATE_TABLE_SQL)
             for idx_sql in _CREATE_INDEXES_SQL:
@@ -274,7 +279,8 @@ class HistoryStore:
         """获取某 user 下所有 agent 的最近操作。
 
         isolation_key 形如 ``"{user_id}:{agent_id}"``。user_id 里的 LIKE
-        通配符会被转义，保证只匹配这个 user，不会漏到 ``u1`` 之外。
+        通配符会被转义，且匹配区分大小写，保证只匹配这个 user，不会漏到
+        ``u1`` 之外（也不会漏到大小写不同的 ``U1``）。
         """
         prefix = _escape_like(f"{user_id}:") + "%"
         return await _run_in_sqlite_pool(
