@@ -516,7 +516,16 @@ def _primary_episode_id(fact: Any, fallback: str) -> str:
 
 def _word_overlap(left: str, right: str) -> float:
     def words(text: str) -> set[str]:
-        return set(re.findall(r"[a-z0-9]+", (text or "").casefold()))
+        value = (text or "").casefold()
+        tokens = set(re.findall(r"[a-z0-9]+", value))
+        # CJK 没有空白分词：连成串的汉字用 bigram 当词，单字串退化为单字。
+        # 只认 ASCII 时中文事实与任何分段的重叠恒为 0，兜底分配整体失效。
+        for run in re.findall(r"[\u4e00-\u9fff]+", value):
+            if len(run) == 1:
+                tokens.add(run)
+            else:
+                tokens.update(run[i:i + 2] for i in range(len(run) - 1))
+        return tokens
 
     a, b = words(left), words(right)
     return len(a & b) / len(a) if a else 0.0
