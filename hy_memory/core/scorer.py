@@ -232,14 +232,16 @@ class MemoryScorer:
     ) -> None:
         """
         调整评分权重
-        
-        权重会自动归一化
+
+        权重会自动归一化。未传的维度沿用当前配置，显式传 0 表示关闭该维度。
         """
+        # 只有 None 才回退到当前配置：显式传 0 表示关闭该信号，
+        # 用 `x or default` 会把 0.0 悄悄换回默认权重，调用方无从得知。
         weights = [
-            semantic_weight or self.config.semantic_weight,
-            recency_weight or self.config.recency_weight,
-            importance_weight or self.config.importance_weight,
-            access_weight or self.config.access_weight,
+            self.config.semantic_weight if semantic_weight is None else float(semantic_weight),
+            self.config.recency_weight if recency_weight is None else float(recency_weight),
+            self.config.importance_weight if importance_weight is None else float(importance_weight),
+            self.config.access_weight if access_weight is None else float(access_weight),
         ]
         
         # 归一化
